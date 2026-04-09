@@ -39,6 +39,8 @@ probes:
 network:
   technicalHostname: ""
   additionalDnsAltNames: []
+  podLoopbackAliases:
+    - puppet
   hostAliases: []
 
 peConfig:

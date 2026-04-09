@@ -12,9 +12,15 @@ case "${mode}" in
         ;;
     readiness)
         agent_certificate_ready
+        if pxp_agent_enabled && pxp_agent_configured; then
+            pxp_agent_running
+        fi
         ;;
     liveness)
         pgrep -af 'puppet agent' >/dev/null
+        if pxp_agent_enabled && pxp_agent_configured; then
+            pxp_agent_running
+        fi
         ;;
     *)
         log "Unknown probe mode: ${mode}"

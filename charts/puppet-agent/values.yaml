@@ -27,6 +27,8 @@ agent:
   runinterval: 30m
   waitforcert: 60
   splay: true
+  pxpEnabled: true
+  pxpLoglevel: info
   resources: {}
 
 storage:

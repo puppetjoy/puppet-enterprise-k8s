@@ -14,6 +14,10 @@ PE_AGENT_RUNINTERVAL="${PE_AGENT_RUNINTERVAL:-30m}"
 PE_AGENT_WAITFORCERT="${PE_AGENT_WAITFORCERT:-60}"
 PE_AGENT_SPLAY="${PE_AGENT_SPLAY:-true}"
 PE_AGENT_NODE_NAME="${PE_AGENT_NODE_NAME:-${HOSTNAME:-agent}}"
+PE_AGENT_PXP_ENABLED="${PE_AGENT_PXP_ENABLED:-true}"
+PE_AGENT_PXP_LOGLEVEL="${PE_AGENT_PXP_LOGLEVEL:-info}"
+PE_AGENT_PXP_CONFIG="${PE_AGENT_PXP_CONFIG:-/etc/puppetlabs/pxp-agent/pxp-agent.conf}"
+PE_AGENT_PXP_PIDFILE="${PE_AGENT_PXP_PIDFILE:-/var/run/puppetlabs/pxp-agent.pid}"
 
 log() {
     printf '[pe-agent] %s\n' "$*"
@@ -35,7 +39,99 @@ ensure_agent_directories() {
     ensure_dir /etc/puppetlabs/puppet
     ensure_dir /opt/puppetlabs/puppet/cache
     ensure_dir /var/log/puppetlabs/puppet
+    ensure_dir /var/log/puppetlabs/pxp-agent
     ensure_dir /var/run/puppetlabs
+}
+
+pxp_agent_enabled() {
+    case "${PE_AGENT_PXP_ENABLED}" in
+        true|TRUE|1|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+pxp_agent_configured() {
+    [ -f "${PE_AGENT_PXP_CONFIG}" ]
+}
+
+pxp_agent_pid() {
+    if [ -f "${PE_AGENT_PXP_PIDFILE}" ]; then
+        cat "${PE_AGENT_PXP_PIDFILE}"
+        return 0
+    fi
+
+    pgrep -f '^/opt/puppetlabs/puppet/bin/pxp-agent($| )' | head -n 1 || true
+}
+
+pxp_agent_running() {
+    local pid
+
+    pid="$(pxp_agent_pid)"
+    [ -n "${pid}" ] || return 1
+    kill -0 "${pid}" >/dev/null 2>&1
+}
+
+install_service_shims() {
+    local service_name
+
+    ensure_dir /etc/init.d
+
+    for service_name in puppet pxp-agent; do
+        if [ ! -e "/etc/init.d/${service_name}" ]; then
+            cat > "/etc/init.d/${service_name}" <<EOF
+#!/bin/sh
+exec /usr/local/bin/pe-agent-servicectl "\${1:-status}" "${service_name}"
+EOF
+        fi
+
+        chmod 0755 "/etc/init.d/${service_name}"
+    done
+}
+
+start_pxp_agent() {
+    if ! pxp_agent_enabled; then
+        return 0
+    fi
+
+    if ! pxp_agent_configured; then
+        log "PXP agent config is missing; skipping startup"
+        return 1
+    fi
+
+    if pxp_agent_running; then
+        return 0
+    fi
+
+    ensure_agent_directories
+
+    log "Starting pxp-agent for $(agent_certname)"
+    /opt/puppetlabs/bin/pxp-agent \
+        --config-file "${PE_AGENT_PXP_CONFIG}" \
+        --loglevel "${PE_AGENT_PXP_LOGLEVEL}" \
+        --pidfile "${PE_AGENT_PXP_PIDFILE}"
+
+    sleep 1
+    pxp_agent_running
+}
+
+stop_pxp_agent() {
+    local pid
+    local deadline
+
+    pid="$(pxp_agent_pid)"
+    [ -n "${pid}" ] || return 0
+
+    kill "${pid}" >/dev/null 2>&1 || true
+    deadline=$((SECONDS + 10))
+    while kill -0 "${pid}" >/dev/null 2>&1; do
+        if [ "${SECONDS}" -ge "${deadline}" ]; then
+            kill -9 "${pid}" >/dev/null 2>&1 || true
+            break
+        fi
+        sleep 1
+    done
+
+    rm -f "${PE_AGENT_PXP_PIDFILE}"
 }
 
 install_package_repo() {
@@ -65,14 +161,14 @@ install_package_repo() {
 }
 
 ensure_puppet_agent_installed() {
-    if [ -x /opt/puppetlabs/bin/puppet ]; then
-        return 0
+    if [ ! -x /opt/puppetlabs/bin/puppet ]; then
+        log "Installing puppet-agent from ${PE_AGENT_PACKAGE_REPO_URL}"
+        install_package_repo
+        dnf install -y puppet-agent procps-ng
+        dnf clean all
     fi
 
-    log "Installing puppet-agent from ${PE_AGENT_PACKAGE_REPO_URL}"
-    install_package_repo
-    dnf install -y puppet-agent procps-ng
-    dnf clean all
+    install_service_shims
 }
 
 write_puppet_conf() {

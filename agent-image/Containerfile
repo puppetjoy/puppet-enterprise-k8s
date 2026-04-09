@@ -36,6 +36,8 @@ RUN chmod 0755 /usr/local/bin/pe-agent-entrypoint \
     ln -sf /usr/local/bin/pe-agent-servicectl /usr/local/bin/systemctl && \
     ln -sf /usr/local/bin/pe-agent-servicectl /bin/systemctl && \
     ln -sf /usr/local/bin/pe-agent-servicectl /usr/bin/systemctl && \
+    ln -sf /usr/local/bin/pe-agent-servicectl /sbin/chkconfig && \
+    ln -sf /usr/local/bin/pe-agent-servicectl /usr/sbin/chkconfig && \
     ln -sf /usr/local/bin/pe-agent-servicectl /sbin/service && \
     ln -sf /usr/local/bin/pe-agent-servicectl /usr/sbin/service
 

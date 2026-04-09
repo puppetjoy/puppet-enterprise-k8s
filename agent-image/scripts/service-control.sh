@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+source /usr/local/lib/pe-agent-common.sh
+
 program="$(basename "$0")"
 
 parse_args() {
@@ -14,6 +16,26 @@ parse_args() {
 }
 
 emit_status() {
+    if [ "${service_name}" = "pxp-agent" ]; then
+        case "${action}" in
+            is-active)
+                if pxp_agent_running; then
+                    printf '%s\n' active
+                else
+                    printf '%s\n' inactive
+                fi
+                ;;
+            status)
+                if pxp_agent_running; then
+                    printf '%s\n' 'pxp-agent.service - active (running)'
+                else
+                    printf '%s\n' 'pxp-agent.service - inactive'
+                fi
+                ;;
+        esac
+        return 0
+    fi
+
     case "${action}" in
         is-active)
             printf '%s\n' active
@@ -30,8 +52,30 @@ case "${action}" in
     daemon-reload|enable|disable|preset|reset-failed)
         exit 0
         ;;
-    start|restart|reload|try-restart|condrestart|stop|status|is-active)
+    start)
+        if [ "${service_name}" = "pxp-agent" ]; then
+            start_pxp_agent
+        fi
+        exit 0
+        ;;
+    stop)
+        if [ "${service_name}" = "pxp-agent" ]; then
+            stop_pxp_agent
+        fi
+        exit 0
+        ;;
+    restart|reload|try-restart|condrestart)
+        if [ "${service_name}" = "pxp-agent" ]; then
+            stop_pxp_agent
+            start_pxp_agent
+        fi
+        exit 0
+        ;;
+    status|is-active)
         emit_status
+        if [ "${service_name}" = "pxp-agent" ] && ! pxp_agent_running; then
+            exit 3
+        fi
         exit 0
         ;;
     *)

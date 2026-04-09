@@ -52,6 +52,10 @@ spec:
               value: {{ .Values.agent.waitforcert | quote }}
             - name: PE_AGENT_SPLAY
               value: {{ ternary "true" "false" .Values.agent.splay | quote }}
+            - name: PE_AGENT_PXP_ENABLED
+              value: {{ ternary "true" "false" .Values.agent.pxpEnabled | quote }}
+            - name: PE_AGENT_PXP_LOGLEVEL
+              value: {{ .Values.agent.pxpLoglevel | quote }}
           readinessProbe:
             exec:
               command: ["/usr/local/bin/pe-agent-entrypoint", "probe", "readiness"]

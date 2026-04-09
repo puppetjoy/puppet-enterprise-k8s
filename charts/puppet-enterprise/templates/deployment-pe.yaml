@@ -26,9 +26,16 @@ spec:
 {{ toYaml .Values.affinity | indent 8 }}
       tolerations:
 {{ toYaml .Values.tolerations | indent 8 }}
-      {{- with .Values.network.hostAliases }}
+      {{- if or .Values.network.podLoopbackAliases .Values.network.hostAliases }}
       hostAliases:
+        {{- with .Values.network.podLoopbackAliases }}
+        - ip: 127.0.0.1
+          hostnames:
+{{ toYaml . | indent 12 }}
+        {{- end }}
+        {{- with .Values.network.hostAliases }}
 {{ toYaml . | indent 8 }}
+        {{- end }}
       {{- end }}
       initContainers:
         - name: wait-for-install

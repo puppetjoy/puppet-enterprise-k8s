@@ -7,6 +7,7 @@ PE_K8S_INSTALL_MARKER="${PE_K8S_INSTALL_MARKER:-${PE_K8S_INSTALL_DIR}/install-co
 PE_K8S_SYSCONFIG_DIR="${PE_K8S_SYSCONFIG_DIR:-${PE_K8S_STATE_DIR}/sysconfig}"
 PE_K8S_WAIT_TIMEOUT_SECONDS="${PE_K8S_WAIT_TIMEOUT_SECONDS:-3600}"
 PE_K8S_AUTOSIGN_MODE="${PE_K8S_AUTOSIGN_MODE:-off}"
+PE_K8S_PCP_CONTROLLER_LOCAL_HOST="${PE_K8S_PCP_CONTROLLER_LOCAL_HOST:-puppet}"
 
 log() {
     printf '[pe-k8s] %s\n' "$*"
@@ -70,6 +71,24 @@ copy_exported_sysconfig_into_rootfs() {
             cp -f "${path}" /etc/sysconfig/
         done
     fi
+}
+
+patch_local_pcp_controller_uri() {
+    local config_path=/etc/puppetlabs/orchestration-services/conf.d/pcp-broker.conf
+    local desired_uri
+    local escaped_host
+
+    [ -n "${PE_K8S_PCP_CONTROLLER_LOCAL_HOST}" ] || return 0
+    [ -f "${config_path}" ] || return 0
+
+    desired_uri="wss://${PE_K8S_PCP_CONTROLLER_LOCAL_HOST}:8143/server"
+    if grep -Fq "\"${desired_uri}\"" "${config_path}"; then
+        return 0
+    fi
+
+    escaped_host="$(printf '%s' "${PE_K8S_PCP_CONTROLLER_LOCAL_HOST}" | sed 's/[\/&]/\\&/g')"
+    sed -i -E "s#wss://[^/\"]+:8143/server#wss://${escaped_host}:8143/server#g" "${config_path}"
+    log "Patched PCP controller URI to ${desired_uri}"
 }
 
 normalize_dns_alt_names() {
