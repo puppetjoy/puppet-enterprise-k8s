@@ -14,6 +14,8 @@ spec:
       app.kubernetes.io/component: postgresql
   template:
     metadata:
+      annotations:
+        pe-k8s/release-revision: {{ .Release.Revision | quote }}
       labels:
         {{- include "pe.labels" . | nindent 8 }}
         app.kubernetes.io/component: postgresql

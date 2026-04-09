@@ -16,6 +16,7 @@ spec:
   template:
     metadata:
       annotations:
+        pe-k8s/release-revision: {{ .Release.Revision | quote }}
         checksum/proxy-config: {{ include (print $.Template.BasePath "/configmap-pe-proxy.yaml") . | sha256sum }}
       labels:
         {{- include "pe.labels" . | nindent 8 }}
