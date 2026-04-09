@@ -105,10 +105,13 @@ start_pxp_agent() {
     ensure_agent_directories
 
     log "Starting pxp-agent for $(agent_certname)"
+    # Start PXP asynchronously so the container can continue into the
+    # long-running puppet agent process that the probes expect to see.
     /opt/puppetlabs/bin/pxp-agent \
         --config-file "${PE_AGENT_PXP_CONFIG}" \
         --loglevel "${PE_AGENT_PXP_LOGLEVEL}" \
-        --pidfile "${PE_AGENT_PXP_PIDFILE}"
+        --pidfile "${PE_AGENT_PXP_PIDFILE}" \
+        >> /var/log/puppetlabs/pxp-agent/pxp-agent.log 2>&1 &
 
     sleep 1
     pxp_agent_running
