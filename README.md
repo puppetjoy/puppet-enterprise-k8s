@@ -20,6 +20,7 @@ For the deeper runtime and operator model, see:
 
 - [docs/runtime-model.md](docs/runtime-model.md)
 - [docs/legacy-service-mapping.md](docs/legacy-service-mapping.md)
+- [docs/replication-roadmap.md](docs/replication-roadmap.md)
 
 ## Repository Layout
 

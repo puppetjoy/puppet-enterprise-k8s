@@ -11,13 +11,16 @@ ENV PE_VERSION="${PE_VERSION}" \
 RUN dnf install -y \
       bash \
       ca-certificates \
+      chkconfig \
       cronie \
       curl-minimal \
       findutils \
       glibc-langpack-en \
       gzip \
       hostname \
+      initscripts \
       iproute \
+      openldap-compat \
       net-tools \
       procps-ng \
       python3 \

@@ -70,8 +70,6 @@ spec:
               value: {{ include "pe.certname" . | quote }}
             - name: PE_COMPILER_PUPPETDB_HOST
               value: {{ include "pe.identity" . | quote }}
-            - name: PE_COMPILER_POSTGRESQL_HOST
-              value: {{ printf "%s-postgresql" (include "pe.fullname" .) | quote }}
             - name: PE_COMPILER_DNS_ALT_NAMES
               value: {{ include "pe.compilerPoolDnsNamesCsv" . | quote }}
             - name: PE_COMPILER_PUPPETDB_SYNC_INTERVAL_MINUTES
@@ -92,6 +90,45 @@ spec:
             - name: logs
               mountPath: /var/log/puppetlabs
       containers:
+        - name: postgresql
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "postgresql"]
+          env:
+            - name: PE_K8S_SKIP_INSTALL_MARKER
+              value: "true"
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "postgresql"]
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "postgresql"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "postgresql"]
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+{{ toYaml .Values.compilers.resources.postgresql | indent 12 }}
+          volumeMounts:
+            - name: etc
+              mountPath: /etc/puppetlabs
+            - name: opt
+              mountPath: /opt/puppetlabs
+            - name: runtime
+              mountPath: /var/lib/pe-k8s
+            - name: logs
+              mountPath: /var/log/puppetlabs
         - name: puppetdb
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -99,6 +136,10 @@ spec:
           env:
             - name: PE_K8S_SKIP_INSTALL_MARKER
               value: "true"
+            - name: PE_K8S_PUPPETDB_DATABASE_HOST
+              value: 127.0.0.1
+            - name: PE_K8S_PUPPETDB_DATABASE_PORT
+              value: "5432"
           ports:
             - name: puppetdb
               containerPort: 8081

@@ -97,6 +97,26 @@ if [ "${role}" = "puppetserver" ]; then
 fi
 ensure_role_runtime_dirs
 
+wait_for_postgresql() {
+    local host="${PE_K8S_PUPPETDB_DATABASE_HOST:-}"
+    local port="${PE_K8S_PUPPETDB_DATABASE_PORT:-5432}"
+    local attempts="${PE_K8S_PUPPETDB_DATABASE_WAIT_ATTEMPTS:-120}"
+    local interval="${PE_K8S_PUPPETDB_DATABASE_WAIT_INTERVAL_SECONDS:-2}"
+    local i
+
+    [ -n "${host}" ] || return 0
+
+    for i in $(seq 1 "${attempts}"); do
+        if /opt/puppetlabs/server/apps/postgresql/14/bin/pg_isready -h "${host}" -p "${port}" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep "${interval}"
+    done
+
+    log "Timed out waiting for PostgreSQL at ${host}:${port}"
+    return 1
+}
+
 case "${role}" in
     postgresql)
         PGDATA="${PGDATA:-/opt/puppetlabs/server/data/postgresql/14/data}"
@@ -109,6 +129,7 @@ case "${role}" in
             -p "${PGPORT}"
         ;;
     puppetdb)
+        wait_for_postgresql
         exec_as_user pe-puppetdb \
             /opt/puppetlabs/server/apps/puppetdb/bin/puppetdb \
             foreground

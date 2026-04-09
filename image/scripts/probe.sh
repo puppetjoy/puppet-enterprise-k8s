@@ -24,6 +24,11 @@ compiler_filesync_ready() {
 
     [ -n "${PE_K8S_COMPILER_PE_SERVICE:-}" ] || return 1
 
+    /opt/puppetlabs/server/apps/postgresql/14/bin/pg_isready \
+        -h 127.0.0.1 \
+        -p "${PGPORT:-5432}" >/dev/null 2>&1
+    curl -skf https://127.0.0.1:8081/status/v1/services/status-service >/dev/null 2>&1
+
     local_status="$(curl -skf https://127.0.0.1:8140/status/v1/services?level=debug)"
     pe_status="$(curl -skf "https://${PE_K8S_COMPILER_PE_SERVICE}:8140/status/v1/services?level=debug")"
 

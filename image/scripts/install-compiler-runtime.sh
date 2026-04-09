@@ -7,7 +7,7 @@ PE_INSTALLER_ROOT="${PE_INSTALLER_ROOT:-/opt/pe-installer}"
 PE_COMPILER_REQUIRED_INSTALL_JOB="${PE_COMPILER_REQUIRED_INSTALL_JOB:-}"
 PE_COMPILER_PACKAGE_REPO_NAME="${PE_COMPILER_PACKAGE_REPO_NAME:-pe-k8s-local}"
 PE_COMPILER_PACKAGE_REPO_PATH="${PE_COMPILER_PACKAGE_REPO_PATH:-${PE_INSTALLER_ROOT}/packages/el-9-x86_64}"
-PE_COMPILER_PACKAGE_NAMES="${PE_COMPILER_PACKAGE_NAMES:-puppet-agent pe-puppet-enterprise-release pe-puppetserver pe-puppetdb pe-puppetdb-termini pe-modules}"
+PE_COMPILER_PACKAGE_NAMES="${PE_COMPILER_PACKAGE_NAMES:-puppet-agent pe-puppet-enterprise-release pe-puppetserver pe-puppetdb pe-puppetdb-termini pe-modules pe-postgresql-common pe-postgresql14 pe-postgresql14-server pe-postgresql14-contrib pe-postgresql14-pglogical pe-postgresql14-pgrepack}"
 PE_COMPILER_FORCE_REINSTALL="${PE_COMPILER_FORCE_REINSTALL:-false}"
 PE_K8S_COMPILER_INSTALL_DIR="${PE_K8S_COMPILER_INSTALL_DIR:-${PE_K8S_STATE_DIR}/compiler-install}"
 PE_K8S_COMPILER_INSTALL_MARKER="${PE_K8S_COMPILER_INSTALL_MARKER:-${PE_K8S_COMPILER_INSTALL_DIR}/install-complete}"
@@ -36,6 +36,7 @@ compiler_runtime_ready() {
 
     for path in \
         /opt/puppetlabs/bin/puppet \
+        /opt/puppetlabs/server/apps/postgresql/14/bin/postgres \
         /opt/puppetlabs/server/apps/puppetserver/bin/puppetserver \
         /opt/puppetlabs/server/apps/puppetdb/bin/puppetdb \
         /opt/puppetlabs/puppet/modules/puppet_enterprise/manifests/init.pp \

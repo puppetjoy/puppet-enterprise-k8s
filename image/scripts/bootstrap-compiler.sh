@@ -10,7 +10,7 @@ PE_COMPILER_HEADLESS_SERVICE="${PE_COMPILER_HEADLESS_SERVICE:-}"
 PE_COMPILER_PE_SERVICE="${PE_COMPILER_PE_SERVICE:-pe}"
 PE_COMPILER_PE_CERTNAME="${PE_COMPILER_PE_CERTNAME:-${PE_COMPILER_PE_SERVICE}}"
 PE_COMPILER_PUPPETDB_HOST="${PE_COMPILER_PUPPETDB_HOST:-${PE_COMPILER_PE_SERVICE}}"
-PE_COMPILER_POSTGRESQL_HOST="${PE_COMPILER_POSTGRESQL_HOST:-${PE_COMPILER_PE_SERVICE}-postgresql}"
+PE_COMPILER_POSTGRESQL_HOST="${PE_COMPILER_POSTGRESQL_HOST:-}"
 PE_COMPILER_DNS_ALT_NAMES="${PE_COMPILER_DNS_ALT_NAMES:-}"
 PE_COMPILER_PUPPETDB_SYNC_INTERVAL_MINUTES="${PE_COMPILER_PUPPETDB_SYNC_INTERVAL_MINUTES:-5}"
 PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS="${PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS:-900}"
@@ -33,6 +33,15 @@ compiler_certname() {
         "${PE_COMPILER_POD_NAME}" \
         "${PE_COMPILER_HEADLESS_SERVICE}" \
         "${PE_COMPILER_NAMESPACE}"
+}
+
+compiler_postgresql_host() {
+    if [ -n "${PE_COMPILER_POSTGRESQL_HOST}" ]; then
+        printf '%s\n' "${PE_COMPILER_POSTGRESQL_HOST}"
+        return 0
+    fi
+
+    compiler_certname
 }
 
 wait_for_pe() {
@@ -130,8 +139,9 @@ bootstrap_compiler_ssl() {
 }
 
 write_compiler_manifest() {
-    local certname
+    local certname database_host
     certname="$(compiler_certname)"
+    database_host="$(compiler_postgresql_host)"
 
     cat > "${PE_COMPILER_MANIFEST_PATH}" <<EOF
 class { 'puppet_enterprise':
@@ -161,8 +171,18 @@ class { 'puppet_enterprise::profile::master':
   enable_workflow_service     => false,
 }
 
+class { 'puppet_enterprise::profile::database':
+  certname               => '${database_host}',
+  puppetdb_hosts         => ['${certname}'],
+  console_hosts          => [],
+  pcp_broker_hosts       => [],
+  patching_service_hosts => [],
+  infra_assistant_hosts  => [],
+  workflow_service_hosts => [],
+}
+
 class { 'puppet_enterprise::profile::puppetdb':
-  database_host   => '${PE_COMPILER_POSTGRESQL_HOST}',
+  database_host   => '${database_host}',
   certname        => '${certname}',
   master_certname => '${certname}',
   rbac_host       => '${PE_COMPILER_PE_SERVICE}',
@@ -174,6 +194,7 @@ class { 'puppet_enterprise::profile::puppetdb':
     }
   ],
   sync_allowlist  => ['${PE_COMPILER_PE_CERTNAME}'],
+  require         => Class['puppet_enterprise::profile::database'],
 }
 EOF
 }

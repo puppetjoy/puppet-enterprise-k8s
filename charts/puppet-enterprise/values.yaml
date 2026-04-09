@@ -121,6 +121,7 @@ compilers:
     install: {}
     bootstrap: {}
     signer: {}
+    postgresql: {}
     puppetserver: {}
     puppetdb: {}
   storage:
