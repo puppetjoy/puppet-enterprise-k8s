@@ -50,7 +50,7 @@ data:
       default_backend pe_puppetserver
 
     backend pe_puppetserver
-      server puppetserver {{ include "pe.fullname" . }}-puppetserver.{{ .Release.Namespace }}.svc.cluster.local:8140 check
+      server puppetserver 127.0.0.1:8140 check
 
     frontend pe_orchestration_pcp
       bind *:18142
@@ -78,7 +78,7 @@ data:
       default_backend pe_code_manager
 
     backend pe_code_manager
-      server puppetserver {{ include "pe.fullname" . }}-puppetserver.{{ .Release.Namespace }}.svc.cluster.local:8170 check
+      server puppetserver 127.0.0.1:8170 check
 
     frontend pe_console_services
       bind *:14433

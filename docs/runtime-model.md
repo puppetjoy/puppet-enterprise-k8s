@@ -34,11 +34,13 @@ The initial chart is split into:
 - `installer` Job
 - `postgresql` StatefulSet
 - `puppetdb` Deployment
-- `puppetserver` Deployment
+- optional `compiler` StatefulSet
 - PE services `Deployment`
 
 The PE services deployment uses multiple containers from the same image:
 
+- `proxy`
+- `puppetserver`
 - `nginx`
 - `console-services`
 - `orchestration-services`
@@ -46,7 +48,7 @@ The PE services deployment uses multiple containers from the same image:
 - `ace-server`
 - `host-action-collector`
 
-This keeps one PE service per container while still colocating the tightly-coupled HTTP/API edge services.
+This keeps one PE service per container while colocating the non-compiler Puppet Server with the tightly-coupled HTTP/API edge services. Compiler capacity remains separate.
 
 ## Installer Config Model
 
@@ -67,16 +69,17 @@ For settings that are not modeled yet, append raw installer config with `peConfi
 
 Naming follows the Helm release name:
 
-- release `pe` renders base resources like `pe`, `pe-puppetserver`, and `pe-puppetdb`
-- release `foo` renders `pe-foo`, `pe-foo-puppetserver`, and `pe-foo-puppetdb`
+- release `pe` renders base resources like `pe`, `pe-puppetdb`, and `pe-compiler` when compilers are enabled
+- release `foo` renders `pe-foo`, `pe-foo-puppetdb`, and `pe-foo-compiler` when compilers are enabled
 
 ## Access Model
 
 The intended access pattern is:
 
-- `service/pe` is the technical front door for PE APIs and agent-facing mTLS traffic
+- `service/pe` is the technical front door for PE APIs and the non-compiler Puppet Server on `8140`
 - ingress points at `service/pe` for the console hostname, with TLS terminated by the ingress controller
-- `service/pe-puppetserver`, `service/pe-puppetdb`, and `service/pe-postgresql` remain the backend service boundaries
+- `service/pe-compiler` is the optional compiler-pool endpoint for compile traffic
+- `service/pe-puppetdb` and `service/pe-postgresql` remain backend service boundaries
 
 ## Code Manager
 
@@ -95,7 +98,7 @@ The chart renders these Code Manager `pe.conf` settings when enabled:
 - `puppet_enterprise::profile::master::r10k_known_hosts`
 - `puppet_enterprise::profile::master::r10k_remote_timeout`
 
-The deploy key is mounted from the Secret into the installer Job, `deployment/pe`, and `deployment/pe-puppetserver` at `codeManager.r10kPrivateKeyPath`. For an existing release, set `installer.forceReinstall=true` for the upgrade that introduces or materially changes Code Manager configuration so PE re-runs `puppet infrastructure configure`.
+The deploy key is mounted from the Secret into the installer Job and `deployment/pe` at `codeManager.r10kPrivateKeyPath`. For an existing release, set `installer.forceReinstall=true` for the upgrade that introduces or materially changes Code Manager configuration so PE re-runs `puppet infrastructure configure`.
 
 If the Git remote hostname needs a Kubernetes-specific override, set `network.hostAliases`. This is useful when the SSH endpoint for the control repo resolves differently inside the cluster than it does on an operator workstation.
 
@@ -125,7 +128,7 @@ Default behavior:
 This helper path is useful for validating:
 
 - certificate issuance and autosigning behavior
-- catalog compilation through `service/pe`
+- catalog compilation through `service/pe` and `service/pe-compiler`
 - facts, catalogs, and reports landing in PuppetDB
 - Code Manager and control-repo changes from a real agent run
 
@@ -158,10 +161,10 @@ The intended workflow is:
 
 1. Update `network.technicalHostname`, `network.additionalDnsAltNames`, or any explicit `peConfig` overrides.
 2. Apply those values so the desired `pe.conf` is stored in the release.
-3. Leave `deployment/pe`, `deployment/pe-puppetserver`, and `deployment/pe-puppetdb` up so the maintenance job can reach the CA and PuppetDB through the normal in-cluster `pe` service.
+3. Leave `deployment/pe` and `deployment/pe-puppetdb` up so the maintenance job can reach the CA and PuppetDB through the normal in-cluster services.
 4. Run one Helm upgrade with `certificateRegeneration.enabled=true`.
 5. Wait for the `*-cert-regen-r<revision>` Job to complete.
-6. Roll the workloads so the running processes pick up the refreshed cert material.
+6. Roll `deployment/pe`, `deployment/pe-puppetdb`, and any enabled compiler replicas so the running processes pick up the refreshed cert material.
 
 Because PE's built-in node-role verification does not map cleanly onto the split Kubernetes layout, the chart defaults `certificateRegeneration.force=true`. The maintenance Job still compares the current certificate SANs to the desired SAN set and exits without changes when they already match, unless you explicitly override `certificateRegeneration.force`.
 
@@ -180,10 +183,10 @@ helm upgrade pe charts/puppet-enterprise \
 
 Recovery workflow:
 
-1. Scale `deployment/pe`, `deployment/pe-puppetserver`, and `deployment/pe-puppetdb` down to `0`.
+1. Scale `deployment/pe` and `deployment/pe-puppetdb` down to `0`. If compilers are enabled, scale the compiler StatefulSet to `0` as well.
 2. Run one Helm upgrade with `certificateRecovery.enabled=true`.
 3. Wait for the `*-cert-recover-r<revision>` Job to complete.
-4. Scale the workloads back up with a normal Helm upgrade.
+4. Scale those workloads back up with a normal Helm upgrade.
 
 The recovery Job regenerates the host cert offline from the CA files on the PVCs and rewrites the copied `pe.cert.pem`, `pe.private_key.pem`, and `pe.private_key.pk8` files for:
 

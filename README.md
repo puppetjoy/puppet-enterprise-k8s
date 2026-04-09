@@ -7,13 +7,14 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 - Development and validation project, not production-ready
 - Builds a PE runtime image from the official installer tarball
 - Installs PE with Helm and preserves the install result on PVCs
-- Runs PostgreSQL, PuppetDB, Puppet Server, and PE edge/API services as Kubernetes workloads
+- Runs PostgreSQL, PuppetDB, the non-compiler Puppet Server, and PE edge/API services as Kubernetes workloads
+- Supports an optional compiler pool with per-replica non-shared PVCs and file-sync-based readiness
 - Supports optional ingress exposure, Code Manager configuration, and a validation `puppet-agent` chart
 - Still evolving around storage boundaries, multi-replica safety, upgrade orchestration, and hardening
 
 ## How It Relates To Traditional PE
 
-This is not a systemd container port. PE is installed once by Kubernetes, persisted onto volumes, and then run as foreground services inside separate Kubernetes workloads. `service/pe` acts as the technical front door for agent-facing and API traffic, while backend services remain separate workloads.
+This is not a systemd container port. PE is installed once by Kubernetes, persisted onto volumes, and then run as foreground services inside separate Kubernetes workloads. `service/pe` acts as the technical front door for agent-facing and API traffic, while an optional `service/pe-compiler` can expose the compiler pool separately.
 
 For the deeper runtime and operator model, see:
 

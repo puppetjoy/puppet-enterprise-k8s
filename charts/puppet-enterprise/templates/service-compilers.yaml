@@ -26,6 +26,9 @@ metadata:
     app.kubernetes.io/component: compiler
 spec:
   type: {{ .Values.services.compilers.type }}
+  {{- if .Values.services.compilers.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.services.compilers.loadBalancerIP }}
+  {{- end }}
   selector:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: compiler

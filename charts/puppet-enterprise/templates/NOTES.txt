@@ -5,7 +5,7 @@ Resources:
   Installer Job: {{ include "pe.fullname" . }}-installer-r{{ .Release.Revision }}
   PostgreSQL: {{ include "pe.fullname" . }}-postgresql
   PuppetDB: {{ include "pe.fullname" . }}-puppetdb
-  Puppet Server: {{ include "pe.fullname" . }}-puppetserver
+  Compiler Pool: {{ include "pe.compilerPoolServiceName" . }}
   PE Services: {{ include "pe.fullname" . }}
 
 Wait for the installer Job to complete before expecting workloads to become ready.
@@ -18,5 +18,5 @@ This chart currently assumes RWX storage for:
 
 Start with internal service access:
   Front Door: https://{{ include "pe.fullname" . }}
-  Puppet Server: https://{{ include "pe.fullname" . }}-puppetserver:{{ .Values.services.puppetserver.port }}
+  Puppet Server: https://{{ include "pe.fullname" . }}:8140
   PuppetDB: https://{{ include "pe.fullname" . }}-puppetdb:{{ .Values.services.puppetdb.port }}

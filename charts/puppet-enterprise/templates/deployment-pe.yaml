@@ -87,6 +87,54 @@ spec:
             - name: proxy-config
               mountPath: /usr/local/etc/haproxy
               readOnly: true
+        - name: puppetserver
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "puppetserver"]
+          env:
+            - name: PE_K8S_AUTOSIGN_MODE
+              value: {{ .Values.testAgents.autosign.mode | quote }}
+          ports:
+            - name: puppetserver
+              containerPort: 8140
+            {{- if .Values.codeManager.enabled }}
+            - name: code-manager
+              containerPort: 8170
+            {{- end }}
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "puppetserver"]
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "puppetserver"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "puppetserver"]
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+{{ toYaml .Values.puppetserver.resources | indent 12 }}
+          volumeMounts:
+            - name: etc
+              mountPath: /etc/puppetlabs
+            - name: opt
+              mountPath: /opt/puppetlabs
+            - name: runtime
+              mountPath: /var/lib/pe-k8s
+            - name: logs
+              mountPath: /var/log/puppetlabs
+            {{- if .Values.codeManager.enabled }}
+            - name: code-manager-r10k-key
+              mountPath: {{ dir (required "codeManager.r10kPrivateKeyPath is required when codeManager.enabled=true" .Values.codeManager.r10kPrivateKeyPath) | quote }}
+              readOnly: true
+            {{- end }}
         - name: nginx
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}

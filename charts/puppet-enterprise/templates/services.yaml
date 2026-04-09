@@ -83,25 +83,3 @@ spec:
     - name: puppetdb
       port: {{ .Values.services.puppetdb.port }}
       targetPort: puppetdb
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "pe.fullname" . }}-puppetserver
-  labels:
-    {{- include "pe.labels" . | nindent 4 }}
-spec:
-  type: {{ .Values.services.puppetserver.type }}
-  publishNotReadyAddresses: {{ .Values.services.publishNotReadyAddresses }}
-  selector:
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/component: puppetserver
-  ports:
-    - name: puppetserver
-      port: {{ .Values.services.puppetserver.port }}
-      targetPort: puppetserver
-    {{- if .Values.codeManager.enabled }}
-    - name: code-manager
-      port: 8170
-      targetPort: 8170
-    {{- end }}

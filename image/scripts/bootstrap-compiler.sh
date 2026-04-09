@@ -7,10 +7,10 @@ PE_COMPILER_CERTNAME="${PE_COMPILER_CERTNAME:-}"
 PE_COMPILER_POD_NAME="${PE_COMPILER_POD_NAME:-${HOSTNAME:-}}"
 PE_COMPILER_NAMESPACE="${PE_COMPILER_NAMESPACE:-default}"
 PE_COMPILER_HEADLESS_SERVICE="${PE_COMPILER_HEADLESS_SERVICE:-}"
-PE_COMPILER_PRIMARY_SERVICE="${PE_COMPILER_PRIMARY_SERVICE:-pe}"
-PE_COMPILER_PRIMARY_CERTNAME="${PE_COMPILER_PRIMARY_CERTNAME:-${PE_COMPILER_PRIMARY_SERVICE}}"
-PE_COMPILER_PRIMARY_PUPPETDB_HOST="${PE_COMPILER_PRIMARY_PUPPETDB_HOST:-${PE_COMPILER_PRIMARY_SERVICE}}"
-PE_COMPILER_PRIMARY_POSTGRESQL_HOST="${PE_COMPILER_PRIMARY_POSTGRESQL_HOST:-${PE_COMPILER_PRIMARY_SERVICE}-postgresql}"
+PE_COMPILER_PE_SERVICE="${PE_COMPILER_PE_SERVICE:-pe}"
+PE_COMPILER_PE_CERTNAME="${PE_COMPILER_PE_CERTNAME:-${PE_COMPILER_PE_SERVICE}}"
+PE_COMPILER_PUPPETDB_HOST="${PE_COMPILER_PUPPETDB_HOST:-${PE_COMPILER_PE_SERVICE}}"
+PE_COMPILER_POSTGRESQL_HOST="${PE_COMPILER_POSTGRESQL_HOST:-${PE_COMPILER_PE_SERVICE}-postgresql}"
 PE_COMPILER_DNS_ALT_NAMES="${PE_COMPILER_DNS_ALT_NAMES:-}"
 PE_COMPILER_PUPPETDB_SYNC_INTERVAL_MINUTES="${PE_COMPILER_PUPPETDB_SYNC_INTERVAL_MINUTES:-5}"
 PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS="${PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS:-900}"
@@ -35,18 +35,18 @@ compiler_certname() {
         "${PE_COMPILER_NAMESPACE}"
 }
 
-wait_for_primary() {
+wait_for_pe() {
     local deadline
     deadline=$((SECONDS + PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS))
 
     while [ "${SECONDS}" -lt "${deadline}" ]; do
-        if curl -skf "https://${PE_COMPILER_PRIMARY_SERVICE}:8140/status/v1/services" >/dev/null 2>&1; then
+        if curl -skf "https://${PE_COMPILER_PE_SERVICE}:8140/status/v1/services" >/dev/null 2>&1; then
             return 0
         fi
         sleep 5
     done
 
-    log "Timed out waiting for primary service ${PE_COMPILER_PRIMARY_SERVICE}"
+    log "Timed out waiting for PE service ${PE_COMPILER_PE_SERVICE}"
     return 1
 }
 
@@ -68,8 +68,8 @@ write_compiler_identity() {
     cat > /etc/puppetlabs/puppet/puppet.conf <<EOF
 [main]
 certname = ${certname}
-server = ${PE_COMPILER_PRIMARY_SERVICE}
-ca_server = ${PE_COMPILER_PRIMARY_SERVICE}
+server = ${PE_COMPILER_PE_SERVICE}
+ca_server = ${PE_COMPILER_PE_SERVICE}
 environment = production
 vardir = /opt/puppetlabs/puppet/cache
 logdir = /var/log/puppetlabs/puppet
@@ -116,8 +116,8 @@ bootstrap_compiler_ssl() {
         log "Bootstrapping compiler certificate for ${certname}"
         if /opt/puppetlabs/bin/puppet ssl bootstrap \
             --certname "${certname}" \
-            --server "${PE_COMPILER_PRIMARY_SERVICE}" \
-            --ca_server "${PE_COMPILER_PRIMARY_SERVICE}" \
+            --server "${PE_COMPILER_PE_SERVICE}" \
+            --ca_server "${PE_COMPILER_PE_SERVICE}" \
             --waitforcert 5
         then
             return 0
@@ -135,26 +135,26 @@ write_compiler_manifest() {
 
     cat > "${PE_COMPILER_MANIFEST_PATH}" <<EOF
 class { 'puppet_enterprise':
-  puppet_master_host         => '${PE_COMPILER_PRIMARY_SERVICE}',
-  certificate_authority_host => '${PE_COMPILER_PRIMARY_SERVICE}',
-  console_host               => '${PE_COMPILER_PRIMARY_SERVICE}',
-  puppetdb_host              => ['${certname}', '${PE_COMPILER_PRIMARY_PUPPETDB_HOST}'],
-  pcp_broker_host            => '${PE_COMPILER_PRIMARY_SERVICE}',
+  puppet_master_host         => '${PE_COMPILER_PE_SERVICE}',
+  certificate_authority_host => '${PE_COMPILER_PE_SERVICE}',
+  console_host               => '${PE_COMPILER_PE_SERVICE}',
+  puppetdb_host              => ['${certname}', '${PE_COMPILER_PUPPETDB_HOST}'],
+  pcp_broker_host            => '${PE_COMPILER_PE_SERVICE}',
 }
 
 class { 'puppet_enterprise::profile::master':
-  ca_host                     => '${PE_COMPILER_PRIMARY_SERVICE}',
+  ca_host                     => '${PE_COMPILER_PE_SERVICE}',
   ca_port                     => 8140,
   certname                    => '${certname}',
-  classifier_host             => '${PE_COMPILER_PRIMARY_SERVICE}',
-  classifier_client_certname  => '${PE_COMPILER_PRIMARY_CERTNAME}',
-  console_host                => '${PE_COMPILER_PRIMARY_SERVICE}',
-  console_server_certname     => '${PE_COMPILER_PRIMARY_CERTNAME}',
-  console_client_certname     => '${PE_COMPILER_PRIMARY_CERTNAME}',
-  master_of_masters_certname  => '${PE_COMPILER_PRIMARY_CERTNAME}',
+  classifier_host             => '${PE_COMPILER_PE_SERVICE}',
+  classifier_client_certname  => '${PE_COMPILER_PE_CERTNAME}',
+  console_host                => '${PE_COMPILER_PE_SERVICE}',
+  console_server_certname     => '${PE_COMPILER_PE_CERTNAME}',
+  console_client_certname     => '${PE_COMPILER_PE_CERTNAME}',
+  master_of_masters_certname  => '${PE_COMPILER_PE_CERTNAME}',
   file_sync_enabled           => true,
   code_manager_auto_configure => false,
-  puppetdb_host               => ['${certname}', '${PE_COMPILER_PRIMARY_PUPPETDB_HOST}'],
+  puppetdb_host               => ['${certname}', '${PE_COMPILER_PUPPETDB_HOST}'],
   puppetdb_port               => [8081, 8081],
   enable_patching_service     => false,
   enable_infra_assistant      => false,
@@ -162,18 +162,18 @@ class { 'puppet_enterprise::profile::master':
 }
 
 class { 'puppet_enterprise::profile::puppetdb':
-  database_host   => '${PE_COMPILER_PRIMARY_POSTGRESQL_HOST}',
+  database_host   => '${PE_COMPILER_POSTGRESQL_HOST}',
   certname        => '${certname}',
   master_certname => '${certname}',
-  rbac_host       => '${PE_COMPILER_PRIMARY_SERVICE}',
+  rbac_host       => '${PE_COMPILER_PE_SERVICE}',
   sync_peers      => [
     {
-      host                  => '${PE_COMPILER_PRIMARY_PUPPETDB_HOST}',
+      host                  => '${PE_COMPILER_PUPPETDB_HOST}',
       port                  => 8081,
       sync_interval_minutes => ${PE_COMPILER_PUPPETDB_SYNC_INTERVAL_MINUTES},
     }
   ],
-  sync_allowlist  => ['${PE_COMPILER_PRIMARY_CERTNAME}'],
+  sync_allowlist  => ['${PE_COMPILER_PE_CERTNAME}'],
 }
 EOF
 }
@@ -218,7 +218,7 @@ main() {
     fi
 
     ensure_compiler_dirs
-    wait_for_primary
+    wait_for_pe
     write_compiler_identity
     bootstrap_compiler_ssl
     write_compiler_manifest

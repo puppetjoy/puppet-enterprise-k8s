@@ -66,7 +66,7 @@ main() {
                 exit 0
             fi
             log "Certificate regeneration failed with exit code ${result}"
-            log "If the release is left half-rotated, scale pe, pe-puppetserver, and pe-puppetdb to 0 and run the cert recovery job"
+            log "If the release is left half-rotated, scale pe and pe-puppetdb to 0, scale any compiler replicas down, and run the cert recovery job"
             exit "${result}"
             ;;
     esac

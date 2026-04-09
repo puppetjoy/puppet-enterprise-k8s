@@ -1,19 +1,19 @@
-# Legacy PE Primary To Kubernetes Mapping
+# Legacy PE Service To Kubernetes Mapping
 
-This mapping is based on the live `pe-primary` container running on branch `k8s-pe-primary`.
+This mapping is based on the legacy PE container work in `../pe-container`.
 
 ## Active PE Services
 
-The installed primary currently runs these PE services:
+The legacy install currently runs these PE services:
 
 | Service | Listener(s) | Legacy ExecStart | Mutable config/data | Suggested K8s shape | Scaling notes |
 | --- | --- | --- | --- | --- | --- |
 | `pe-postgresql` | `5432` | `postgres -D /opt/puppetlabs/server/data/postgresql/14/data` | `/opt/puppetlabs/server/data/postgresql`, `/var/log/puppetlabs/postgresql` | `StatefulSet` | Stateful, single-writer |
 | `pe-puppetdb` | `8081` | `puppetdb foreground` | `/etc/puppetlabs/puppetdb`, `/opt/puppetlabs/server/data/puppetdb` | `Deployment` | Can scale only with validated shared DB behavior |
-| `pe-puppetserver` | `8140` | `puppetserver foreground` | `/etc/puppetlabs/puppetserver`, `/opt/puppetlabs/server/data/puppetserver`, code data | `Deployment` | Primary scale target |
+| `pe-puppetserver` | `8140`, `8170` | `puppetserver foreground` | `/etc/puppetlabs/puppetserver`, `/opt/puppetlabs/server/data/puppetserver`, code data | Container in `pe` `Deployment` | `service/pe` serves the non-compiler Puppet Server; compiler capacity scales separately |
 | `pe-nginx` | `80`, `443` | `nginx -c /etc/puppetlabs/nginx/nginx.conf` | `/etc/puppetlabs/nginx` | `Deployment` container in `pe` | HTTP/TLS edge |
 | `pe-console-services` | `4433` | `console-services foreground` | `/etc/puppetlabs/console-services`, `/opt/puppetlabs/server/data/console-services` | `Deployment` container in `pe` | Depends on DB and Puppet Server |
-| `pe-orchestration-services` | `8142`, `8143`, `8170` | `orchestration-services foreground` | `/etc/puppetlabs/orchestration-services`, `/opt/puppetlabs/server/data/orchestration-services`, Code Manager data | `Deployment` container in `pe` | Depends on DB |
+| `pe-orchestration-services` | `8142`, `8143` | `orchestration-services foreground` | `/etc/puppetlabs/orchestration-services`, `/opt/puppetlabs/server/data/orchestration-services` | `Deployment` container in `pe` | Depends on DB |
 | `pe-host-action-collector` | `8147` | `host-action-collector foreground` | `/etc/puppetlabs/host-action-collector`, `/opt/puppetlabs/server/data/host-action-collector` | `Deployment` container in `pe` | Depends on DB |
 | `pe-bolt-server` | `62658` | `puma -C .../pe_bolt_server_config.rb` | `/etc/puppetlabs/bolt-server`, `/opt/puppetlabs/server/data/bolt-server` | `Deployment` container in `pe` | HTTP API service |
 | `pe-ace-server` | `44633` | `puma -C .../transport_tasks_config.rb` | `/etc/puppetlabs/ace-server`, `/opt/puppetlabs/server/data/ace-server` | `Deployment` container in `pe` | HTTP API service |
@@ -31,7 +31,7 @@ Small but critical configuration:
 - `/etc/puppetlabs/orchestration-services`
 - `/etc/puppetlabs/nginx`
 
-Heavy mutable state under `/opt/puppetlabs/server/data` from the current primary:
+Heavy mutable state under `/opt/puppetlabs/server/data` from the current install:
 
 | Path | Approx size | Notes |
 | --- | --- | --- |
@@ -58,9 +58,10 @@ These are not under `/etc/puppetlabs`, so the installer Job needs to export them
 
 The first scaffold keeps storage simple and explicit:
 
-- shared PVC for `/etc/puppetlabs`
-- shared PVC for `/opt/puppetlabs`
-- shared PVC for `/var/lib/pe-k8s` exported runtime metadata
+- shared PVC for `/etc/puppetlabs` used by the installer, `pe`, and `pe-puppetdb`
+- shared PVC for `/opt/puppetlabs` used by the installer, `pe`, and `pe-puppetdb`
+- shared PVC for `/var/lib/pe-k8s` exported runtime metadata used by the installer, `pe`, and `pe-puppetdb`
+- per-compiler non-shared PVCs for `/etc/puppetlabs`, `/opt/puppetlabs`, and `/var/lib/pe-k8s`
 - per-pod ephemeral log directories
 
 That model is intentionally conservative. It preserves the install result before we optimize storage boundaries.
@@ -71,7 +72,7 @@ The likely next partitioning target is `/opt/puppetlabs/server/data`:
 
 - `postgresql` should eventually have its own PVC
 - `packages` may remain shared and possibly read-only after install/update
-- `environments` and `code-manager` may remain shared for code distribution
+- `environments` and `code-manager` should line up with file-sync distribution to the compiler pool rather than shared compiler storage
 - `puppetserver` and `puppetdb` service-local data should be reviewed for per-pod vs shared semantics
 
 ## Why This Is Not A systemd Port

@@ -62,13 +62,13 @@ spec:
                   fieldPath: metadata.namespace
             - name: PE_COMPILER_HEADLESS_SERVICE
               value: {{ include "pe.compilerHeadlessServiceName" . | quote }}
-            - name: PE_COMPILER_PRIMARY_SERVICE
+            - name: PE_COMPILER_PE_SERVICE
               value: {{ include "pe.identity" . | quote }}
-            - name: PE_COMPILER_PRIMARY_CERTNAME
+            - name: PE_COMPILER_PE_CERTNAME
               value: {{ include "pe.certname" . | quote }}
-            - name: PE_COMPILER_PRIMARY_PUPPETDB_HOST
+            - name: PE_COMPILER_PUPPETDB_HOST
               value: {{ include "pe.identity" . | quote }}
-            - name: PE_COMPILER_PRIMARY_POSTGRESQL_HOST
+            - name: PE_COMPILER_POSTGRESQL_HOST
               value: {{ printf "%s-postgresql" (include "pe.fullname" .) | quote }}
             - name: PE_COMPILER_DNS_ALT_NAMES
               value: {{ include "pe.compilerPoolDnsNamesCsv" . | quote }}
@@ -136,7 +136,7 @@ spec:
           env:
             - name: PE_K8S_SKIP_INSTALL_MARKER
               value: "true"
-            - name: PE_K8S_COMPILER_PRIMARY_SERVICE
+            - name: PE_K8S_COMPILER_PE_SERVICE
               value: {{ include "pe.identity" . | quote }}
           ports:
             - name: puppetserver

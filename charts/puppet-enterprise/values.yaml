@@ -112,7 +112,6 @@ puppetdb:
   resources: {}
 
 puppetserver:
-  replicaCount: 1
   resources: {}
 
 compilers:
@@ -160,12 +159,10 @@ services:
   pe:
     type: ClusterIP
     loadBalancerIP: ""
-  puppetserver:
-    type: ClusterIP
-    port: 8140
   compilers:
     type: ClusterIP
     port: 8140
+    loadBalancerIP: ""
   puppetdb:
     type: ClusterIP
     port: 8081
