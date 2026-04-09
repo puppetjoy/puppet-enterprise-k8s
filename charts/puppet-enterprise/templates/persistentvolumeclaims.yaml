@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "pe.fullname" . }}-etc
+  name: {{ include "pe.pvcEtcName" . }}
   labels:
     {{- include "pe.labels" . | nindent 4 }}
 spec:
@@ -17,7 +17,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "pe.fullname" . }}-opt
+  name: {{ include "pe.pvcOptName" . }}
   labels:
     {{- include "pe.labels" . | nindent 4 }}
 spec:
@@ -33,7 +33,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "pe.fullname" . }}-runtime
+  name: {{ include "pe.pvcRuntimeName" . }}
   labels:
     {{- include "pe.labels" . | nindent 4 }}
 spec:

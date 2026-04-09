@@ -438,13 +438,13 @@ spec:
             name: {{ include "pe.fullname" . }}-conf
         - name: etc
           persistentVolumeClaim:
-            claimName: {{ include "pe.fullname" . }}-etc
+            claimName: {{ include "pe.pvcEtcName" . }}
         - name: opt
           persistentVolumeClaim:
-            claimName: {{ include "pe.fullname" . }}-opt
+            claimName: {{ include "pe.pvcOptName" . }}
         - name: runtime
           persistentVolumeClaim:
-            claimName: {{ include "pe.fullname" . }}-runtime
+            claimName: {{ include "pe.pvcRuntimeName" . }}
         - name: logs
           emptyDir: {}
         {{- if .Values.license.secretName }}

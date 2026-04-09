@@ -151,6 +151,18 @@ pe
 {{- include "pe.compilerStatefulSetName" . -}}
 {{- end -}}
 
+{{- define "pe.pvcEtcName" -}}
+{{- printf "etc-%s" (include "pe.fullname" .) -}}
+{{- end -}}
+
+{{- define "pe.pvcOptName" -}}
+{{- printf "opt-%s" (include "pe.fullname" .) -}}
+{{- end -}}
+
+{{- define "pe.pvcRuntimeName" -}}
+{{- printf "runtime-%s" (include "pe.fullname" .) -}}
+{{- end -}}
+
 {{- define "pe.compilerPodNameForIndex" -}}
 {{- $root := .root -}}
 {{- $index := int .index -}}
