@@ -7,7 +7,6 @@ PE_K8S_INSTALL_MARKER="${PE_K8S_INSTALL_MARKER:-${PE_K8S_INSTALL_DIR}/install-co
 PE_K8S_SYSCONFIG_DIR="${PE_K8S_SYSCONFIG_DIR:-${PE_K8S_STATE_DIR}/sysconfig}"
 PE_K8S_WAIT_TIMEOUT_SECONDS="${PE_K8S_WAIT_TIMEOUT_SECONDS:-3600}"
 PE_K8S_SKIP_INSTALL_MARKER="${PE_K8S_SKIP_INSTALL_MARKER:-false}"
-PE_K8S_AUTOSIGN_MODE="${PE_K8S_AUTOSIGN_MODE:-off}"
 PE_K8S_PCP_CONTROLLER_LOCAL_HOST="${PE_K8S_PCP_CONTROLLER_LOCAL_HOST:-puppet}"
 PE_K8S_SERVICEACCOUNT_DIR="${PE_K8S_SERVICEACCOUNT_DIR:-/var/run/secrets/kubernetes.io/serviceaccount}"
 
@@ -146,32 +145,6 @@ wait_for_k8s_job_completion() {
 
     log "Timed out waiting for Job ${namespace}/${job_name} to complete"
     return 1
-}
-
-sync_autosign_settings() {
-    local puppet_bin=/opt/puppetlabs/bin/puppet
-
-    case "${PE_K8S_AUTOSIGN_MODE}" in
-        ""|off|false)
-            if [ -x "${puppet_bin}" ] && [ -f /etc/puppetlabs/puppet/puppet.conf ]; then
-                "${puppet_bin}" config delete autosign --section main >/dev/null 2>&1 || true
-            fi
-            rm -f /etc/puppetlabs/puppet/autosign.conf
-            ;;
-        naive|true)
-            ensure_dir /etc/puppetlabs/puppet
-            if [ -x "${puppet_bin}" ]; then
-                "${puppet_bin}" config set autosign true --section main
-            else
-                log "Puppet binary not available yet; skipping autosign sync"
-            fi
-            rm -f /etc/puppetlabs/puppet/autosign.conf
-            ;;
-        *)
-            log "Unsupported autosign mode: ${PE_K8S_AUTOSIGN_MODE}"
-            return 1
-            ;;
-    esac
 }
 
 sync_puppetdb_integration_settings() {

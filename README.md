@@ -121,6 +121,7 @@ Deploy the validation agent:
 2. Run `make deploy-agent`.
 
 The validation agent chart is optional. It exists to exercise certificate issuance, catalog compilation, reporting, and Code Manager changes against a real `puppet-agent` run.
+By default it can also render a signer Job that signs the test-node certificate against the in-cluster PE CA.
 
 ## What To Expect
 

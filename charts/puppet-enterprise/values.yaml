@@ -59,10 +59,6 @@ codeManager:
   r10kKnownHosts: []
   r10kRemoteTimeout: 60
 
-testAgents:
-  autosign:
-    mode: off
-
 license:
   secretName: ""
 

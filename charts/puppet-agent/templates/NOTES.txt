@@ -11,5 +11,6 @@ Default certname behavior:
 The default package repo URL is:
   {{ include "puppet-agent.packageRepoUrl" . }}
 
-For a development PE release, enable naive autosigning on the PE chart:
-  --set testAgents.autosign.mode=naive
+Default certificate handling:
+  - If signer.enabled=true, the chart runs a signer Job against the PE CA PVCs.
+  - Otherwise, sign pending certs manually.

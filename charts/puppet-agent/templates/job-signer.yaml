@@ -1,0 +1,59 @@
+{{- if and .Values.signer.enabled (gt (int .Values.agent.replicaCount) 0) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "puppet-agent.fullname" . }}-signer-r{{ .Release.Revision }}
+  labels:
+    {{- include "puppet-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: signer
+spec:
+  backoffLimit: {{ .Values.signer.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.signer.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "puppet-agent.labels" . | nindent 8 }}
+        app.kubernetes.io/component: signer
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "puppet-agent.serviceAccountName" . }}
+      affinity:
+{{ toYaml .Values.affinity | indent 8 }}
+      tolerations:
+{{ toYaml .Values.tolerations | indent 8 }}
+      containers:
+        - name: signer
+          image: "{{ .Values.signer.image.repository }}:{{ .Values.signer.image.tag }}"
+          imagePullPolicy: {{ .Values.signer.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "sign-certs"]
+          env:
+            - name: PE_SIGN_CERTNAMES
+              value: {{ include "puppet-agent.certnamesCsv" . | quote }}
+            - name: PE_SIGN_CERT_WAIT_TIMEOUT_SECONDS
+              value: {{ .Values.signer.waitTimeoutSeconds | quote }}
+            - name: PE_SIGN_CERT_LABEL
+              value: "agent certificate"
+          resources:
+{{ toYaml .Values.signer.resources | indent 12 }}
+          volumeMounts:
+            - name: etc
+              mountPath: /etc/puppetlabs
+            - name: opt
+              mountPath: /opt/puppetlabs
+            - name: runtime
+              mountPath: /var/lib/pe-k8s
+            - name: logs
+              mountPath: /var/log/puppetlabs
+      volumes:
+        - name: etc
+          persistentVolumeClaim:
+            claimName: {{ include "puppet-agent.peReleaseFullname" . }}-etc
+        - name: opt
+          persistentVolumeClaim:
+            claimName: {{ include "puppet-agent.peReleaseFullname" . }}-opt
+        - name: runtime
+          persistentVolumeClaim:
+            claimName: {{ include "puppet-agent.peReleaseFullname" . }}-runtime
+        - name: logs
+          emptyDir: {}
+{{- end }}

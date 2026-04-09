@@ -22,6 +22,7 @@ agent:
   environment: production
   certname: ""
   certnameSuffix: ".test.puppet"
+  packageRepoServer: ""
   packageRepoUrl: ""
   packageRepoSslVerify: false
   runinterval: 30m
@@ -29,6 +30,18 @@ agent:
   splay: true
   pxpEnabled: true
   pxpLoglevel: info
+  resources: {}
+
+signer:
+  enabled: true
+  peReleaseName: pe
+  waitTimeoutSeconds: 900
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  image:
+    repository: registry.example.test/pe-k8s-runtime
+    tag: "2025.9.0"
+    pullPolicy: IfNotPresent
   resources: {}
 
 storage:

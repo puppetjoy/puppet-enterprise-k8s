@@ -91,9 +91,6 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "puppetserver"]
-          env:
-            - name: PE_K8S_AUTOSIGN_MODE
-              value: {{ .Values.testAgents.autosign.mode | quote }}
           ports:
             - name: puppetserver
               containerPort: 8140

@@ -104,12 +104,9 @@ If the Git remote hostname needs a Kubernetes-specific override, set `network.ho
 
 ## Validation Agents
 
-For development testing, the PE chart can enable naive autosigning and a separate `puppet-agent` chart can create persistent Kubernetes-backed test nodes.
+For development testing, a separate `puppet-agent` chart can create persistent Kubernetes-backed test nodes and render a signer Job that signs those node certificates against the in-cluster PE CA.
 
-Currently supported autosign modes on the PE chart are:
-
-- `off`
-- `naive`
+The PE chart does not model validation-agent behavior. Certificate signing for that path lives entirely in the separate `puppet-agent` chart.
 
 The separate validation-node chart lives at `charts/puppet-agent/`. It creates a StatefulSet-backed agent node that:
 
@@ -122,12 +119,13 @@ Default behavior:
 
 - release `test-node` creates pod `test-node-puppet-agent-0`
 - the default certname becomes `test-node-puppet-agent-0.test.puppet`
-- the default PE package repo is `https://pe:8140/packages/current/el-9-x86_64.repo`
-- the default PE server and CA are both `pe`
+- the default PE package repo is fetched from the CA endpoint, usually `https://pe:8140/packages/current/el-9-x86_64.repo`
+- the default PE server is `pe` and the default CA is also `pe`
+- when `signer.enabled=true`, the chart also runs a signer Job that watches for the expected pending test-node certificate requests and signs them from the PE CA PVCs
 
 This helper path is useful for validating:
 
-- certificate issuance and autosigning behavior
+- certificate issuance and explicit signing behavior
 - catalog compilation through `service/pe` and `service/pe-compiler`
 - facts, catalogs, and reports landing in PuppetDB
 - Code Manager and control-repo changes from a real agent run

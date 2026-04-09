@@ -35,10 +35,50 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{- define "puppet-agent.peReleaseFullname" -}}
+{{- $instance := default "pe" .Values.signer.peReleaseName -}}
+{{- if eq $instance "pe" -}}
+pe
+{{- else if hasPrefix "pe-" $instance -}}
+{{- $instance -}}
+{{- else -}}
+{{- printf "pe-%s" $instance | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "puppet-agent.certnameForIndex" -}}
+{{- if .Values.agent.certname -}}
+{{- .Values.agent.certname -}}
+{{- else -}}
+{{- printf "%s-%d%s" (include "puppet-agent.fullname" .) (int .index) .Values.agent.certnameSuffix -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "puppet-agent.certnamesCsv" -}}
+{{- if .Values.agent.certname -}}
+{{- .Values.agent.certname -}}
+{{- else -}}
+{{- range $index, $_ := until (int $.Values.agent.replicaCount) -}}
+{{- if gt $index 0 }},{{ end -}}
+{{ include "puppet-agent.certnameForIndex" (dict "Values" $.Values "Release" $.Release "Chart" $.Chart "index" $index) }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "puppet-agent.packageRepoHost" -}}
+{{- if .Values.agent.packageRepoServer -}}
+{{- .Values.agent.packageRepoServer -}}
+{{- else if .Values.agent.caServer -}}
+{{- .Values.agent.caServer -}}
+{{- else -}}
+{{- .Values.agent.server -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "puppet-agent.packageRepoUrl" -}}
 {{- if .Values.agent.packageRepoUrl -}}
 {{- .Values.agent.packageRepoUrl -}}
 {{- else -}}
-{{- printf "https://%s:8140/packages/current/el-9-x86_64.repo" .Values.agent.server -}}
+{{- printf "https://%s:8140/packages/current/el-9-x86_64.repo" (include "puppet-agent.packageRepoHost" .) -}}
 {{- end -}}
 {{- end -}}

@@ -37,8 +37,6 @@ spec:
               value: /config/pe.conf
             - name: FORCE_REINSTALL
               value: {{ ternary "true" "false" .Values.installer.forceReinstall | quote }}
-            - name: PE_K8S_AUTOSIGN_MODE
-              value: {{ .Values.testAgents.autosign.mode | quote }}
             - name: PE_BOOTSTRAP_PUPPET_CERTNAME
               value: {{ include "pe.identity" . | quote }}
             - name: PE_BOOTSTRAP_PUPPET_SERVER

@@ -3,9 +3,10 @@ set -euo pipefail
 
 source /usr/local/lib/pe-k8s-common.sh
 
-PE_COMPILER_CERTNAMES="${PE_COMPILER_CERTNAMES:-}"
+PE_SIGN_CERTNAMES="${PE_SIGN_CERTNAMES:-${PE_COMPILER_CERTNAMES:-}}"
 PE_SIGN_CERT_WAIT_TIMEOUT_SECONDS="${PE_SIGN_CERT_WAIT_TIMEOUT_SECONDS:-900}"
-PE_COMPILER_REQUIRED_INSTALL_JOB="${PE_COMPILER_REQUIRED_INSTALL_JOB:-}"
+PE_SIGN_REQUIRED_INSTALL_JOB="${PE_SIGN_REQUIRED_INSTALL_JOB:-${PE_COMPILER_REQUIRED_INSTALL_JOB:-}}"
+PE_SIGN_CERT_LABEL="${PE_SIGN_CERT_LABEL:-certificate}"
 
 cert_path_for() {
     printf '/etc/puppetlabs/puppetserver/ca/signed/%s.pem\n' "$1"
@@ -31,9 +32,11 @@ sign_pending_request() {
     fi
 
     if cert_request_pending "${certname}"; then
-        log "Signing compiler certificate ${certname}"
+        log "Signing ${PE_SIGN_CERT_LABEL} ${certname}"
         /opt/puppetlabs/server/bin/puppetserver ca sign --certname "${certname}"
     fi
+
+    return 0
 }
 
 all_certs_signed() {
@@ -48,18 +51,19 @@ all_certs_signed() {
 main() {
     local certnames deadline certname
 
-    if [ -n "${PE_COMPILER_REQUIRED_INSTALL_JOB}" ]; then
-        wait_for_k8s_job_completion "${PE_COMPILER_REQUIRED_INSTALL_JOB}"
+    if [ -n "${PE_SIGN_REQUIRED_INSTALL_JOB}" ]; then
+        wait_for_k8s_job_completion "${PE_SIGN_REQUIRED_INSTALL_JOB}"
     else
         wait_for_install_marker
     fi
+    copy_exported_sysconfig_into_rootfs
 
-    [ -n "${PE_COMPILER_CERTNAMES}" ] || {
-        log "No compiler certnames requested; skipping signer job"
+    [ -n "${PE_SIGN_CERTNAMES}" ] || {
+        log "No certnames requested; skipping signer job"
         exit 0
     }
 
-    IFS=',' read -r -a certnames <<< "${PE_COMPILER_CERTNAMES}"
+    IFS=',' read -r -a certnames <<< "${PE_SIGN_CERTNAMES}"
     deadline=$((SECONDS + PE_SIGN_CERT_WAIT_TIMEOUT_SECONDS))
 
     while [ "${SECONDS}" -lt "${deadline}" ]; do
@@ -69,7 +73,7 @@ main() {
         done
 
         if all_certs_signed "${certnames[@]}"; then
-            log "All requested compiler certificates are signed"
+            log "All requested certificates are signed"
             exit 0
         fi
 
@@ -78,7 +82,7 @@ main() {
 
     for certname in "${certnames[@]}"; do
         if ! cert_is_signed "${certname}"; then
-            log "Timed out waiting to sign compiler certificate ${certname}"
+            log "Timed out waiting to sign ${PE_SIGN_CERT_LABEL} ${certname}"
         fi
     done
 

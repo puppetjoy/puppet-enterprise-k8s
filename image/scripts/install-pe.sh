@@ -130,7 +130,6 @@ main() {
 
     install_service_control_wrappers
     run_install_sequence
-    sync_autosign_settings
     sync_puppetdb_integration_settings
     export_runtime_rootfs_artifacts
     ensure_pe_build_metadata
