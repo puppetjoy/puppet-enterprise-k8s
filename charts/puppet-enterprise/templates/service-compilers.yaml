@@ -1,0 +1,36 @@
+{{- if and .Values.compilers.enabled (gt (int .Values.compilers.replicaCount) 0) }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pe.compilerHeadlessServiceName" . }}
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+    app.kubernetes.io/component: compiler
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: compiler
+  ports:
+    - name: puppetserver
+      port: {{ .Values.services.compilers.port }}
+      targetPort: puppetserver
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pe.compilerPoolServiceName" . }}
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+    app.kubernetes.io/component: compiler
+spec:
+  type: {{ .Values.services.compilers.type }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: compiler
+  ports:
+    - name: puppetserver
+      port: {{ .Values.services.compilers.port }}
+      targetPort: puppetserver
+{{- end }}

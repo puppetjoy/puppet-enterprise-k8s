@@ -19,6 +19,52 @@ curl_with_local_role_cert() {
         "$@"
 }
 
+compiler_filesync_ready() {
+    local local_status primary_status
+
+    [ -n "${PE_K8S_COMPILER_PRIMARY_SERVICE:-}" ] || return 1
+
+    local_status="$(curl -skf https://127.0.0.1:8140/status/v1/services?level=debug)"
+    primary_status="$(curl -skf "https://${PE_K8S_COMPILER_PRIMARY_SERVICE}:8140/status/v1/services?level=debug")"
+
+    python3 - "${local_status}" "${primary_status}" <<'PY'
+import json
+import sys
+
+local = json.loads(sys.argv[1])
+primary = json.loads(sys.argv[2])
+
+local_fs = local.get("file-sync-client-service", {})
+if local_fs.get("state") != "running":
+    raise SystemExit(1)
+
+local_repo = (((local_fs.get("status") or {}).get("repos") or {}).get("puppet-code") or {})
+if local_repo.get("status") != "ok":
+    raise SystemExit(1)
+
+primary_fs = primary.get("file-sync-storage-service", {})
+if primary_fs.get("state") != "running":
+    raise SystemExit(1)
+
+primary_repo = (((primary_fs.get("status") or {}).get("repos") or {}).get("puppet-code") or {})
+
+def latest_commit(repo):
+    return (((repo.get("latest_commit") or {}).get("commit")) or "")
+
+if latest_commit(local_repo) != latest_commit(primary_repo):
+    raise SystemExit(1)
+
+primary_submodules = primary_repo.get("submodules") or {}
+local_submodules = local_repo.get("submodules") or {}
+for name, repo in primary_submodules.items():
+    local_submodule = local_submodules.get(name) or {}
+    if local_submodule.get("status") != "ok":
+        raise SystemExit(1)
+    if latest_commit(local_submodule) != latest_commit(repo):
+        raise SystemExit(1)
+PY
+}
+
 case "${role}" in
     postgresql)
         exec /opt/puppetlabs/server/apps/postgresql/14/bin/pg_isready \
@@ -30,6 +76,9 @@ case "${role}" in
         ;;
     puppetserver)
         exec curl -skf https://127.0.0.1:8140/status/v1/services
+        ;;
+    compiler-puppetserver)
+        compiler_filesync_ready
         ;;
     nginx)
         exec curl -skf https://127.0.0.1:443/

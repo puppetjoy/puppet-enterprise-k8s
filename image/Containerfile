@@ -18,6 +18,7 @@ RUN dnf install -y \
       gzip \
       hostname \
       iproute \
+      net-tools \
       procps-ng \
       python3 \
       shadow-utils \
@@ -36,6 +37,9 @@ RUN mkdir -p "${PE_INSTALLER_ROOT}" && \
 COPY image/scripts/common.sh /usr/local/lib/pe-k8s-common.sh
 COPY image/scripts/entrypoint.sh /usr/local/bin/pe-k8s-entrypoint
 COPY image/scripts/install-pe.sh /usr/local/bin/install-pe.sh
+COPY image/scripts/install-compiler-runtime.sh /usr/local/bin/install-compiler-runtime.sh
+COPY image/scripts/bootstrap-compiler.sh /usr/local/bin/bootstrap-compiler.sh
+COPY image/scripts/sign-certs.sh /usr/local/bin/sign-certs.sh
 COPY image/scripts/regenerate-cert.sh /usr/local/bin/regenerate-cert.sh
 COPY image/scripts/recover-cert.sh /usr/local/bin/recover-cert.sh
 COPY image/scripts/service-control.sh /usr/local/bin/pe-k8s-servicectl
@@ -45,6 +49,9 @@ COPY image/scripts/probe.sh /usr/local/bin/probe.sh
 
 RUN chmod 0755 /usr/local/bin/pe-k8s-entrypoint \
                 /usr/local/bin/install-pe.sh \
+                /usr/local/bin/install-compiler-runtime.sh \
+                /usr/local/bin/bootstrap-compiler.sh \
+                /usr/local/bin/sign-certs.sh \
                 /usr/local/bin/regenerate-cert.sh \
                 /usr/local/bin/recover-cert.sh \
                 /usr/local/bin/pe-k8s-servicectl \

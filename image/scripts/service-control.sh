@@ -546,6 +546,8 @@ EOF
             fi
             printf 'NeedDaemonReload=no\n'
             ;;
+        preset|preset-all)
+            ;;
         daemon-reload)
             ;;
         start|stop|restart|reload|is-active|status)

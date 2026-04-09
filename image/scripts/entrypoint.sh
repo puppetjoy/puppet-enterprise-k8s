@@ -10,6 +10,15 @@ case "${command}" in
     install)
         exec /usr/local/bin/install-pe.sh "$@"
         ;;
+    install-compiler-runtime)
+        exec /usr/local/bin/install-compiler-runtime.sh "$@"
+        ;;
+    bootstrap-compiler)
+        exec /usr/local/bin/bootstrap-compiler.sh "$@"
+        ;;
+    sign-certs)
+        exec /usr/local/bin/sign-certs.sh "$@"
+        ;;
     regenerate-cert)
         exec /usr/local/bin/regenerate-cert.sh "$@"
         ;;
@@ -29,6 +38,9 @@ case "${command}" in
         cat <<'EOF'
 Usage:
   pe-k8s-entrypoint install
+  pe-k8s-entrypoint install-compiler-runtime
+  pe-k8s-entrypoint bootstrap-compiler
+  pe-k8s-entrypoint sign-certs
   pe-k8s-entrypoint regenerate-cert
   pe-k8s-entrypoint recover-cert
   pe-k8s-entrypoint run-role <role>

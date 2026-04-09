@@ -115,6 +115,36 @@ puppetserver:
   replicaCount: 1
   resources: {}
 
+compilers:
+  enabled: false
+  replicaCount: 0
+  dnsAltNames: []
+  puppetdbSyncIntervalMinutes: 5
+  certWaitTimeoutSeconds: 900
+  signerWaitTimeoutSeconds: 900
+  resources:
+    install: {}
+    bootstrap: {}
+    signer: {}
+    puppetserver: {}
+    puppetdb: {}
+  storage:
+    etc:
+      accessModes:
+        - ReadWriteOnce
+      size: 2Gi
+      storageClassName: ""
+    opt:
+      accessModes:
+        - ReadWriteOnce
+      size: 20Gi
+      storageClassName: ""
+    runtime:
+      accessModes:
+        - ReadWriteOnce
+      size: 2Gi
+      storageClassName: ""
+
 peServices:
   replicaCount: 1
   resources:
@@ -131,6 +161,9 @@ services:
     type: ClusterIP
     loadBalancerIP: ""
   puppetserver:
+    type: ClusterIP
+    port: 8140
+  compilers:
     type: ClusterIP
     port: 8140
   puppetdb:

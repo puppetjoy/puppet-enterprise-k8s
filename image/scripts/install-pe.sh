@@ -56,45 +56,6 @@ graph = true
 EOF
 }
 
-install_service_control_wrappers() {
-    local wrapper=/usr/local/bin/pe-k8s-servicectl
-    local path
-
-    for path in \
-        /usr/local/bin/systemctl \
-        /bin/systemctl \
-        /usr/bin/systemctl \
-        /sbin/service \
-        /usr/sbin/service \
-        /sbin/chkconfig \
-        /usr/sbin/chkconfig
-    do
-        ln -sf "${wrapper}" "${path}"
-    done
-}
-
-maintain_service_control_wrappers() {
-    while true; do
-        install_service_control_wrappers
-        sleep 1
-    done
-}
-
-export_runtime_rootfs_artifacts() {
-    local path
-
-    ensure_dir "${PE_K8S_SYSCONFIG_DIR}"
-
-    for path in /etc/sysconfig/pe-*; do
-        [ -f "${path}" ] || continue
-        cp -f "${path}" "${PE_K8S_SYSCONFIG_DIR}/"
-    done
-
-    if [ -f /etc/sysconfig/pe-pgsql ]; then
-        cp -f /etc/sysconfig/pe-pgsql "${PE_K8S_SYSCONFIG_DIR}/"
-    fi
-}
-
 write_summary() {
     cat > "${PE_K8S_EXPORT_SUMMARY}" <<EOF
 pe_version=${PE_VERSION:-unknown}
@@ -172,6 +133,7 @@ main() {
     sync_autosign_settings
     sync_puppetdb_integration_settings
     export_runtime_rootfs_artifacts
+    ensure_pe_build_metadata
     patch_nginx_ingress_redirects
     write_summary
     touch "${PE_K8S_INSTALL_MARKER}"

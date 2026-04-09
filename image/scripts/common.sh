@@ -6,8 +6,10 @@ PE_K8S_INSTALL_DIR="${PE_K8S_INSTALL_DIR:-${PE_K8S_STATE_DIR}/install}"
 PE_K8S_INSTALL_MARKER="${PE_K8S_INSTALL_MARKER:-${PE_K8S_INSTALL_DIR}/install-complete}"
 PE_K8S_SYSCONFIG_DIR="${PE_K8S_SYSCONFIG_DIR:-${PE_K8S_STATE_DIR}/sysconfig}"
 PE_K8S_WAIT_TIMEOUT_SECONDS="${PE_K8S_WAIT_TIMEOUT_SECONDS:-3600}"
+PE_K8S_SKIP_INSTALL_MARKER="${PE_K8S_SKIP_INSTALL_MARKER:-false}"
 PE_K8S_AUTOSIGN_MODE="${PE_K8S_AUTOSIGN_MODE:-off}"
 PE_K8S_PCP_CONTROLLER_LOCAL_HOST="${PE_K8S_PCP_CONTROLLER_LOCAL_HOST:-puppet}"
+PE_K8S_SERVICEACCOUNT_DIR="${PE_K8S_SERVICEACCOUNT_DIR:-/var/run/secrets/kubernetes.io/serviceaccount}"
 
 log() {
     printf '[pe-k8s] %s\n' "$*"
@@ -23,6 +25,127 @@ require_file() {
         log "Required file is missing: ${path}"
         return 1
     }
+}
+
+k8s_api_server() {
+    local host="${KUBERNETES_SERVICE_HOST:-}"
+    local port="${KUBERNETES_SERVICE_PORT_HTTPS:-${KUBERNETES_SERVICE_PORT:-443}}"
+
+    [ -n "${host}" ] || {
+        log "KUBERNETES_SERVICE_HOST is not set"
+        return 1
+    }
+
+    printf 'https://%s:%s\n' "${host}" "${port}"
+}
+
+k8s_serviceaccount_token_path() {
+    printf '%s/token\n' "${PE_K8S_SERVICEACCOUNT_DIR}"
+}
+
+k8s_serviceaccount_ca_path() {
+    printf '%s/ca.crt\n' "${PE_K8S_SERVICEACCOUNT_DIR}"
+}
+
+k8s_namespace() {
+    if [ -n "${PE_K8S_NAMESPACE:-}" ]; then
+        printf '%s\n' "${PE_K8S_NAMESPACE}"
+        return 0
+    fi
+
+    require_file "${PE_K8S_SERVICEACCOUNT_DIR}/namespace" >/dev/null
+    cat "${PE_K8S_SERVICEACCOUNT_DIR}/namespace"
+}
+
+k8s_api_get() {
+    local path="$1"
+    local token_path
+    local ca_path
+    local token
+
+    token_path="$(k8s_serviceaccount_token_path)"
+    ca_path="$(k8s_serviceaccount_ca_path)"
+
+    require_file "${token_path}" >/dev/null
+    require_file "${ca_path}" >/dev/null
+    token="$(cat "${token_path}")"
+
+    curl -fsS \
+        --cacert "${ca_path}" \
+        -H "Authorization: Bearer ${token}" \
+        "$(k8s_api_server)${path}"
+}
+
+job_completion_state() {
+    local namespace="$1"
+    local job_name="$2"
+    local payload
+
+    payload="$(k8s_api_get "/apis/batch/v1/namespaces/${namespace}/jobs/${job_name}")" || return 1
+
+    python3 - "${payload}" <<'PY'
+import json
+import sys
+
+job = json.loads(sys.argv[1])
+status = job.get("status") or {}
+
+for condition in status.get("conditions") or []:
+    condition_type = condition.get("type")
+    condition_status = condition.get("status")
+    if condition_type == "Complete" and condition_status == "True":
+        print("complete")
+        raise SystemExit(0)
+    if condition_type == "Failed" and condition_status == "True":
+        print("failed")
+        raise SystemExit(0)
+
+if (status.get("succeeded") or 0) > 0:
+    print("complete")
+else:
+    print("pending")
+PY
+}
+
+wait_for_k8s_job_completion() {
+    local job_name="$1"
+    local namespace="${2:-}"
+    local timeout="${3:-${PE_K8S_WAIT_TIMEOUT_SECONDS}}"
+    local deadline
+    local state
+
+    [ -n "${job_name}" ] || {
+        log "Job name is required"
+        return 1
+    }
+
+    if [ -z "${namespace}" ]; then
+        namespace="$(k8s_namespace)"
+    fi
+
+    deadline=$((SECONDS + timeout))
+    while [ "${SECONDS}" -lt "${deadline}" ]; do
+        state="$(job_completion_state "${namespace}" "${job_name}" || true)"
+        case "${state}" in
+            complete)
+                log "Observed completed Job ${namespace}/${job_name}"
+                return 0
+                ;;
+            failed)
+                log "Observed failed Job ${namespace}/${job_name}"
+                return 1
+                ;;
+            pending|"")
+                ;;
+            *)
+                log "Unexpected Job state for ${namespace}/${job_name}: ${state}"
+                ;;
+        esac
+        sleep 5
+    done
+
+    log "Timed out waiting for Job ${namespace}/${job_name} to complete"
+    return 1
 }
 
 sync_autosign_settings() {
@@ -65,10 +188,17 @@ sync_puppetdb_integration_settings() {
 }
 
 copy_exported_sysconfig_into_rootfs() {
+    local path
+    local target
+
     ensure_dir /etc/sysconfig
     if [ -d "${PE_K8S_SYSCONFIG_DIR}" ]; then
         find "${PE_K8S_SYSCONFIG_DIR}" -maxdepth 1 -type f -name 'pe-*' -print0 | while IFS= read -r -d '' path; do
-            cp -f "${path}" /etc/sysconfig/
+            target="/etc/sysconfig/$(basename "${path}")"
+            if [ -e "${target}" ]; then
+                continue
+            fi
+            cp -f "${path}" "${target}"
         done
     fi
 }
@@ -89,6 +219,69 @@ patch_local_pcp_controller_uri() {
     escaped_host="$(printf '%s' "${PE_K8S_PCP_CONTROLLER_LOCAL_HOST}" | sed 's/[\/&]/\\&/g')"
     sed -i -E "s#wss://[^/\"]+:8143/server#wss://${escaped_host}:8143/server#g" "${config_path}"
     log "Patched PCP controller URI to ${desired_uri}"
+}
+
+install_service_control_wrappers() {
+    local wrapper=/usr/local/bin/pe-k8s-servicectl
+    local path
+
+    for path in \
+        /usr/local/bin/systemctl \
+        /bin/systemctl \
+        /usr/bin/systemctl \
+        /sbin/service \
+        /usr/sbin/service \
+        /sbin/chkconfig \
+        /usr/sbin/chkconfig
+    do
+        ln -sf "${wrapper}" "${path}"
+    done
+}
+
+maintain_service_control_wrappers() {
+    while true; do
+        install_service_control_wrappers
+        sleep 1
+    done
+}
+
+export_runtime_rootfs_artifacts() {
+    local path
+
+    ensure_dir "${PE_K8S_SYSCONFIG_DIR}"
+
+    for path in /etc/sysconfig/pe-*; do
+        [ -f "${path}" ] || continue
+        cp -f "${path}" "${PE_K8S_SYSCONFIG_DIR}/"
+    done
+
+    if [ -f /etc/sysconfig/pe-pgsql ]; then
+        cp -f /etc/sysconfig/pe-pgsql "${PE_K8S_SYSCONFIG_DIR}/"
+    fi
+}
+
+ensure_pe_build_metadata() {
+    local pe_build="${PE_BUILD:-}"
+    local rpm_version=""
+
+    if [ -z "${pe_build}" ] && command -v rpm >/dev/null 2>&1; then
+        rpm_version="$(rpm -q pe-puppet-enterprise-release --queryformat '%{VERSION}\n' 2>/dev/null || true)"
+        if [ -n "${rpm_version}" ]; then
+            pe_build="$(printf '%s' "${rpm_version}" | sed -E 's/\.0$//')"
+        fi
+    fi
+
+    if [ -z "${pe_build}" ] && [ -n "${PE_VERSION:-}" ]; then
+        pe_build="${PE_VERSION}"
+    fi
+
+    [ -n "${pe_build}" ] || {
+        log "Unable to determine PE build metadata"
+        return 1
+    }
+
+    ensure_dir /opt/puppetlabs/server
+    printf '%s\n' "${pe_build}" > /opt/puppetlabs/server/pe_build
 }
 
 normalize_dns_alt_names() {
@@ -282,6 +475,12 @@ prepare_user_env() {
 wait_for_install_marker() {
     local elapsed=0
     local interval=5
+
+    case "${PE_K8S_SKIP_INSTALL_MARKER}" in
+        true|TRUE|1|yes|YES|on|ON)
+            return 0
+            ;;
+    esac
 
     while [ ! -f "${PE_K8S_INSTALL_MARKER}" ]; do
         if [ "${elapsed}" -ge "${PE_K8S_WAIT_TIMEOUT_SECONDS}" ]; then
