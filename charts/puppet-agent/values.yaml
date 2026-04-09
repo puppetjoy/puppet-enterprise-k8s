@@ -1,5 +1,5 @@
 image:
-  repository: registry.eyrie/pe-k8s-agent
+  repository: registry.example.test/pe-k8s-agent
   tag: "0.1.1"
   pullPolicy: IfNotPresent
 
@@ -10,18 +10,9 @@ serviceAccount:
   create: true
   name: ""
 
-affinity:
-  nodeAffinity:
-    requiredDuringSchedulingIgnoredDuringExecution:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: "node-role.kubernetes.io/compute"
-              operator: Exists
+affinity: {}
 
-tolerations:
-  - key: "node-role.kubernetes.io/compute"
-    operator: Exists
-    effect: NoSchedule
+tolerations: []
 
 agent:
   replicaCount: 1
@@ -43,12 +34,12 @@ storage:
     accessModes:
       - ReadWriteOnce
     size: 1Gi
-    storageClassName: owl-crypt
+    storageClassName: ""
   cache:
     accessModes:
       - ReadWriteOnce
     size: 2Gi
-    storageClassName: owl-crypt
+    storageClassName: ""
 
 probes:
   startup:

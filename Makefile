@@ -1,4 +1,4 @@
-.PHONY: help build-k8s-runtime build-k8s-agent push-k8s-runtime push-k8s-agent check-current-state create-r10k-secret create-license-secret deploy-eyrie-pe deploy-eyrie-agent deploy-eyrie lint
+.PHONY: help build-k8s-runtime build-k8s-agent push-k8s-runtime push-k8s-agent check-current-state create-r10k-secret create-license-secret deploy-pe deploy-agent deploy lint
 
 CONTAINER_ENGINE ?= podman
 PE_VERSION ?=
@@ -7,8 +7,8 @@ PE_RELEASE ?= pe
 PE_AGENT_RELEASE ?= test-node
 LOCAL_DIR ?= local
 ARTIFACTS_DIR ?= artifacts
-PE_VALUES_FILE ?= $(LOCAL_DIR)/values-eyrie.yaml
-PE_AGENT_VALUES_FILE ?= $(LOCAL_DIR)/values-agent-eyrie.yaml
+PE_VALUES_FILE ?= $(LOCAL_DIR)/values-pe.yaml
+PE_AGENT_VALUES_FILE ?= $(LOCAL_DIR)/values-agent.yaml
 LOCAL_KEYS_DIR ?= $(LOCAL_DIR)/keys
 R10K_DEPLOY_KEY_PATH ?= $(LOCAL_KEYS_DIR)/id-control_repo.ed25519
 R10K_DEPLOY_KEY_SECRET_NAME ?= pe-r10k-deploy-key
@@ -17,10 +17,10 @@ PE_LICENSE_SECRET_NAME ?= pe-license
 PE_INSTALLERS_DIR ?= $(ARTIFACTS_DIR)/pe-installers
 PE_INSTALLER_FILENAME ?= puppet-enterprise-$(PE_VERSION)-el-9-x86_64.tar.gz
 PE_INSTALLER_TAR_PATH ?= $(abspath $(PE_INSTALLERS_DIR)/$(PE_INSTALLER_FILENAME))
-K8S_RUNTIME_IMAGE_NAME ?= registry.eyrie/pe-k8s-runtime
+K8S_RUNTIME_IMAGE_NAME ?= pe-k8s-runtime
 K8S_RUNTIME_IMAGE_VERSION ?= $(PE_VERSION)
 K8S_INSTALLER_CONTEXT_PATH ?= image/assets/pe-installer/installer.tar.gz
-K8S_AGENT_IMAGE_NAME ?= registry.eyrie/pe-k8s-agent
+K8S_AGENT_IMAGE_NAME ?= pe-k8s-agent
 K8S_AGENT_IMAGE_VERSION ?= dev
 
 help:
@@ -32,11 +32,11 @@ help:
 	@echo "  make build-k8s-agent K8S_AGENT_IMAGE_VERSION=<version>"
 	@echo "  make push-k8s-agent K8S_AGENT_IMAGE_VERSION=<version>"
 	@echo ""
-	@echo "Deploy current eyrie state:"
+	@echo "Deploy from repo-local operator values:"
 	@echo "  make check-current-state PE_VERSION=<version>"
-	@echo "  make deploy-eyrie-pe"
-	@echo "  make deploy-eyrie-agent"
-	@echo "  make deploy-eyrie"
+	@echo "  make deploy-pe"
+	@echo "  make deploy-agent"
+	@echo "  make deploy"
 	@echo ""
 	@echo "Repo-local artifact paths:"
 	@echo "  installer: $(PE_INSTALLERS_DIR)/puppet-enterprise-<version>-el-9-x86_64.tar.gz"
@@ -162,7 +162,7 @@ create-license-secret:
 		--from-file=license.txt="$(PE_LICENSE_PATH)" \
 		--dry-run=client -o yaml | kubectl apply -f -
 
-deploy-eyrie-pe: create-r10k-secret
+deploy-pe: create-r10k-secret
 	@if [ ! -f "$(PE_VALUES_FILE)" ]; then \
 		echo "ERROR: PE values file not found: $(PE_VALUES_FILE)"; \
 		exit 1; \
@@ -172,7 +172,7 @@ deploy-eyrie-pe: create-r10k-secret
 		--create-namespace \
 		-f "$(PE_VALUES_FILE)"
 
-deploy-eyrie-agent:
+deploy-agent:
 	@if [ ! -f "$(PE_AGENT_VALUES_FILE)" ]; then \
 		echo "ERROR: agent values file not found: $(PE_AGENT_VALUES_FILE)"; \
 		exit 1; \
@@ -182,7 +182,7 @@ deploy-eyrie-agent:
 		--create-namespace \
 		-f "$(PE_AGENT_VALUES_FILE)"
 
-deploy-eyrie: deploy-eyrie-pe deploy-eyrie-agent
+deploy: deploy-pe deploy-agent
 
 lint:
 	@helm lint charts/puppet-enterprise

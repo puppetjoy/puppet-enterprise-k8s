@@ -1,11 +1,11 @@
 image:
-  repository: registry.eyrie/pe-k8s-runtime
+  repository: registry.example.test/pe-k8s-runtime
   tag: "2025.9.0"
   pullPolicy: IfNotPresent
 
 peProxy:
   image:
-    repository: registry.eyrie/haproxy
+    repository: haproxy
     tag: "2.9-alpine"
     pullPolicy: IfNotPresent
   resources: {}
@@ -18,18 +18,9 @@ serviceAccount:
   create: true
   name: ""
 
-affinity:
-  nodeAffinity:
-    requiredDuringSchedulingIgnoredDuringExecution:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: "node-role.kubernetes.io/compute"
-              operator: Exists
+affinity: {}
 
-tolerations:
-  - key: "node-role.kubernetes.io/compute"
-    operator: Exists
-    effect: NoSchedule
+tolerations: []
 
 probes:
   startup:
@@ -78,17 +69,17 @@ storage:
     accessModes:
       - ReadWriteMany
     size: 2Gi
-    storageClassName: owl-crypt
+    storageClassName: ""
   opt:
     accessModes:
       - ReadWriteMany
     size: 50Gi
-    storageClassName: owl-crypt
+    storageClassName: ""
   runtime:
     accessModes:
       - ReadWriteMany
     size: 2Gi
-    storageClassName: owl-crypt
+    storageClassName: ""
 
 installer:
   backoffLimit: 1
@@ -163,10 +154,9 @@ services:
 
 ingress:
   enabled: false
-  className: contour-compute
-  annotations:
-    cert-manager.io/cluster-issuer: eyrie-ca
-  host: puppet.eyrie
+  className: ""
+  annotations: {}
+  host: puppet.example.test
   tls:
     enabled: true
-    secretName: puppet-eyrie-tls
+    secretName: puppet-example-test-tls

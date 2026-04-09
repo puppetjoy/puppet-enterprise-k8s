@@ -104,7 +104,7 @@ Install with generated PE config values:
 helm upgrade --install pe charts/puppet-enterprise \
   --namespace puppet \
   --create-namespace \
-  --set image.repository=registry.eyrie/pe-k8s-runtime \
+  --set image.repository=registry.example.test/pe-k8s-runtime \
   --set image.tag=2025.9.0 \
   --set peConfig.consoleAdminPassword='dummyPassword1!' \
   --set network.technicalHostname=pe.example.test \
@@ -138,7 +138,7 @@ Example:
 
 ```bash
 make create-r10k-secret
-make deploy-eyrie-pe
+make deploy-pe
 ```
 
 The chart renders these Code Manager `pe.conf` settings when enabled:
@@ -158,16 +158,17 @@ Naming follows the Helm release name:
 - release `pe` renders base resources like `pe`, `pe-puppetserver`, and `pe-puppetdb`
 - release `foo` renders `pe-foo`, `pe-foo-puppetserver`, and `pe-foo-puppetdb`
 
-The chart currently defaults to the `puppet` namespace and assumes the `owl-crypt` storage class for the initial scaffold because `/etc/puppetlabs`, `/opt/puppetlabs`, and `/var/lib/pe-k8s` are currently shared across workloads.
+The shared-PVC scaffold still mounts `/etc/puppetlabs`, `/opt/puppetlabs`, and `/var/lib/pe-k8s` across workloads, but the chart does not require a specific storage class, ingress class, issuer, node role, or registry.
 
 That is a starting point, not the final HA design.
 
-The default `eyrie` scheduling and exposure assumptions are:
+Operators are expected to provide cluster-specific settings through values files, for example:
 
-- pod affinity/tolerations pin all workloads to nodes labeled `node-role.kubernetes.io/compute`
-- PVCs default to `owl-crypt`
-- ingress support is wired for `contour-compute`
-- cert-manager integration defaults to the `eyrie-ca` `ClusterIssuer`
+- image repositories and tags
+- affinity and tolerations
+- storage classes
+- ingress class and hostname
+- cert-manager annotations or other TLS integration
 
 Ingress is disabled by default until you choose a host and are ready to expose the web console.
 
@@ -184,14 +185,14 @@ This repo expects local deployment inputs to live inside this checkout, but outs
 Ignored local paths:
 
 - `artifacts/pe-installers/puppet-enterprise-<version>-el-9-x86_64.tar.gz`
-- `local/values-eyrie.yaml`
-- `local/values-agent-eyrie.yaml`
+- `local/values-pe.yaml`
+- `local/values-agent.yaml`
 - `local/keys/id-control_repo.ed25519`
 - `local/license.txt` if your install requires a PE license Secret
 
 That keeps rebuild inputs with the repo without checking in environment-specific values, private keys, or the PE installer tarball.
 
-For the current `eyrie` workflow, validate that the expected local files exist with:
+Validate that the expected local files exist with:
 
 ```bash
 make check-current-state PE_VERSION=2025.9.0
@@ -209,7 +210,7 @@ Currently supported autosign modes on the PE chart are:
 Enable naive autosigning in the PE release with:
 
 ```bash
-make deploy-eyrie-pe
+make deploy-pe
 ```
 
 The separate validation-node chart lives at `charts/puppet-agent/`. It creates a StatefulSet-backed agent node that:
@@ -222,7 +223,7 @@ The separate validation-node chart lives at `charts/puppet-agent/`. It creates a
 Install a test node with:
 
 ```bash
-make deploy-eyrie-agent
+make deploy-agent
 ```
 
 Default behavior:
@@ -260,7 +261,7 @@ The chart now has a disabled-by-default maintenance Job for SAN changes:
 ```bash
 helm upgrade pe charts/puppet-enterprise \
   --namespace puppet \
-  -f local/values-eyrie.yaml \
+  -f local/values-pe.yaml \
   --set certificateRegeneration.enabled=true
 ```
 
@@ -284,7 +285,7 @@ If the regeneration Job fails after revoking the old host cert, use the recovery
 ```bash
 helm upgrade pe charts/puppet-enterprise \
   --namespace puppet \
-  -f local/values-eyrie.yaml \
+  -f local/values-pe.yaml \
   --set certificateRecovery.enabled=true
 ```
 
