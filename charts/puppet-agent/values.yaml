@@ -1,0 +1,65 @@
+image:
+  repository: registry.eyrie/pe-k8s-agent
+  tag: "0.1.1"
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: "node-role.kubernetes.io/compute"
+              operator: Exists
+
+tolerations:
+  - key: "node-role.kubernetes.io/compute"
+    operator: Exists
+    effect: NoSchedule
+
+agent:
+  replicaCount: 1
+  server: pe
+  caServer: pe
+  serverList: ""
+  environment: production
+  certname: ""
+  certnameSuffix: ".test.puppet"
+  packageRepoUrl: ""
+  packageRepoSslVerify: false
+  runinterval: 30m
+  waitforcert: 60
+  splay: true
+  resources: {}
+
+storage:
+  etc:
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+    storageClassName: owl-crypt
+  cache:
+    accessModes:
+      - ReadWriteOnce
+    size: 2Gi
+    storageClassName: owl-crypt
+
+probes:
+  startup:
+    timeoutSeconds: 5
+    periodSeconds: 5
+    failureThreshold: 60
+  readiness:
+    timeoutSeconds: 5
+    periodSeconds: 10
+    failureThreshold: 3
+  liveness:
+    timeoutSeconds: 5
+    periodSeconds: 30
+    failureThreshold: 3

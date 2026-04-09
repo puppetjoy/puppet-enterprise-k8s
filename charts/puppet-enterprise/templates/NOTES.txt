@@ -1,0 +1,22 @@
+Puppet Enterprise Kubernetes scaffold installed.
+
+Resources:
+  Front Door: {{ include "pe.fullname" . }}
+  Installer Job: {{ include "pe.fullname" . }}-installer-r{{ .Release.Revision }}
+  PostgreSQL: {{ include "pe.fullname" . }}-postgresql
+  PuppetDB: {{ include "pe.fullname" . }}-puppetdb
+  Puppet Server: {{ include "pe.fullname" . }}-puppetserver
+  PE Services: {{ include "pe.fullname" . }}
+
+Wait for the installer Job to complete before expecting workloads to become ready.
+The runtime workloads block on the shared install marker under /var/lib/pe-k8s.
+
+This chart currently assumes RWX storage for:
+  - /etc/puppetlabs
+  - /opt/puppetlabs
+  - /var/lib/pe-k8s
+
+Start with internal service access:
+  Front Door: https://{{ include "pe.fullname" . }}
+  Puppet Server: https://{{ include "pe.fullname" . }}-puppetserver:{{ .Values.services.puppetserver.port }}
+  PuppetDB: https://{{ include "pe.fullname" . }}-puppetdb:{{ .Values.services.puppetdb.port }}

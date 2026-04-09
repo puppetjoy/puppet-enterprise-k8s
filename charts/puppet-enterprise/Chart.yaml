@@ -1,0 +1,6 @@
+apiVersion: v2
+name: puppet-enterprise
+description: Kubernetes-first scaffold for split Puppet Enterprise services
+type: application
+version: 0.1.0
+appVersion: "2025.9.0"

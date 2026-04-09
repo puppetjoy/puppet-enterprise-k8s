@@ -1,0 +1,85 @@
+FROM almalinux:9
+
+ARG PE_VERSION=unknown
+
+ENV PE_VERSION="${PE_VERSION}" \
+    PE_INSTALLER_ROOT=/opt/pe-installer \
+    PE_K8S_STATE_DIR=/var/lib/pe-k8s \
+    LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
+
+RUN dnf install -y \
+      bash \
+      ca-certificates \
+      cronie \
+      curl-minimal \
+      findutils \
+      glibc-langpack-en \
+      gzip \
+      hostname \
+      iproute \
+      procps-ng \
+      python3 \
+      shadow-utils \
+      tar \
+      util-linux \
+      which && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf
+
+COPY image/assets/pe-installer/installer.tar.gz /tmp/pe-installer.tar.gz
+
+RUN mkdir -p "${PE_INSTALLER_ROOT}" && \
+    tar -xzf /tmp/pe-installer.tar.gz -C "${PE_INSTALLER_ROOT}" --strip-components=1 && \
+    rm -f /tmp/pe-installer.tar.gz
+
+COPY image/scripts/common.sh /usr/local/lib/pe-k8s-common.sh
+COPY image/scripts/entrypoint.sh /usr/local/bin/pe-k8s-entrypoint
+COPY image/scripts/install-pe.sh /usr/local/bin/install-pe.sh
+COPY image/scripts/regenerate-cert.sh /usr/local/bin/regenerate-cert.sh
+COPY image/scripts/recover-cert.sh /usr/local/bin/recover-cert.sh
+COPY image/scripts/service-control.sh /usr/local/bin/pe-k8s-servicectl
+COPY image/scripts/run-role.sh /usr/local/bin/run-role.sh
+COPY image/scripts/wait-for-install.sh /usr/local/bin/wait-for-install.sh
+COPY image/scripts/probe.sh /usr/local/bin/probe.sh
+
+RUN chmod 0755 /usr/local/bin/pe-k8s-entrypoint \
+                /usr/local/bin/install-pe.sh \
+                /usr/local/bin/regenerate-cert.sh \
+                /usr/local/bin/recover-cert.sh \
+                /usr/local/bin/pe-k8s-servicectl \
+                /usr/local/bin/run-role.sh \
+                /usr/local/bin/wait-for-install.sh \
+                /usr/local/bin/probe.sh && \
+    chmod 0644 /usr/local/lib/pe-k8s-common.sh && \
+    ln -sf /usr/local/bin/pe-k8s-servicectl /usr/local/bin/systemctl && \
+    ln -sf /usr/local/bin/pe-k8s-servicectl /bin/systemctl && \
+    ln -sf /usr/local/bin/pe-k8s-servicectl /usr/bin/systemctl && \
+    ln -sf /usr/local/bin/pe-k8s-servicectl /sbin/service && \
+    ln -sf /usr/local/bin/pe-k8s-servicectl /usr/sbin/service && \
+    ln -sf /usr/local/bin/pe-k8s-servicectl /sbin/chkconfig && \
+    ln -sf /usr/local/bin/pe-k8s-servicectl /usr/sbin/chkconfig
+
+RUN groupadd -g 998 pe-puppet && useradd -u 998 -g 998 -d /opt/puppetlabs/server/data/puppetserver -s /sbin/nologin pe-puppet && \
+    groupadd -g 997 pe-host-action-collector && useradd -u 997 -g 997 -d /opt/puppetlabs/server/data/host-action-collector -s /sbin/nologin pe-host-action-collector && \
+    groupadd -g 996 pe-bolt-server && useradd -u 996 -g 996 -d /opt/puppetlabs/server/data/bolt-server -s /sbin/nologin pe-bolt-server && \
+    groupadd -g 995 pe-ace-server && useradd -u 995 -g 995 -d /opt/puppetlabs/server/data/ace-server -s /sbin/nologin pe-ace-server && \
+    groupadd -g 994 pe-patching-service && useradd -u 994 -g 994 -d /opt/puppetlabs/server/data/patching-service -s /sbin/nologin pe-patching-service && \
+    groupadd -g 993 pe-infra-assistant && useradd -u 993 -g 993 -d /opt/puppetlabs/server/data/infra-assistant -s /sbin/nologin pe-infra-assistant && \
+    groupadd -g 992 pe-workflow-service && useradd -u 992 -g 992 -d /opt/puppetlabs/server/data/workflow-service -s /sbin/nologin pe-workflow-service && \
+    groupadd -g 991 pe-postgres && useradd -u 991 -g 991 -d /opt/puppetlabs/server/data/postgresql -s /sbin/nologin pe-postgres && \
+    groupadd -g 990 pe-webserver && useradd -u 990 -g 990 -d /var/cache/puppetlabs/nginx -s /sbin/nologin pe-webserver && \
+    groupadd -g 989 pe-puppetdb && useradd -u 989 -g 989 -d /opt/puppetlabs/server/data/puppetdb -s /sbin/nologin pe-puppetdb && \
+    groupadd -g 988 pe-console-services && useradd -u 988 -g 988 -d /opt/puppetlabs/server/data/console-services -s /sbin/nologin pe-console-services && \
+    groupadd -g 987 pe-orchestration-services && useradd -u 987 -g 987 -d /opt/puppetlabs/server/data/orchestration-services -s /sbin/nologin pe-orchestration-services && \
+    usermod -a -G pe-puppet pe-ace-server && \
+    usermod -a -G pe-puppet pe-host-action-collector && \
+    usermod -a -G pe-puppet pe-console-services && \
+    usermod -a -G pe-puppet pe-patching-service && \
+    usermod -a -G pe-puppet pe-infra-assistant && \
+    usermod -a -G pe-puppet pe-workflow-service && \
+    usermod -a -G pe-puppet,pe-orchestration-services pe-bolt-server && \
+    usermod -a -G pe-puppet pe-orchestration-services
+
+ENTRYPOINT ["/usr/local/bin/pe-k8s-entrypoint"]
+CMD ["help"]

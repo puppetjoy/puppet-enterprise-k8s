@@ -1,0 +1,43 @@
+FROM almalinux:9
+
+ARG K8S_AGENT_IMAGE_VERSION=dev
+
+ENV K8S_AGENT_IMAGE_VERSION="${K8S_AGENT_IMAGE_VERSION}" \
+    LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
+
+RUN dnf install -y \
+      bash \
+      ca-certificates \
+      curl-minimal \
+      findutils \
+      glibc-langpack-en \
+      hostname \
+      procps-ng \
+      shadow-utils \
+      util-linux \
+      which && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf
+
+COPY agent-image/scripts/common.sh /usr/local/lib/pe-agent-common.sh
+COPY agent-image/scripts/entrypoint.sh /usr/local/bin/pe-agent-entrypoint
+COPY agent-image/scripts/install-agent.sh /usr/local/bin/install-agent.sh
+COPY agent-image/scripts/run-agent.sh /usr/local/bin/run-agent.sh
+COPY agent-image/scripts/probe.sh /usr/local/bin/probe.sh
+COPY agent-image/scripts/service-control.sh /usr/local/bin/pe-agent-servicectl
+
+RUN chmod 0755 /usr/local/bin/pe-agent-entrypoint \
+                /usr/local/bin/install-agent.sh \
+                /usr/local/bin/run-agent.sh \
+                /usr/local/bin/probe.sh \
+                /usr/local/bin/pe-agent-servicectl && \
+    chmod 0644 /usr/local/lib/pe-agent-common.sh && \
+    ln -sf /usr/local/bin/pe-agent-servicectl /usr/local/bin/systemctl && \
+    ln -sf /usr/local/bin/pe-agent-servicectl /bin/systemctl && \
+    ln -sf /usr/local/bin/pe-agent-servicectl /usr/bin/systemctl && \
+    ln -sf /usr/local/bin/pe-agent-servicectl /sbin/service && \
+    ln -sf /usr/local/bin/pe-agent-servicectl /usr/sbin/service
+
+ENTRYPOINT ["/usr/local/bin/pe-agent-entrypoint"]
+CMD ["help"]

@@ -1,0 +1,15 @@
+Puppet agent test node installed.
+
+Resources:
+  StatefulSet: {{ include "puppet-agent.fullname" . }}
+  Headless Service: {{ include "puppet-agent.fullname" . }}
+
+Default certname behavior:
+  - If agent.certname is set, that exact certname is used.
+  - Otherwise each pod uses <pod-name>{{ .Values.agent.certnameSuffix }}.
+
+The default package repo URL is:
+  {{ include "puppet-agent.packageRepoUrl" . }}
+
+For a development PE release, enable naive autosigning on the PE chart:
+  --set testAgents.autosign.mode=naive

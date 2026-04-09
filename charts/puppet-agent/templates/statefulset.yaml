@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "puppet-agent.fullname" . }}
+  labels:
+    {{- include "puppet-agent.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "puppet-agent.fullname" . }}
+  replicas: {{ .Values.agent.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "puppet-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "puppet-agent.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "puppet-agent.serviceAccountName" . }}
+      affinity:
+{{ toYaml .Values.affinity | indent 8 }}
+      tolerations:
+{{ toYaml .Values.tolerations | indent 8 }}
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-agent-entrypoint", "run"]
+          env:
+            - name: PE_AGENT_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: PE_AGENT_SERVER
+              value: {{ .Values.agent.server | quote }}
+            - name: PE_AGENT_CA_SERVER
+              value: {{ .Values.agent.caServer | quote }}
+            - name: PE_AGENT_SERVER_LIST
+              value: {{ .Values.agent.serverList | quote }}
+            - name: PE_AGENT_ENVIRONMENT
+              value: {{ .Values.agent.environment | quote }}
+            - name: PE_AGENT_CERTNAME
+              value: {{ .Values.agent.certname | quote }}
+            - name: PE_AGENT_CERTNAME_SUFFIX
+              value: {{ .Values.agent.certnameSuffix | quote }}
+            - name: PE_AGENT_PACKAGE_REPO_URL
+              value: {{ include "puppet-agent.packageRepoUrl" . | quote }}
+            - name: PE_AGENT_PACKAGE_REPO_SSLVERIFY
+              value: {{ ternary "true" "false" .Values.agent.packageRepoSslVerify | quote }}
+            - name: PE_AGENT_RUNINTERVAL
+              value: {{ .Values.agent.runinterval | quote }}
+            - name: PE_AGENT_WAITFORCERT
+              value: {{ .Values.agent.waitforcert | quote }}
+            - name: PE_AGENT_SPLAY
+              value: {{ ternary "true" "false" .Values.agent.splay | quote }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-agent-entrypoint", "probe", "readiness"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-agent-entrypoint", "probe", "liveness"]
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/pe-agent-entrypoint", "probe", "startup"]
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          resources:
+{{ toYaml .Values.agent.resources | indent 12 }}
+          volumeMounts:
+            - name: etc
+              mountPath: /etc/puppetlabs
+            - name: cache
+              mountPath: /opt/puppetlabs/puppet/cache
+            - name: logs
+              mountPath: /var/log/puppetlabs
+      volumes:
+        - name: logs
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: etc
+        labels:
+          {{- include "puppet-agent.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+{{ toYaml .Values.storage.etc.accessModes | indent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.etc.size }}
+        storageClassName: {{ .Values.storage.etc.storageClassName | quote }}
+    - metadata:
+        name: cache
+        labels:
+          {{- include "puppet-agent.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+{{ toYaml .Values.storage.cache.accessModes | indent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.cache.size }}
+        storageClassName: {{ .Values.storage.cache.storageClassName | quote }}

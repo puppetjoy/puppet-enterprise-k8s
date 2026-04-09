@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "pe.fullname" . }}-postgresql
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  serviceName: {{ include "pe.fullname" . }}-postgresql
+  replicas: {{ .Values.postgresql.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: postgresql
+  template:
+    metadata:
+      labels:
+        {{- include "pe.labels" . | nindent 8 }}
+        app.kubernetes.io/component: postgresql
+    spec:
+      serviceAccountName: {{ include "pe.serviceAccountName" . }}
+      affinity:
+{{ toYaml .Values.affinity | indent 8 }}
+      tolerations:
+{{ toYaml .Values.tolerations | indent 8 }}
+      initContainers:
+        - name: wait-for-install
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "wait-for-install"]
+          volumeMounts:
+            - name: runtime
+              mountPath: /var/lib/pe-k8s
+        - name: prepare-postgresql-runtime
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -lc
+            - |
+              mkdir -p /var/run/puppetlabs/postgresql /var/run/puppetlabs/postgresql14
+              chown -R pe-postgres:pe-postgres /var/run/puppetlabs
+              chmod 0755 /var/run/puppetlabs
+              chmod 0750 /var/run/puppetlabs/postgresql /var/run/puppetlabs/postgresql14
+          volumeMounts:
+            - name: run
+              mountPath: /var/run/puppetlabs
+        - name: prepare-postgresql-logs
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -lc
+            - |
+              mkdir -p /var/log/puppetlabs/postgresql/14
+              chown -R pe-postgres:pe-postgres /var/log/puppetlabs/postgresql
+              chmod 0750 /var/log/puppetlabs/postgresql /var/log/puppetlabs/postgresql/14
+          volumeMounts:
+            - name: logs
+              mountPath: /var/log/puppetlabs
+      containers:
+        - name: postgresql
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "postgresql"]
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "postgresql"]
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "postgresql"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "postgresql"]
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+{{ toYaml .Values.postgresql.resources | indent 12 }}
+          volumeMounts:
+            - name: etc
+              mountPath: /etc/puppetlabs
+            - name: opt
+              mountPath: /opt/puppetlabs
+            - name: runtime
+              mountPath: /var/lib/pe-k8s
+            - name: logs
+              mountPath: /var/log/puppetlabs
+            - name: run
+              mountPath: /var/run/puppetlabs
+      volumes:
+        - name: etc
+          persistentVolumeClaim:
+            claimName: {{ include "pe.fullname" . }}-etc
+        - name: opt
+          persistentVolumeClaim:
+            claimName: {{ include "pe.fullname" . }}-opt
+        - name: runtime
+          persistentVolumeClaim:
+            claimName: {{ include "pe.fullname" . }}-runtime
+        - name: logs
+          emptyDir: {}
+        - name: run
+          emptyDir: {}

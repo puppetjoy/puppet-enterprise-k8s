@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "pe.fullname" . }}-etc
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+spec:
+  accessModes:
+{{ toYaml .Values.storage.etc.accessModes | indent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.etc.size }}
+  {{- if .Values.storage.etc.storageClassName }}
+  storageClassName: {{ .Values.storage.etc.storageClassName }}
+  {{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "pe.fullname" . }}-opt
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+spec:
+  accessModes:
+{{ toYaml .Values.storage.opt.accessModes | indent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.opt.size }}
+  {{- if .Values.storage.opt.storageClassName }}
+  storageClassName: {{ .Values.storage.opt.storageClassName }}
+  {{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "pe.fullname" . }}-runtime
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+spec:
+  accessModes:
+{{ toYaml .Values.storage.runtime.accessModes | indent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.runtime.size }}
+  {{- if .Values.storage.runtime.storageClassName }}
+  storageClassName: {{ .Values.storage.runtime.storageClassName }}
+  {{- end }}

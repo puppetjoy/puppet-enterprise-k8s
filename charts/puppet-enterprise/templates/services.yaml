@@ -1,0 +1,107 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pe.identity" . }}
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.services.pe.type }}
+  {{- if .Values.services.pe.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.services.pe.loadBalancerIP }}
+  {{- end }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: pe-services
+  ports:
+    - name: http
+      port: 80
+      targetPort: proxy-http
+    - name: https
+      port: 443
+      targetPort: proxy-https
+    - name: postgresql
+      port: 5432
+      targetPort: proxy-postgres
+    - name: puppetdb
+      port: 8081
+      targetPort: proxy-puppetdb
+    - name: puppetserver
+      port: 8140
+      targetPort: proxy-pserver
+    - name: pcp-broker
+      port: 8142
+      targetPort: proxy-pcp
+    - name: orchestration
+      port: 8143
+      targetPort: proxy-orch
+    - name: host-action
+      port: 8147
+      targetPort: proxy-action
+    - name: code-manager
+      port: 8170
+      targetPort: proxy-codemgr
+    - name: console-api
+      port: 4433
+      targetPort: proxy-console
+    - name: bolt-server
+      port: 62658
+      targetPort: proxy-bolt
+    - name: ace-server
+      port: 44633
+      targetPort: proxy-ace
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pe.fullname" . }}-postgresql
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  publishNotReadyAddresses: {{ .Values.services.publishNotReadyAddresses }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: postgresql
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pe.fullname" . }}-puppetdb
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.services.puppetdb.type }}
+  publishNotReadyAddresses: {{ .Values.services.publishNotReadyAddresses }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: puppetdb
+  ports:
+    - name: puppetdb
+      port: {{ .Values.services.puppetdb.port }}
+      targetPort: puppetdb
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pe.fullname" . }}-puppetserver
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.services.puppetserver.type }}
+  publishNotReadyAddresses: {{ .Values.services.publishNotReadyAddresses }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: puppetserver
+  ports:
+    - name: puppetserver
+      port: {{ .Values.services.puppetserver.port }}
+      targetPort: puppetserver
+    {{- if .Values.codeManager.enabled }}
+    - name: code-manager
+      port: 8170
+      targetPort: 8170
+    {{- end }}

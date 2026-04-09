@@ -1,0 +1,86 @@
+# Legacy PE Primary To Kubernetes Mapping
+
+This mapping is based on the live `pe-primary` container running on branch `k8s-pe-primary`.
+
+## Active PE Services
+
+The installed primary currently runs these PE services:
+
+| Service | Listener(s) | Legacy ExecStart | Mutable config/data | Suggested K8s shape | Scaling notes |
+| --- | --- | --- | --- | --- | --- |
+| `pe-postgresql` | `5432` | `postgres -D /opt/puppetlabs/server/data/postgresql/14/data` | `/opt/puppetlabs/server/data/postgresql`, `/var/log/puppetlabs/postgresql` | `StatefulSet` | Stateful, single-writer |
+| `pe-puppetdb` | `8081` | `puppetdb foreground` | `/etc/puppetlabs/puppetdb`, `/opt/puppetlabs/server/data/puppetdb` | `Deployment` | Can scale only with validated shared DB behavior |
+| `pe-puppetserver` | `8140` | `puppetserver foreground` | `/etc/puppetlabs/puppetserver`, `/opt/puppetlabs/server/data/puppetserver`, code data | `Deployment` | Primary scale target |
+| `pe-nginx` | `80`, `443` | `nginx -c /etc/puppetlabs/nginx/nginx.conf` | `/etc/puppetlabs/nginx` | `Deployment` container in `pe` | HTTP/TLS edge |
+| `pe-console-services` | `4433` | `console-services foreground` | `/etc/puppetlabs/console-services`, `/opt/puppetlabs/server/data/console-services` | `Deployment` container in `pe` | Depends on DB and Puppet Server |
+| `pe-orchestration-services` | `8142`, `8143`, `8170` | `orchestration-services foreground` | `/etc/puppetlabs/orchestration-services`, `/opt/puppetlabs/server/data/orchestration-services`, Code Manager data | `Deployment` container in `pe` | Depends on DB |
+| `pe-host-action-collector` | `8147` | `host-action-collector foreground` | `/etc/puppetlabs/host-action-collector`, `/opt/puppetlabs/server/data/host-action-collector` | `Deployment` container in `pe` | Depends on DB |
+| `pe-bolt-server` | `62658` | `puma -C .../pe_bolt_server_config.rb` | `/etc/puppetlabs/bolt-server`, `/opt/puppetlabs/server/data/bolt-server` | `Deployment` container in `pe` | HTTP API service |
+| `pe-ace-server` | `44633` | `puma -C .../transport_tasks_config.rb` | `/etc/puppetlabs/ace-server`, `/opt/puppetlabs/server/data/ace-server` | `Deployment` container in `pe` | HTTP API service |
+
+## Important Paths
+
+Small but critical configuration:
+
+- `/etc/puppetlabs/pe`
+- `/etc/puppetlabs/enterprise/conf.d`
+- `/etc/puppetlabs/puppet`
+- `/etc/puppetlabs/puppetserver`
+- `/etc/puppetlabs/puppetdb`
+- `/etc/puppetlabs/console-services`
+- `/etc/puppetlabs/orchestration-services`
+- `/etc/puppetlabs/nginx`
+
+Heavy mutable state under `/opt/puppetlabs/server/data` from the current primary:
+
+| Path | Approx size | Notes |
+| --- | --- | --- |
+| `/opt/puppetlabs/server/data/packages` | `901M` | PE package repo served on `8140` |
+| `/opt/puppetlabs/server/data/postgresql` | `66M` | Primary databases |
+| `/opt/puppetlabs/server/data/puppetserver` | `9.5M` | JARs, restart state, service-local data |
+| `/opt/puppetlabs/server/data/environments` | `2.7M` | Code Manager/filesync managed code |
+| `/opt/puppetlabs/server/data/code-manager` | `803K` | Code Manager state |
+| `/opt/puppetlabs/server/data/orchestration-services` | `585K` | Orchestrator state |
+
+Export-only rootfs artifacts produced by install:
+
+- `/etc/sysconfig/pe-puppetserver`
+- `/etc/sysconfig/pe-puppetdb`
+- `/etc/sysconfig/pe-console-services`
+- `/etc/sysconfig/pe-orchestration-services`
+- `/etc/sysconfig/pe-host-action-collector`
+- `/etc/sysconfig/pe-nginx`
+- `/etc/sysconfig/pe-pgsql`
+
+These are not under `/etc/puppetlabs`, so the installer Job needs to export them for runtime pods.
+
+## Initial K8s Storage Model
+
+The first scaffold keeps storage simple and explicit:
+
+- shared PVC for `/etc/puppetlabs`
+- shared PVC for `/opt/puppetlabs`
+- shared PVC for `/var/lib/pe-k8s` exported runtime metadata
+- per-pod ephemeral log directories
+
+That model is intentionally conservative. It preserves the install result before we optimize storage boundaries.
+
+## Future Partitioning
+
+The likely next partitioning target is `/opt/puppetlabs/server/data`:
+
+- `postgresql` should eventually have its own PVC
+- `packages` may remain shared and possibly read-only after install/update
+- `environments` and `code-manager` may remain shared for code distribution
+- `puppetserver` and `puppetdb` service-local data should be reviewed for per-pod vs shared semantics
+
+## Why This Is Not A systemd Port
+
+The systemd container proved PE can install and run in a container.
+The Kubernetes direction is different:
+
+- no systemd as PID 1
+- one PE service per container
+- foreground service runners
+- installer output persisted onto PVCs
+- exported rootfs runtime artifacts restored into each workload pod

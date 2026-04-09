@@ -1,0 +1,172 @@
+image:
+  repository: registry.eyrie/pe-k8s-runtime
+  tag: "2025.9.0"
+  pullPolicy: IfNotPresent
+
+peProxy:
+  image:
+    repository: registry.eyrie/haproxy
+    tag: "2.9-alpine"
+    pullPolicy: IfNotPresent
+  resources: {}
+
+nameOverride: ""
+instanceOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: "node-role.kubernetes.io/compute"
+              operator: Exists
+
+tolerations:
+  - key: "node-role.kubernetes.io/compute"
+    operator: Exists
+    effect: NoSchedule
+
+probes:
+  startup:
+    timeoutSeconds: 5
+    periodSeconds: 5
+    failureThreshold: 60
+  readiness:
+    timeoutSeconds: 5
+    periodSeconds: 10
+    failureThreshold: 3
+  liveness:
+    timeoutSeconds: 5
+    periodSeconds: 10
+    failureThreshold: 3
+
+network:
+  technicalHostname: ""
+  additionalDnsAltNames: []
+  hostAliases: []
+
+peConfig:
+  consoleAdminPassword: "dummyPassword1!"
+  certname: ""
+  puppetMasterHost: ""
+  extra: ""
+
+codeManager:
+  enabled: false
+  autoConfigure: true
+  r10kRemote: ""
+  r10kPrivateKeyPath: /r10k-secret/r10k-deploy-key
+  r10kPrivateKeySecretName: ""
+  r10kPrivateKeySecretKey: r10k-deploy-key
+  r10kKnownHosts: []
+  r10kRemoteTimeout: 60
+
+testAgents:
+  autosign:
+    mode: off
+
+license:
+  secretName: ""
+
+storage:
+  etc:
+    accessModes:
+      - ReadWriteMany
+    size: 2Gi
+    storageClassName: owl-crypt
+  opt:
+    accessModes:
+      - ReadWriteMany
+    size: 50Gi
+    storageClassName: owl-crypt
+  runtime:
+    accessModes:
+      - ReadWriteMany
+    size: 2Gi
+    storageClassName: owl-crypt
+
+installer:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  forceReinstall: false
+  resources: {}
+
+certificateRegeneration:
+  enabled: false
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  force: true
+  managePxpService: false
+  resources: {}
+
+certificateRecovery:
+  enabled: false
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  resources: {}
+
+postgresql:
+  replicaCount: 1
+  resources: {}
+
+puppetdb:
+  replicaCount: 1
+  resources: {}
+
+puppetserver:
+  replicaCount: 1
+  resources: {}
+
+peServices:
+  replicaCount: 1
+  resources:
+    nginx: {}
+    consoleServices: {}
+    orchestrationServices: {}
+    boltServer: {}
+    aceServer: {}
+    hostActionCollector: {}
+
+services:
+  publishNotReadyAddresses: true
+  pe:
+    type: ClusterIP
+    loadBalancerIP: ""
+  puppetserver:
+    type: ClusterIP
+    port: 8140
+  puppetdb:
+    type: ClusterIP
+    port: 8081
+  consoleServices:
+    type: ClusterIP
+    port: 4433
+  orchestration:
+    type: ClusterIP
+    pcpPort: 8142
+    servicePort: 8143
+    codeManagerPort: 8170
+  hostActionCollector:
+    type: ClusterIP
+    port: 8147
+  boltServer:
+    type: ClusterIP
+    port: 62658
+  aceServer:
+    type: ClusterIP
+    port: 44633
+
+ingress:
+  enabled: false
+  className: contour-compute
+  annotations:
+    cert-manager.io/cluster-issuer: eyrie-ca
+  host: puppet.eyrie
+  tls:
+    enabled: true
+    secretName: puppet-eyrie-tls

@@ -1,0 +1,102 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pe.fullname" . }}-proxy
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+data:
+  haproxy.cfg: |
+    global
+      log stdout format raw local0
+
+    defaults
+      log global
+      mode tcp
+      option tcplog
+      timeout connect 5s
+      timeout client 300s
+      timeout server 300s
+
+    frontend pe_http
+      bind *:10080
+      default_backend pe_web_http
+
+    backend pe_web_http
+      server web 127.0.0.1:80 check
+
+    frontend pe_https
+      bind *:10443
+      default_backend pe_web_https
+
+    backend pe_web_https
+      server web 127.0.0.1:443 check
+
+    frontend pe_postgresql
+      bind *:15432
+      default_backend pe_postgresql
+
+    backend pe_postgresql
+      server postgresql {{ include "pe.fullname" . }}-postgresql.{{ .Release.Namespace }}.svc.cluster.local:5432 check
+
+    frontend pe_puppetdb
+      bind *:18081
+      default_backend pe_puppetdb
+
+    backend pe_puppetdb
+      server puppetdb {{ include "pe.fullname" . }}-puppetdb.{{ .Release.Namespace }}.svc.cluster.local:8081 check
+
+    frontend pe_puppetserver
+      bind *:18140
+      default_backend pe_puppetserver
+
+    backend pe_puppetserver
+      server puppetserver {{ include "pe.fullname" . }}-puppetserver.{{ .Release.Namespace }}.svc.cluster.local:8140 check
+
+    frontend pe_orchestration_pcp
+      bind *:18142
+      default_backend pe_orchestration_pcp
+
+    backend pe_orchestration_pcp
+      server orchestration 127.0.0.1:8142 check
+
+    frontend pe_orchestration_service
+      bind *:18143
+      default_backend pe_orchestration_service
+
+    backend pe_orchestration_service
+      server orchestration 127.0.0.1:8143 check
+
+    frontend pe_host_action_collector
+      bind *:18147
+      default_backend pe_host_action_collector
+
+    backend pe_host_action_collector
+      server hac 127.0.0.1:8147 check
+
+    frontend pe_code_manager
+      bind *:18170
+      default_backend pe_code_manager
+
+    backend pe_code_manager
+      server puppetserver {{ include "pe.fullname" . }}-puppetserver.{{ .Release.Namespace }}.svc.cluster.local:8170 check
+
+    frontend pe_console_services
+      bind *:14433
+      default_backend pe_console_services
+
+    backend pe_console_services
+      server console 127.0.0.1:4433 check
+
+    frontend pe_bolt_server
+      bind *:32658
+      default_backend pe_bolt_server
+
+    backend pe_bolt_server
+      server bolt 127.0.0.1:62658 check
+
+    frontend pe_ace_server
+      bind *:34633
+      default_backend pe_ace_server
+
+    backend pe_ace_server
+      server ace 127.0.0.1:44633 check

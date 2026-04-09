@@ -1,0 +1,290 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pe.fullname" . }}
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pe-services
+spec:
+  strategy:
+    type: Recreate
+  replicas: {{ .Values.peServices.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: pe-services
+  template:
+    metadata:
+      annotations:
+        checksum/proxy-config: {{ include (print $.Template.BasePath "/configmap-pe-proxy.yaml") . | sha256sum }}
+      labels:
+        {{- include "pe.labels" . | nindent 8 }}
+        app.kubernetes.io/component: pe-services
+    spec:
+      serviceAccountName: {{ include "pe.serviceAccountName" . }}
+      affinity:
+{{ toYaml .Values.affinity | indent 8 }}
+      tolerations:
+{{ toYaml .Values.tolerations | indent 8 }}
+      {{- with .Values.network.hostAliases }}
+      hostAliases:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-install
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "wait-for-install"]
+          volumeMounts:
+            - name: runtime
+              mountPath: /var/lib/pe-k8s
+      containers:
+        - name: proxy
+          image: "{{ .Values.peProxy.image.repository }}:{{ .Values.peProxy.image.tag }}"
+          imagePullPolicy: {{ .Values.peProxy.image.pullPolicy }}
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          args:
+            - -f
+            - /usr/local/etc/haproxy/haproxy.cfg
+            - -W
+          ports:
+            - name: proxy-http
+              containerPort: 10080
+            - name: proxy-https
+              containerPort: 10443
+            - name: proxy-postgres
+              containerPort: 15432
+            - name: proxy-puppetdb
+              containerPort: 18081
+            - name: proxy-pserver
+              containerPort: 18140
+            - name: proxy-pcp
+              containerPort: 18142
+            - name: proxy-orch
+              containerPort: 18143
+            - name: proxy-action
+              containerPort: 18147
+            - name: proxy-codemgr
+              containerPort: 18170
+            - name: proxy-console
+              containerPort: 14433
+            - name: proxy-bolt
+              containerPort: 32658
+            - name: proxy-ace
+              containerPort: 34633
+          resources:
+{{ toYaml .Values.peProxy.resources | indent 12 }}
+          volumeMounts:
+            - name: proxy-config
+              mountPath: /usr/local/etc/haproxy
+              readOnly: true
+        - name: nginx
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "nginx"]
+          ports:
+            - name: nginx-http
+              containerPort: 80
+            - name: nginx-https
+              containerPort: 443
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "nginx"]
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "nginx"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "nginx"]
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+{{ toYaml .Values.peServices.resources.nginx | indent 12 }}
+          volumeMounts: &peServicesMounts
+            - name: etc
+              mountPath: /etc/puppetlabs
+            - name: opt
+              mountPath: /opt/puppetlabs
+            - name: runtime
+              mountPath: /var/lib/pe-k8s
+            - name: logs
+              mountPath: /var/log/puppetlabs
+            {{- if .Values.codeManager.enabled }}
+            - name: code-manager-r10k-key
+              mountPath: {{ dir (required "codeManager.r10kPrivateKeyPath is required when codeManager.enabled=true" .Values.codeManager.r10kPrivateKeyPath) | quote }}
+              readOnly: true
+            {{- end }}
+        - name: console-services
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "console-services"]
+          ports:
+            - name: console-svc
+              containerPort: 4433
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "console-services"]
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "console-services"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "console-services"]
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+{{ toYaml .Values.peServices.resources.consoleServices | indent 12 }}
+          volumeMounts: *peServicesMounts
+        - name: orchestration-services
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "orchestration-services"]
+          ports:
+            - name: orch-pcp
+              containerPort: 8142
+            - name: orch-svc
+              containerPort: 8143
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "orchestration-services"]
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "orchestration-services"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "orchestration-services"]
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+{{ toYaml .Values.peServices.resources.orchestrationServices | indent 12 }}
+          volumeMounts: *peServicesMounts
+        - name: bolt-server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "bolt-server"]
+          ports:
+            - name: bolt-svc
+              containerPort: 62658
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "bolt-server"]
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "bolt-server"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "bolt-server"]
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+{{ toYaml .Values.peServices.resources.boltServer | indent 12 }}
+          volumeMounts: *peServicesMounts
+        - name: ace-server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "ace-server"]
+          ports:
+            - name: ace-svc
+              containerPort: 44633
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "ace-server"]
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "ace-server"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "ace-server"]
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+{{ toYaml .Values.peServices.resources.aceServer | indent 12 }}
+          volumeMounts: *peServicesMounts
+        - name: host-action-collector
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "host-action-collector"]
+          ports:
+            - name: hac-svc
+              containerPort: 8147
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "host-action-collector"]
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "host-action-collector"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "host-action-collector"]
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+{{ toYaml .Values.peServices.resources.hostActionCollector | indent 12 }}
+          volumeMounts: *peServicesMounts
+      volumes:
+        - name: etc
+          persistentVolumeClaim:
+            claimName: {{ include "pe.fullname" . }}-etc
+        - name: opt
+          persistentVolumeClaim:
+            claimName: {{ include "pe.fullname" . }}-opt
+        - name: runtime
+          persistentVolumeClaim:
+            claimName: {{ include "pe.fullname" . }}-runtime
+        - name: logs
+          emptyDir: {}
+        {{- if .Values.codeManager.enabled }}
+        - name: code-manager-r10k-key
+          secret:
+            secretName: {{ required "codeManager.r10kPrivateKeySecretName is required when codeManager.enabled=true" .Values.codeManager.r10kPrivateKeySecretName }}
+            items:
+              - key: {{ required "codeManager.r10kPrivateKeySecretKey is required when codeManager.enabled=true" .Values.codeManager.r10kPrivateKeySecretKey }}
+                path: {{ base (required "codeManager.r10kPrivateKeyPath is required when codeManager.enabled=true" .Values.codeManager.r10kPrivateKeyPath) }}
+        {{- end }}
+        - name: proxy-config
+          configMap:
+            name: {{ include "pe.fullname" . }}-proxy

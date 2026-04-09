@@ -1,0 +1,44 @@
+{{- define "puppet-agent.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "puppet-agent.fullname" -}}
+{{- if .Values.fullnameOverride -}}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name := default .Chart.Name .Values.nameOverride -}}
+{{- if contains $name .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "puppet-agent.labels" -}}
+app.kubernetes.io/name: {{ include "puppet-agent.name" . }}
+helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}
+
+{{- define "puppet-agent.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "puppet-agent.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}
+
+{{- define "puppet-agent.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create -}}
+{{- default (include "puppet-agent.fullname" .) .Values.serviceAccount.name -}}
+{{- else -}}
+{{- default "default" .Values.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "puppet-agent.packageRepoUrl" -}}
+{{- if .Values.agent.packageRepoUrl -}}
+{{- .Values.agent.packageRepoUrl -}}
+{{- else -}}
+{{- printf "https://%s:8140/packages/current/el-9-x86_64.repo" .Values.agent.server -}}
+{{- end -}}
+{{- end -}}

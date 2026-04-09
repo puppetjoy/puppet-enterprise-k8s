@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pe.fullname" . }}-conf
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+data:
+  pe.conf: |
+{{ include "pe.generatedPeConf" . | indent 4 }}
