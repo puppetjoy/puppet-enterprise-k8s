@@ -8,8 +8,8 @@ The legacy install currently runs these PE services:
 
 | Service | Listener(s) | Legacy ExecStart | Mutable config/data | Suggested K8s shape | Scaling notes |
 | --- | --- | --- | --- | --- | --- |
-| `pe-postgresql` | `5432` | `postgres -D /opt/puppetlabs/server/data/postgresql/14/data` | `/opt/puppetlabs/server/data/postgresql`, `/var/log/puppetlabs/postgresql` | `StatefulSet` | Stateful, single-writer |
-| `pe-puppetdb` | `8081` | `puppetdb foreground` | `/etc/puppetlabs/puppetdb`, `/opt/puppetlabs/server/data/puppetdb` | `Deployment` | Can scale only with validated shared DB behavior |
+| `pe-postgresql` | `5432` | `postgres -D /opt/puppetlabs/server/data/postgresql/14/data` | `/opt/puppetlabs/server/data/postgresql`, `/var/log/puppetlabs/postgresql` | Container in `pe` `Deployment` | Single-owner data service behind `service/pe` |
+| `pe-puppetdb` | `8081` | `puppetdb foreground` | `/etc/puppetlabs/puppetdb`, `/opt/puppetlabs/server/data/puppetdb` | Container in `pe` `Deployment` | Single-owner data service behind `service/pe` |
 | `pe-puppetserver` | `8140`, `8170` | `puppetserver foreground` | `/etc/puppetlabs/puppetserver`, `/opt/puppetlabs/server/data/puppetserver`, code data | Container in `pe` `Deployment` | `service/pe` serves the non-compiler Puppet Server; compiler capacity scales separately |
 | `pe-nginx` | `80`, `443` | `nginx -c /etc/puppetlabs/nginx/nginx.conf` | `/etc/puppetlabs/nginx` | `Deployment` container in `pe` | HTTP/TLS edge |
 | `pe-console-services` | `4433` | `console-services foreground` | `/etc/puppetlabs/console-services`, `/opt/puppetlabs/server/data/console-services` | `Deployment` container in `pe` | Depends on DB and Puppet Server |
@@ -52,19 +52,19 @@ Export-only rootfs artifacts produced by install:
 - `/etc/sysconfig/pe-nginx`
 - `/etc/sysconfig/pe-pgsql`
 
-These are not under `/etc/puppetlabs`, so the installer Job needs to export them for runtime pods.
+These are not under `/etc/puppetlabs`, so the `pe` install init container exports them onto the PE runtime volume for the runtime containers.
 
 ## Initial K8s Storage Model
 
-The first scaffold keeps storage simple and explicit:
+The current scaffold keeps storage single-owner and explicit:
 
-- shared PVC for `/etc/puppetlabs` used by the installer, `pe`, and `pe-puppetdb`
-- shared PVC for `/opt/puppetlabs` used by the installer, `pe`, and `pe-puppetdb`
-- shared PVC for `/var/lib/pe-k8s` exported runtime metadata used by the installer, `pe`, and `pe-puppetdb`
+- single-owner RWO PVC for `/etc/puppetlabs` used only by `pe`
+- single-owner RWO PVC for `/opt/puppetlabs` used only by `pe`
+- single-owner RWO PVC for `/var/lib/pe-k8s` used only by `pe`
 - per-compiler non-shared PVCs for `/etc/puppetlabs`, `/opt/puppetlabs`, and `/var/lib/pe-k8s`
 - per-pod ephemeral log directories
 
-That model is intentionally conservative. It preserves the install result before we optimize storage boundaries.
+That model is intentionally conservative. It preserves the official PE install flow while avoiding shared storage between workloads.
 
 ## Future Partitioning
 
@@ -83,5 +83,5 @@ The Kubernetes direction is different:
 - no systemd as PID 1
 - one PE service per container
 - foreground service runners
-- installer output persisted onto PVCs
+- init-container install sequencing persisted onto single-owner PVCs
 - exported rootfs runtime artifacts restored into each workload pod

@@ -65,46 +65,28 @@ license:
 storage:
   etc:
     accessModes:
-      - ReadWriteMany
+      - ReadWriteOnce
     size: 2Gi
     storageClassName: ""
   opt:
     accessModes:
-      - ReadWriteMany
+      - ReadWriteOnce
     size: 50Gi
     storageClassName: ""
   runtime:
     accessModes:
-      - ReadWriteMany
+      - ReadWriteOnce
     size: 2Gi
     storageClassName: ""
 
 installer:
-  backoffLimit: 1
-  ttlSecondsAfterFinished: 3600
   forceReinstall: false
   resources: {}
 
-certificateRegeneration:
-  enabled: false
-  backoffLimit: 0
-  ttlSecondsAfterFinished: 3600
-  force: true
-  managePxpService: false
-  resources: {}
-
-certificateRecovery:
-  enabled: false
-  backoffLimit: 0
-  ttlSecondsAfterFinished: 3600
-  resources: {}
-
 postgresql:
-  replicaCount: 1
   resources: {}
 
 puppetdb:
-  replicaCount: 1
   resources: {}
 
 puppetserver:
@@ -152,7 +134,6 @@ peServices:
     hostActionCollector: {}
 
 services:
-  publishNotReadyAddresses: true
   pe:
     type: ClusterIP
     loadBalancerIP: ""
@@ -160,9 +141,6 @@ services:
     type: ClusterIP
     port: 8140
     loadBalancerIP: ""
-  puppetdb:
-    type: ClusterIP
-    port: 8081
   consoleServices:
     type: ClusterIP
     port: 4433

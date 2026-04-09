@@ -12,5 +12,5 @@ The default package repo URL is:
   {{ include "puppet-agent.packageRepoUrl" . }}
 
 Default certificate handling:
-  - If signer.enabled=true, the chart runs a signer Job against the PE CA PVCs.
+  - If signer.enabled=true, the chart runs a signer Job against the PE CA API.
   - Otherwise, sign pending certs manually.

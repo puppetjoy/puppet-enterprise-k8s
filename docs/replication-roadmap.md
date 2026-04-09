@@ -21,7 +21,7 @@ Split PE-local state from worker-local state:
 
 - keep worker compile-path reads and writes local
 - keep PE management data tied to the `pe` workload
-- remove worker dependence on shared `pe-puppetdb` and shared `pe-postgresql` for normal catalog service
+- remove remaining worker dependence on PE-local management data for normal catalog service
 
 This is the boundary that makes later multi-PE work tractable.
 

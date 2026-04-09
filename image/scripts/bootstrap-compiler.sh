@@ -16,7 +16,6 @@ PE_COMPILER_PUPPETDB_SYNC_INTERVAL_MINUTES="${PE_COMPILER_PUPPETDB_SYNC_INTERVAL
 PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS="${PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS:-900}"
 PE_COMPILER_BOOTSTRAP_DIR="${PE_COMPILER_BOOTSTRAP_DIR:-/etc/puppetlabs/pe-k8s-compiler}"
 PE_COMPILER_MANIFEST_PATH="${PE_COMPILER_MANIFEST_PATH:-${PE_COMPILER_BOOTSTRAP_DIR}/bootstrap.pp}"
-PE_COMPILER_REQUIRED_INSTALL_JOB="${PE_COMPILER_REQUIRED_INSTALL_JOB:-}"
 
 compiler_certname() {
     if [ -n "${PE_COMPILER_CERTNAME}" ]; then
@@ -45,18 +44,7 @@ compiler_postgresql_host() {
 }
 
 wait_for_pe() {
-    local deadline
-    deadline=$((SECONDS + PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS))
-
-    while [ "${SECONDS}" -lt "${deadline}" ]; do
-        if curl -skf "https://${PE_COMPILER_PE_SERVICE}:8140/status/v1/services" >/dev/null 2>&1; then
-            return 0
-        fi
-        sleep 5
-    done
-
-    log "Timed out waiting for PE service ${PE_COMPILER_PE_SERVICE}"
-    return 1
+    wait_for_remote_pe_status "${PE_COMPILER_PE_SERVICE}" "${PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS}"
 }
 
 ensure_compiler_dirs() {
@@ -233,10 +221,6 @@ run_compiler_apply() {
 
 main() {
     trap stop_bootstrap_services EXIT
-
-    if [ -n "${PE_COMPILER_REQUIRED_INSTALL_JOB}" ]; then
-        wait_for_k8s_job_completion "${PE_COMPILER_REQUIRED_INSTALL_JOB}"
-    fi
 
     ensure_compiler_dirs
     wait_for_pe

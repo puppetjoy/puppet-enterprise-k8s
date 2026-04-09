@@ -33,27 +33,22 @@ spec:
               value: {{ .Values.signer.waitTimeoutSeconds | quote }}
             - name: PE_SIGN_CERT_LABEL
               value: "agent certificate"
+            - name: PE_SIGN_PE_SERVICE
+              value: {{ include "puppet-agent.peReleaseFullname" . | quote }}
+            - name: PE_SIGN_PE_CONF_PATH
+              value: /config/pe.conf
           resources:
 {{ toYaml .Values.signer.resources | indent 12 }}
           volumeMounts:
-            - name: etc
-              mountPath: /etc/puppetlabs
-            - name: opt
-              mountPath: /opt/puppetlabs
-            - name: runtime
-              mountPath: /var/lib/pe-k8s
+            - name: pe-conf
+              mountPath: /config
+              readOnly: true
             - name: logs
               mountPath: /var/log/puppetlabs
       volumes:
-        - name: etc
-          persistentVolumeClaim:
-            claimName: {{ include "puppet-agent.peReleaseFullname" . }}-etc
-        - name: opt
-          persistentVolumeClaim:
-            claimName: {{ include "puppet-agent.peReleaseFullname" . }}-opt
-        - name: runtime
-          persistentVolumeClaim:
-            claimName: {{ include "puppet-agent.peReleaseFullname" . }}-runtime
+        - name: pe-conf
+          configMap:
+            name: {{ include "puppet-agent.peReleaseFullname" . }}-conf
         - name: logs
           emptyDir: {}
 {{- end }}

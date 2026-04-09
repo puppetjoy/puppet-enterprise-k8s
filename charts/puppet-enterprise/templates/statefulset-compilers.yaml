@@ -35,9 +35,6 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/usr/local/bin/pe-k8s-entrypoint", "install-compiler-runtime"]
-          env:
-            - name: PE_COMPILER_REQUIRED_INSTALL_JOB
-              value: {{ printf "%s-installer-r%d" (include "pe.fullname" .) .Release.Revision | quote }}
           resources:
 {{ toYaml .Values.compilers.resources.install | indent 12 }}
           volumeMounts:
@@ -76,8 +73,6 @@ spec:
               value: {{ .Values.compilers.puppetdbSyncIntervalMinutes | quote }}
             - name: PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS
               value: {{ .Values.compilers.certWaitTimeoutSeconds | quote }}
-            - name: PE_COMPILER_REQUIRED_INSTALL_JOB
-              value: {{ printf "%s-installer-r%d" (include "pe.fullname" .) .Release.Revision | quote }}
           resources:
 {{ toYaml .Values.compilers.resources.bootstrap | indent 12 }}
           volumeMounts:

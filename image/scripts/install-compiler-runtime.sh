@@ -4,7 +4,6 @@ set -euo pipefail
 source /usr/local/lib/pe-k8s-common.sh
 
 PE_INSTALLER_ROOT="${PE_INSTALLER_ROOT:-/opt/pe-installer}"
-PE_COMPILER_REQUIRED_INSTALL_JOB="${PE_COMPILER_REQUIRED_INSTALL_JOB:-}"
 PE_COMPILER_PACKAGE_REPO_NAME="${PE_COMPILER_PACKAGE_REPO_NAME:-pe-k8s-local}"
 PE_COMPILER_PACKAGE_REPO_PATH="${PE_COMPILER_PACKAGE_REPO_PATH:-${PE_INSTALLER_ROOT}/packages/el-9-x86_64}"
 PE_COMPILER_PACKAGE_NAMES="${PE_COMPILER_PACKAGE_NAMES:-puppet-agent pe-puppet-enterprise-release pe-puppetserver pe-puppetdb pe-puppetdb-termini pe-modules pe-postgresql-common pe-postgresql14 pe-postgresql14-server pe-postgresql14-contrib pe-postgresql14-pglogical pe-postgresql14-pgrepack}"
@@ -90,10 +89,6 @@ install_compiler_packages() {
 main() {
     ensure_compiler_runtime_mounts
     start_install_logging
-
-    if [ -n "${PE_COMPILER_REQUIRED_INSTALL_JOB}" ]; then
-        wait_for_k8s_job_completion "${PE_COMPILER_REQUIRED_INSTALL_JOB}"
-    fi
 
     if compiler_runtime_ready && [ "${PE_COMPILER_FORCE_REINSTALL}" != "true" ]; then
         log "Compiler runtime marker already exists; skipping compiler package install"

@@ -147,6 +147,112 @@ wait_for_k8s_job_completion() {
     return 1
 }
 
+hocon_string_setting() {
+    local key="$1"
+    local path="$2"
+    local line
+
+    [ -f "${path}" ] || return 1
+
+    line="$(grep -E "^[[:space:]]*(\"${key}\"|${key})[[:space:]]*=" "${path}" | head -n 1 || true)"
+    [ -n "${line}" ] || return 1
+
+    printf '%s\n' "${line}" | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//' | sed -E 's/^"(.*)"$/\1/'
+}
+
+json_string() {
+    python3 - "$1" <<'PY'
+import json
+import sys
+
+print(json.dumps(sys.argv[1]))
+PY
+}
+
+remote_pe_service() {
+    local service="${1:-${PE_REMOTE_SERVICE:-${PE_COMPILER_PE_SERVICE:-${PE_SIGN_PE_SERVICE:-pe}}}}"
+    printf '%s\n' "${service}"
+}
+
+wait_for_remote_pe_status() {
+    local service="${1:-$(remote_pe_service)}"
+    local timeout="${2:-${PE_K8S_WAIT_TIMEOUT_SECONDS}}"
+    local path="${3:-/status/v1/services}"
+    local deadline
+
+    deadline=$((SECONDS + timeout))
+    while [ "${SECONDS}" -lt "${deadline}" ]; do
+        if curl -skf "https://${service}:8140${path}" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 5
+    done
+
+    log "Timed out waiting for PE status endpoint on ${service}:8140${path}"
+    return 1
+}
+
+wait_for_remote_console() {
+    local service="${1:-$(remote_pe_service)}"
+    local timeout="${2:-${PE_K8S_WAIT_TIMEOUT_SECONDS}}"
+    local deadline
+
+    deadline=$((SECONDS + timeout))
+    while [ "${SECONDS}" -lt "${deadline}" ]; do
+        if curl -sk -o /dev/null -w '%{http_code}' "https://${service}:4433/rbac-api/v1/users" | grep -Eq '^(200|401|403)$'; then
+            return 0
+        fi
+        sleep 5
+    done
+
+    log "Timed out waiting for PE console endpoint on ${service}:4433"
+    return 1
+}
+
+issue_rbac_token() {
+    local service="$1"
+    local login="$2"
+    local password="$3"
+    local lifetime="${4:-5m}"
+    local label="${5:-pe-k8s-token}"
+    local payload response
+
+    payload="$(python3 - "${login}" "${password}" "${lifetime}" "${label}" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "login": sys.argv[1],
+    "password": sys.argv[2],
+    "lifetime": sys.argv[3],
+    "label": sys.argv[4],
+}))
+PY
+)"
+
+    response="$(curl -sk \
+        -H "Content-Type: application/json" \
+        --request POST \
+        "https://${service}:4433/rbac-api/v1/auth/token" \
+        --data "${payload}" || true)"
+
+    python3 - "${response}" <<'PY'
+import json
+import sys
+
+try:
+    data = json.loads(sys.argv[1])
+except json.JSONDecodeError:
+    raise SystemExit(1)
+
+token = data.get("token") or ""
+if not token:
+    raise SystemExit(1)
+
+print(token)
+PY
+}
+
 sync_puppetdb_integration_settings() {
     local puppet_bin=/opt/puppetlabs/bin/puppet
 

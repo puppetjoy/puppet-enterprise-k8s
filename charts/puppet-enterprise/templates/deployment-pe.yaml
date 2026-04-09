@@ -22,6 +22,7 @@ spec:
         {{- include "pe.labels" . | nindent 8 }}
         app.kubernetes.io/component: pe-services
     spec:
+      hostname: {{ include "pe.identity" . }}
       serviceAccountName: {{ include "pe.serviceAccountName" . }}
       affinity:
 {{ toYaml .Values.affinity | indent 8 }}
@@ -39,13 +40,49 @@ spec:
         {{- end }}
       {{- end }}
       initContainers:
-        - name: wait-for-install
+        - name: install
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["/usr/local/bin/pe-k8s-entrypoint", "wait-for-install"]
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "install"]
+          env:
+            - name: PE_CONF_PATH
+              value: /config/pe.conf
+            - name: FORCE_REINSTALL
+              value: {{ ternary "true" "false" .Values.installer.forceReinstall | quote }}
+            - name: PE_BOOTSTRAP_PUPPET_CERTNAME
+              value: {{ include "pe.identity" . | quote }}
+            - name: PE_BOOTSTRAP_PUPPET_SERVER
+              value: {{ include "pe.identity" . | quote }}
+            - name: FACTER_hostname
+              value: {{ include "pe.identity" . | quote }}
+            - name: FACTER_fqdn
+              value: {{ include "pe.identity" . | quote }}
+            - name: FACTER_domain
+              value: ""
+          resources:
+{{ toYaml .Values.installer.resources | indent 12 }}
           volumeMounts:
+            - name: pe-conf
+              mountPath: /config
+              readOnly: true
+            - name: etc
+              mountPath: /etc/puppetlabs
+            - name: opt
+              mountPath: /opt/puppetlabs
             - name: runtime
               mountPath: /var/lib/pe-k8s
+            - name: logs
+              mountPath: /var/log/puppetlabs
+            {{- if .Values.license.secretName }}
+            - name: license
+              mountPath: /license
+              readOnly: true
+            {{- end }}
+            {{- if .Values.codeManager.enabled }}
+            - name: code-manager-r10k-key
+              mountPath: {{ dir (required "codeManager.r10kPrivateKeyPath is required when codeManager.enabled=true" .Values.codeManager.r10kPrivateKeyPath) | quote }}
+              readOnly: true
+            {{- end }}
       containers:
         - name: proxy
           image: "{{ .Values.peProxy.image.repository }}:{{ .Values.peProxy.image.tag }}"
@@ -88,6 +125,83 @@ spec:
             - name: proxy-config
               mountPath: /usr/local/etc/haproxy
               readOnly: true
+        - name: postgresql
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "postgresql"]
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "postgresql"]
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "postgresql"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "postgresql"]
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+{{ toYaml .Values.postgresql.resources | indent 12 }}
+          volumeMounts:
+            - name: etc
+              mountPath: /etc/puppetlabs
+            - name: opt
+              mountPath: /opt/puppetlabs
+            - name: runtime
+              mountPath: /var/lib/pe-k8s
+            - name: logs
+              mountPath: /var/log/puppetlabs
+        - name: puppetdb
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "puppetdb"]
+          env:
+            - name: PE_K8S_PUPPETDB_DATABASE_HOST
+              value: 127.0.0.1
+            - name: PE_K8S_PUPPETDB_DATABASE_PORT
+              value: "5432"
+          ports:
+            - name: puppetdb
+              containerPort: 8081
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "puppetdb"]
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "puppetdb"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "puppetdb"]
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+{{ toYaml .Values.puppetdb.resources | indent 12 }}
+          volumeMounts:
+            - name: etc
+              mountPath: /etc/puppetlabs
+            - name: opt
+              mountPath: /opt/puppetlabs
+            - name: runtime
+              mountPath: /var/lib/pe-k8s
+            - name: logs
+              mountPath: /var/log/puppetlabs
         - name: puppetserver
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -319,6 +433,9 @@ spec:
 {{ toYaml .Values.peServices.resources.hostActionCollector | indent 12 }}
           volumeMounts: *peServicesMounts
       volumes:
+        - name: pe-conf
+          configMap:
+            name: {{ include "pe.fullname" . }}-conf
         - name: etc
           persistentVolumeClaim:
             claimName: {{ include "pe.fullname" . }}-etc
@@ -330,6 +447,11 @@ spec:
             claimName: {{ include "pe.fullname" . }}-runtime
         - name: logs
           emptyDir: {}
+        {{- if .Values.license.secretName }}
+        - name: license
+          secret:
+            secretName: {{ .Values.license.secretName }}
+        {{- end }}
         {{- if .Values.codeManager.enabled }}
         - name: code-manager-r10k-key
           secret:

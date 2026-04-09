@@ -36,14 +36,14 @@ data:
       default_backend pe_postgresql
 
     backend pe_postgresql
-      server postgresql {{ include "pe.fullname" . }}-postgresql.{{ .Release.Namespace }}.svc.cluster.local:5432 check
+      server postgresql 127.0.0.1:5432 check
 
     frontend pe_puppetdb
       bind *:18081
       default_backend pe_puppetdb
 
     backend pe_puppetdb
-      server puppetdb {{ include "pe.fullname" . }}-puppetdb.{{ .Release.Namespace }}.svc.cluster.local:8081 check
+      server puppetdb 127.0.0.1:8081 check
 
     frontend pe_puppetserver
       bind *:18140
