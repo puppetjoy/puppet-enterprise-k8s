@@ -2,6 +2,6 @@
 .gitignore
 .dockerignore
 local/
-artifacts/
+installers/
 .DS_Store
 Thumbs.db

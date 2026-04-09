@@ -6,7 +6,7 @@ PE_NAMESPACE ?= puppet
 PE_RELEASE ?= pe
 PE_AGENT_RELEASE ?= test-node
 LOCAL_DIR ?= local
-ARTIFACTS_DIR ?= artifacts
+INSTALLERS_DIR ?= installers
 PE_VALUES_FILE ?= $(LOCAL_DIR)/values-pe.yaml
 PE_AGENT_VALUES_FILE ?= $(LOCAL_DIR)/values-agent.yaml
 LOCAL_KEYS_DIR ?= $(LOCAL_DIR)/keys
@@ -14,9 +14,8 @@ R10K_DEPLOY_KEY_PATH ?= $(LOCAL_KEYS_DIR)/id-control_repo.ed25519
 R10K_DEPLOY_KEY_SECRET_NAME ?= pe-r10k-deploy-key
 PE_LICENSE_PATH ?= $(LOCAL_DIR)/license.txt
 PE_LICENSE_SECRET_NAME ?= pe-license
-PE_INSTALLERS_DIR ?= $(ARTIFACTS_DIR)/pe-installers
 PE_INSTALLER_FILENAME ?= puppet-enterprise-$(PE_VERSION)-el-9-x86_64.tar.gz
-PE_INSTALLER_TAR_PATH ?= $(abspath $(PE_INSTALLERS_DIR)/$(PE_INSTALLER_FILENAME))
+PE_INSTALLER_TAR_PATH ?= $(abspath $(INSTALLERS_DIR)/$(PE_INSTALLER_FILENAME))
 K8S_RUNTIME_IMAGE_NAME ?= pe-k8s-runtime
 K8S_RUNTIME_IMAGE_VERSION ?= $(PE_VERSION)
 K8S_INSTALLER_CONTEXT_PATH ?= image/assets/pe-installer/installer.tar.gz
@@ -39,7 +38,7 @@ help:
 	@echo "  make deploy"
 	@echo ""
 	@echo "Repo-local artifact paths:"
-	@echo "  installer: $(PE_INSTALLERS_DIR)/puppet-enterprise-<version>-el-9-x86_64.tar.gz"
+	@echo "  installer: $(INSTALLERS_DIR)/puppet-enterprise-<version>-el-9-x86_64.tar.gz"
 	@echo "  pe values: $(PE_VALUES_FILE)"
 	@echo "  agent values: $(PE_AGENT_VALUES_FILE)"
 	@echo "  r10k key: $(R10K_DEPLOY_KEY_PATH)"
@@ -135,7 +134,7 @@ check-current-state:
 			missing=1; \
 		fi; \
 	else \
-		echo "[INFO] Set PE_VERSION to validate installer presence under $(PE_INSTALLERS_DIR)"; \
+		echo "[INFO] Set PE_VERSION to validate installer presence under $(INSTALLERS_DIR)"; \
 	fi; \
 	if [ -f "$(PE_LICENSE_PATH)" ]; then \
 		echo "[OK] $(PE_LICENSE_PATH) (optional)"; \
