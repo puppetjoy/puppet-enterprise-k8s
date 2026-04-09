@@ -69,18 +69,22 @@ Stage a PE tarball into the Kubernetes runtime image with:
 ```bash
 CONTAINER_ENGINE=podman \
 make build-k8s-runtime \
-  PE_VERSION=2025.9.0 \
-  PE_INSTALLER_TAR_PATH=/absolute/path/to/puppet-enterprise-2025.9.0-el-9-x86_64.tar.gz
+  PE_VERSION=2025.9.0
 ```
 
-That stages the installer into `image/assets/pe-installer/installer.tar.gz` for the build and removes it afterward.
+By default that expects the installer tarball at:
+
+```text
+artifacts/pe-installers/puppet-enterprise-2025.9.0-el-9-x86_64.tar.gz
+```
+
+The build stages the installer into `image/assets/pe-installer/installer.tar.gz` for the build and removes it afterward.
 
 Build the development test-agent image with:
 
 ```bash
 CONTAINER_ENGINE=podman \
 make build-k8s-agent \
-  K8S_AGENT_IMAGE_NAME=registry.example.test/pe-k8s-agent \
   K8S_AGENT_IMAGE_VERSION=0.1.1
 ```
 
@@ -133,16 +137,8 @@ Code Manager can also be modeled directly from Helm values:
 Example:
 
 ```bash
-kubectl -n puppet create secret generic pe-r10k-deploy-key \
-  --from-file=r10k-deploy-key=/path/to/r10k-private-key
-
-helm upgrade --install pe charts/puppet-enterprise \
-  --namespace puppet \
-  --create-namespace \
-  -f local/values-eyrie.yaml \
-  --set codeManager.enabled=true \
-  --set codeManager.r10kRemote=git@gitlab.example.test:org/control-repo.git \
-  --set codeManager.r10kPrivateKeySecretName=pe-r10k-deploy-key
+make create-r10k-secret
+make deploy-eyrie-pe
 ```
 
 The chart renders these Code Manager `pe.conf` settings when enabled:
@@ -181,6 +177,26 @@ The intended access pattern is:
 - ingress points at `service/pe` for the console hostname, with TLS terminated by the ingress controller
 - `service/pe-puppetserver`, `service/pe-puppetdb`, and `service/pe-postgresql` remain the backend service boundaries
 
+## Repo-Local Artifacts
+
+This repo expects local deployment inputs to live inside this checkout, but outside git.
+
+Ignored local paths:
+
+- `artifacts/pe-installers/puppet-enterprise-<version>-el-9-x86_64.tar.gz`
+- `local/values-eyrie.yaml`
+- `local/values-agent-eyrie.yaml`
+- `local/keys/id-control_repo.ed25519`
+- `local/license.txt` if your install requires a PE license Secret
+
+That keeps rebuild inputs with the repo without checking in environment-specific values, private keys, or the PE installer tarball.
+
+For the current `eyrie` workflow, validate that the expected local files exist with:
+
+```bash
+make check-current-state PE_VERSION=2025.9.0
+```
+
 ## Validation Agents
 
 For development testing, the PE chart can enable naive autosigning and a separate `puppet-agent` chart can create persistent Kubernetes-backed test nodes.
@@ -193,10 +209,7 @@ Currently supported autosign modes on the PE chart are:
 Enable naive autosigning in the PE release with:
 
 ```bash
-helm upgrade --install pe charts/puppet-enterprise \
-  --namespace puppet \
-  -f local/values-eyrie.yaml \
-  --set testAgents.autosign.mode=naive
+make deploy-eyrie-pe
 ```
 
 The separate validation-node chart lives at `charts/puppet-agent/`. It creates a StatefulSet-backed agent node that:
@@ -209,9 +222,7 @@ The separate validation-node chart lives at `charts/puppet-agent/`. It creates a
 Install a test node with:
 
 ```bash
-helm upgrade --install test-node charts/puppet-agent \
-  --namespace puppet \
-  -f local/values-agent-eyrie.yaml
+make deploy-eyrie-agent
 ```
 
 Default behavior:
