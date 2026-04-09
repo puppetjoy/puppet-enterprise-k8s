@@ -32,6 +32,7 @@ Compiler replicas follow the same pattern on per-replica persistent volumes:
 - `install-compiler-runtime` init installs the PE compiler-local packages
 - `bootstrap-compiler` init enrolls the compiler, configures local PuppetDB/PostgreSQL, and applies the compiler catalog
 - runtime containers then run local `postgresql`, `puppetdb`, and `puppetserver`
+- compiler readiness is held until local PuppetDB has completed a successful sync and remains within the configured max sync age
 
 ## Workload Shape
 

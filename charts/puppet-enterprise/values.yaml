@@ -97,6 +97,7 @@ compilers:
   replicaCount: 0
   dnsAltNames: []
   puppetdbSyncIntervalMinutes: 5
+  puppetdbMaxSyncAgeSeconds: 900
   certWaitTimeoutSeconds: 900
   signerWaitTimeoutSeconds: 900
   resources:

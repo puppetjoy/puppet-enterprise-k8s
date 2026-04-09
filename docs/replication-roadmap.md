@@ -52,6 +52,6 @@ This is intentionally later work. Worker-local runtime and data boundaries come 
 The next implementation slices should prove:
 
 - a worker compiles using its own local PuppetDB and PostgreSQL
-- a worker remains a code-current compile target only when local data services are healthy
+- a worker remains a code-current compile target only when local data services are healthy and PuppetDB sync is fresh
 - a worker can fall behind and recover without shared storage
 - centralized `puppet-code deploy` still remains the operator entrypoint for code rollout
