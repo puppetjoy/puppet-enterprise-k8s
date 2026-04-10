@@ -85,11 +85,18 @@ The current POC already showed that one PE instance can accept a Code Manager de
 This phase should prove:
 
 - an operator can trigger Code Manager once on one Worker using the normal PE entrypoint
-- the originating Worker can publish signed deploy intent containing the environment and immutable commit SHA
-- peer Workers can consume that intent and run their own local Code Manager deploy for the exact revision
+- the originating Worker can publish signed deploy intent containing the environment, deploy signature, deploy identifier, and origin file-sync metadata
+- peer Workers can consume that intent and run their own local Code Manager deploy
 - each Worker can publish convergence or failure state for Warden to aggregate
 - stale or failed Workers can be marked unhealthy for catalog service until they converge
 - attached compilers still receive code from their owning Worker-local PE services rather than through any compiler mesh
+
+Current POC status:
+
+- implemented with a relay-owned Code Manager post-environment hook and Fabric message type
+- verified live in Kubernetes with a deploy triggered on `pe-0` and replayed on `pe-1`
+- relay readiness now drains a Worker until its local deploy signature matches the desired deploy signature
+- origin file-sync commit metadata is preserved for visibility, but cross-Worker equality is based on deploy signature because PE file-sync commit IDs are instance-local
 
 ## Phase 5: Worker And SPOG Topologies
 

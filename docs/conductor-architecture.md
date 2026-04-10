@@ -103,13 +103,26 @@ Code Manager should remain the deployment engine on each Worker.
 The mesh-friendly extension is:
 
 - an operator triggers a normal Code Manager deployment on one Worker
-- a local hook publishes a signed Fabric message with the environment, immutable commit SHA, origin Worker, and deploy identifier
-- peer Workers consume that intent and execute their own local Code Manager deployment for that exact revision
+- a local post-environment hook publishes a signed Fabric message with the environment, deploy signature, origin Worker, deploy identifier, and origin file-sync metadata
+- peer Workers consume that intent and execute their own local Code Manager deployment
 - each Worker publishes convergence or failure state back into Fabric
 - Warden surfaces drift and can feed readiness or routing decisions for catalog-serving Workers
 - attached compilers continue to receive code from their owning PE instance through normal PE file-sync
 
 This keeps the supported PE deployment path intact while extending it across the active-active mesh.
+
+The current implementation uses the PE Code Manager deploy signature as the
+cross-Worker convergence token. That value is stable across Workers for the
+same deployment, while the local file-sync commit identifiers observed on each
+Worker are not. Relay therefore records the origin Worker file-sync metadata
+for operator context, but it gates readiness on deploy-signature convergence.
+
+The current flow is:
+
+- Puppet Server writes a Code Manager post-environment hook at startup when relay code deployment is enabled
+- the local relay hook publishes `ConductorRelayCodeDeployIntent` into Fabric after a successful local deploy
+- remote relays mark themselves pending, drain from readiness, replay the deploy locally through the Code Manager API, and suppress their local hook so the replay does not loop
+- relays only become ready again when their local deploy signature matches the desired signature
 
 ## Non-Goals
 

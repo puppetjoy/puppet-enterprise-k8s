@@ -189,6 +189,12 @@ spec:
               value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled .Values.conductor.relay.commandProxy.enabled) | quote }}
             - name: PE_K8S_RELAY_COMMAND_PROXY_PORT
               value: {{ .Values.conductor.relay.commandProxy.port | quote }}
+            - name: PE_K8S_CODE_DEPLOY_HOOK_ENABLED
+              value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled .Values.conductor.relay.codeDeploy.enabled) | quote }}
+            - name: PE_K8S_CODE_DEPLOY_HOOK_URL
+              value: {{ printf "https://%s:%v%s" (include "pe.identity" .) .Values.conductor.relay.codeDeploy.hook.listenPort .Values.conductor.relay.codeDeploy.hook.path | quote }}
+            - name: PE_K8S_CODE_DEPLOY_HOOK_USE_CLIENT_SSL
+              value: {{ ternary "true" "false" .Values.conductor.relay.codeDeploy.hook.useClientSsl | quote }}
           ports:
             - name: puppetserver
               containerPort: 8140
@@ -528,6 +534,30 @@ spec:
               value: {{ join "," .Values.conductor.relay.commandProxy.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_REPLICATED_COMMANDS
               value: {{ join "," .Values.conductor.relay.commandProxy.replicatedCommands | quote }}
+            - name: CONDUCTOR_RELAY_CODE_DEPLOY_ENABLED
+              value: {{ ternary "true" "false" .Values.conductor.relay.codeDeploy.enabled | quote }}
+            - name: CONDUCTOR_RELAY_CODE_DEPLOY_STATUS_POLL_INTERVAL_SECONDS
+              value: {{ .Values.conductor.relay.codeDeploy.statusPollIntervalSeconds | quote }}
+            - name: CONDUCTOR_RELAY_CODE_DEPLOY_REQUEST_TIMEOUT_SECONDS
+              value: {{ .Values.conductor.relay.codeDeploy.requestTimeoutSeconds | quote }}
+            - name: CONDUCTOR_RELAY_CODE_DEPLOY_TARGET_ROLES
+              value: {{ join "," .Values.conductor.relay.codeDeploy.targetRoles | quote }}
+            - name: CONDUCTOR_RELAY_CODE_DEPLOY_SERVICE_HOST
+              value: {{ include "pe.identity" . | quote }}
+            - name: CONDUCTOR_RELAY_CODE_DEPLOY_USERNAME
+              value: {{ .Values.conductor.relay.codeDeploy.auth.username | quote }}
+            - name: CONDUCTOR_RELAY_CODE_DEPLOY_PASSWORD
+              value: {{ default .Values.peConfig.consoleAdminPassword .Values.conductor.relay.codeDeploy.auth.password | quote }}
+            - name: CONDUCTOR_RELAY_CODE_DEPLOY_TOKEN_LIFETIME
+              value: {{ .Values.conductor.relay.codeDeploy.auth.tokenLifetime | quote }}
+            - name: CONDUCTOR_RELAY_CODE_DEPLOY_TOKEN_LABEL
+              value: {{ .Values.conductor.relay.codeDeploy.auth.tokenLabel | quote }}
+            - name: CONDUCTOR_RELAY_CODE_DEPLOY_HOOK_LISTEN_HOST
+              value: {{ .Values.conductor.relay.codeDeploy.hook.listenHost | quote }}
+            - name: CONDUCTOR_RELAY_CODE_DEPLOY_HOOK_LISTEN_PORT
+              value: {{ .Values.conductor.relay.codeDeploy.hook.listenPort | quote }}
+            - name: CONDUCTOR_RELAY_CODE_DEPLOY_HOOK_PATH
+              value: {{ .Values.conductor.relay.codeDeploy.hook.path | quote }}
           readinessProbe:
             exec:
               command: ["/usr/local/bin/conductor-relay", "probe", "ready"]

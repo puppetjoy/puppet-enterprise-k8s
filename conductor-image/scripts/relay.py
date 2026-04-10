@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import queue
 import re
 import ssl
 import stat
@@ -30,8 +31,13 @@ DEFAULT_REPLICATED_COMMANDS = [
 DEFAULT_TARGET_ROLES = [
     "control-plane",
 ]
+DEFAULT_CODE_DEPLOY_TARGET_ROLES = [
+    "control-plane",
+]
 DEFAULT_COMMAND_PROXY_PATH = "/pdb/cmd/v1"
 DEFAULT_CA_SYNC_DIR = "/etc/puppetlabs/puppetserver/ca"
+DEFAULT_CODE_DEPLOY_HOOK_PATH = "/conductor/code-manager/v1/post-environment"
+DEFAULT_CODE_DEPLOY_STATE_FILENAME = "code-deploy-state.json"
 
 
 def log(message):
@@ -205,12 +211,12 @@ def render_hex_serial(value, width, trailing_newline):
         rendered += "\n"
     return rendered.encode("utf-8")
 
-def http_request_raw(method, url, headers=None, data=None, context=None):
+def http_request_raw(method, url, headers=None, data=None, context=None, timeout=30):
     request = urllib.request.Request(url, method=method, data=data)
     for key, value in (headers or {}).items():
         request.add_header(key, value)
     try:
-        with urllib.request.urlopen(request, context=context, timeout=30) as response:
+        with urllib.request.urlopen(request, context=context, timeout=timeout) as response:
             body = response.read().decode("utf-8")
             return response.status, body
     except urllib.error.HTTPError as error:
@@ -218,11 +224,18 @@ def http_request_raw(method, url, headers=None, data=None, context=None):
         return error.code, body
 
 
-def http_request_json(method, url, headers=None, payload=None, context=None):
+def http_request_json(method, url, headers=None, payload=None, context=None, timeout=30):
     data = None
     if payload is not None:
         data = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    return http_request_raw(method, url, headers=headers, data=data, context=context)
+    return http_request_raw(
+        method,
+        url,
+        headers=headers,
+        data=data,
+        context=context,
+        timeout=timeout,
+    )
 
 
 def default_status_path():
@@ -288,6 +301,8 @@ def probe(mode):
     if status.get("commandProxyEnabled", False) and not status.get("commandProxyReady", False):
         return 1
     if status.get("caSyncEnabled", False) and not status.get("caSyncReady", False):
+        return 1
+    if status.get("codeDeployEnabled", False) and not status.get("codeDeployReady", False):
         return 1
 
     return 0
@@ -372,6 +387,59 @@ class LocalCommandHandler(BaseHTTPRequestHandler):
             return
 
         self.json_response(200, payload)
+
+
+class LocalCodeDeployHookHandler(BaseHTTPRequestHandler):
+    server_version = "ConductorRelay/0.2"
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, _format, *_args):
+        return
+
+    def text_response(self, status_code, message):
+        body = (message.rstrip() + "\n").encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def json_response(self, status_code, payload):
+        body = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def read_request_body(self):
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as error:
+            raise RelayLocalCommandError(400, "invalid content length") from error
+        return self.rfile.read(content_length) if content_length > 0 else b""
+
+    def do_POST(self):
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path != self.server.runtime.code_deploy_hook_path:
+            self.text_response(404, "unknown relay endpoint")
+            return
+
+        try:
+            body = self.read_request_body()
+            payload = json.loads(body.decode("utf-8"))
+            response = self.server.runtime.handle_local_code_deploy_hook(payload)
+        except json.JSONDecodeError:
+            self.text_response(400, "invalid JSON body")
+            return
+        except RelayLocalCommandError as error:
+            self.text_response(error.status_code, error.message)
+            return
+        except Exception as error:  # pragma: no cover - defensive fallback
+            self.text_response(500, str(error))
+            return
+
+        self.json_response(200, response)
 
 
 class K8sApi:
@@ -477,6 +545,49 @@ class RelayRuntime:
             os.environ.get("CONDUCTOR_RELAY_PUPPET_SSL_DIR", "").strip()
             or "/etc/puppetlabs/puppet/ssl"
         )
+        self.code_deploy_enabled = env_bool("CONDUCTOR_RELAY_CODE_DEPLOY_ENABLED", False)
+        self.code_deploy_service_host = (
+            os.environ.get("CONDUCTOR_RELAY_CODE_DEPLOY_SERVICE_HOST", "").strip()
+            or "pe"
+        )
+        self.code_deploy_hook_listen_host = (
+            os.environ.get("CONDUCTOR_RELAY_CODE_DEPLOY_HOOK_LISTEN_HOST", "").strip()
+            or "0.0.0.0"
+        )
+        self.code_deploy_hook_listen_port = env_int(
+            "CONDUCTOR_RELAY_CODE_DEPLOY_HOOK_LISTEN_PORT",
+            18082,
+        )
+        self.code_deploy_hook_path = (
+            os.environ.get("CONDUCTOR_RELAY_CODE_DEPLOY_HOOK_PATH", "").strip()
+            or DEFAULT_CODE_DEPLOY_HOOK_PATH
+        )
+        self.code_deploy_target_roles = env_csv(
+            "CONDUCTOR_RELAY_CODE_DEPLOY_TARGET_ROLES",
+            default=DEFAULT_CODE_DEPLOY_TARGET_ROLES,
+        )
+        self.code_deploy_username = (
+            os.environ.get("CONDUCTOR_RELAY_CODE_DEPLOY_USERNAME", "").strip()
+            or "admin"
+        )
+        self.code_deploy_password = os.environ.get("CONDUCTOR_RELAY_CODE_DEPLOY_PASSWORD", "")
+        self.code_deploy_token_lifetime = (
+            os.environ.get("CONDUCTOR_RELAY_CODE_DEPLOY_TOKEN_LIFETIME", "").strip()
+            or "15m"
+        )
+        self.code_deploy_token_label = (
+            os.environ.get("CONDUCTOR_RELAY_CODE_DEPLOY_TOKEN_LABEL", "").strip()
+            or "pe-k8s-conductor-code-deploy"
+        )
+        self.code_deploy_request_timeout_seconds = env_int(
+            "CONDUCTOR_RELAY_CODE_DEPLOY_REQUEST_TIMEOUT_SECONDS",
+            900,
+        )
+        self.code_deploy_status_poll_interval = env_int(
+            "CONDUCTOR_RELAY_CODE_DEPLOY_STATUS_POLL_INTERVAL_SECONDS",
+            60,
+        )
+        self.code_deploy_state_path = os.path.join(self.output_dir, DEFAULT_CODE_DEPLOY_STATE_FILENAME)
         self.ca_sync_enabled = env_bool("CONDUCTOR_RELAY_CA_SYNC_ENABLED", False)
         self.ca_sync_dir = (
             os.environ.get("CONDUCTOR_RELAY_CA_SYNC_DIR", "").strip()
@@ -508,6 +619,14 @@ class RelayRuntime:
         self.last_secret_poll = 0
         self.pending_onboarding_warning = False
         self.command_proxy_start_error = ""
+        self.code_deploy_hook_start_error = ""
+        self.code_deploy_runtime_error = ""
+        self.code_deploy_suppressions = {}
+        self.code_deploy_queue = queue.Queue()
+        self.code_deploy_queued = set()
+        self.code_deploy_worker_thread = None
+        self.code_deploy_states = {}
+        self.last_code_deploy_status_poll = 0
 
         self.connection = None
         self.channel = None
@@ -520,6 +639,8 @@ class RelayRuntime:
 
         self.command_proxy_server = None
         self.command_proxy_thread = None
+        self.code_deploy_hook_server = None
+        self.code_deploy_hook_thread = None
 
         self.status = {
             "participant": self.pod_name,
@@ -550,6 +671,19 @@ class RelayRuntime:
             "lastCommandPublishedAt": 0,
             "lastCommandReplayedAt": 0,
             "lastReplayError": "",
+            "codeDeployEnabled": self.code_deploy_enabled,
+            "codeDeployHookReady": not self.code_deploy_enabled,
+            "codeDeployReady": not self.code_deploy_enabled,
+            "codeDeployHookUrl": "",
+            "codeDeployTargetRoles": list(self.code_deploy_target_roles),
+            "codeDeployEnvironmentCount": 0,
+            "codeDeployConvergedCount": 0,
+            "codeDeployPendingCount": 0,
+            "codeDeployFailureCount": 0,
+            "codeDeployLastPublishedAt": 0,
+            "codeDeployLastConvergedAt": 0,
+            "codeDeployLastError": "",
+            "codeDeployEnvironments": {},
             "caSyncEnabled": self.ca_sync_enabled,
             "caSyncReady": not self.ca_sync_enabled,
             "caSyncDir": self.ca_sync_dir if self.ca_sync_enabled else "",
@@ -572,6 +706,7 @@ class RelayRuntime:
             "lastError": "",
             "lastUpdatedAt": 0,
         }
+        self.load_code_deploy_state()
 
     @staticmethod
     def decode_onboarding_secret(secret):
@@ -597,6 +732,282 @@ class RelayRuntime:
         with self.lock:
             self.status["lastUpdatedAt"] = status["lastUpdatedAt"]
         write_text_file(self.status_path, json.dumps(status, indent=2, sort_keys=True) + "\n")
+
+    @staticmethod
+    def default_code_deploy_state(environment):
+        return {
+            "environment": environment,
+            "state": "idle",
+            "desiredSignature": "",
+            "actualSignature": "",
+            "desiredDeployId": 0,
+            "actualDeployId": 0,
+            "desiredCodeCommit": "",
+            "desiredEnvironmentCommit": "",
+            "actualCodeCommit": "",
+            "actualEnvironmentCommit": "",
+            "originParticipant": "",
+            "desiredPublishedAt": 0,
+            "lastReceivedAt": 0,
+            "lastPublishedAt": 0,
+            "lastRequestedAt": 0,
+            "lastAttemptAt": 0,
+            "lastStatusPollAt": 0,
+            "lastConvergedAt": 0,
+            "lastError": "",
+            "lastErrorAt": 0,
+        }
+
+    def code_deploy_hook_url(self):
+        return (
+            f"https://{self.code_deploy_service_host}:"
+            f"{self.code_deploy_hook_listen_port}{self.code_deploy_hook_path}"
+        )
+
+    def refresh_code_deploy_summary_locked(self):
+        hook_ready = not self.code_deploy_enabled or (
+            self.code_deploy_hook_server is not None
+            and self.code_deploy_hook_thread is not None
+            and self.code_deploy_hook_thread.is_alive()
+        )
+        states = {
+            environment: dict(state)
+            for environment, state in sorted(self.code_deploy_states.items())
+        }
+
+        pending_count = 0
+        failure_count = 0
+        converged_count = 0
+        last_published_at = 0
+        last_converged_at = 0
+        ready = not self.code_deploy_enabled or hook_ready
+
+        for state in states.values():
+            desired_signature = (state.get("desiredSignature") or "").strip()
+            actual_signature = (state.get("actualSignature") or "").strip()
+            phase = (state.get("state") or "idle").strip() or "idle"
+
+            if phase == "failed":
+                failure_count += 1
+                ready = False
+            elif desired_signature and actual_signature == desired_signature and phase == "converged":
+                converged_count += 1
+            elif phase in {"pending", "in-progress"} or (
+                desired_signature and actual_signature != desired_signature
+            ):
+                pending_count += 1
+                ready = False
+
+            last_published_at = max(
+                last_published_at,
+                int(state.get("lastPublishedAt") or 0),
+                int(state.get("desiredPublishedAt") or 0),
+            )
+            last_converged_at = max(last_converged_at, int(state.get("lastConvergedAt") or 0))
+
+        last_error = self.code_deploy_hook_start_error or self.code_deploy_runtime_error or ""
+        if not last_error:
+            error_candidates = [
+                (
+                    int(state.get("lastErrorAt") or 0),
+                    environment,
+                    (state.get("lastError") or "").strip(),
+                )
+                for environment, state in states.items()
+                if (state.get("lastError") or "").strip()
+            ]
+            if error_candidates:
+                last_error = max(error_candidates)[2]
+
+        self.status.update(
+            {
+                "codeDeployHookReady": hook_ready,
+                "codeDeployReady": ready,
+                "codeDeployHookUrl": self.code_deploy_hook_url() if self.code_deploy_enabled else "",
+                "codeDeployEnvironmentCount": len(states),
+                "codeDeployConvergedCount": converged_count,
+                "codeDeployPendingCount": pending_count,
+                "codeDeployFailureCount": failure_count,
+                "codeDeployLastPublishedAt": last_published_at,
+                "codeDeployLastConvergedAt": last_converged_at,
+                "codeDeployLastError": last_error,
+                "codeDeployEnvironments": states,
+            }
+        )
+
+    def refresh_code_deploy_summary(self):
+        with self.lock:
+            self.refresh_code_deploy_summary_locked()
+
+    def persist_code_deploy_state(self):
+        with self.lock:
+            payload = {
+                "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+                "kind": "ConductorRelayCodeDeployState",
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "environments": {
+                    environment: dict(state)
+                    for environment, state in sorted(self.code_deploy_states.items())
+                },
+            }
+        write_text_file(self.code_deploy_state_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    def load_code_deploy_state(self):
+        states = {}
+        if self.code_deploy_enabled and os.path.isfile(self.code_deploy_state_path):
+            try:
+                payload = read_json_file(self.code_deploy_state_path)
+                raw_states = payload.get("environments") or {}
+                for raw_environment, raw_state in raw_states.items():
+                    environment = ((raw_state or {}).get("environment") or raw_environment or "").strip()
+                    if not environment:
+                        continue
+                    state = self.default_code_deploy_state(environment)
+                    if isinstance(raw_state, dict):
+                        state.update(raw_state)
+                    state["environment"] = environment
+                    states[environment] = state
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
+                log(f"Failed to load code deploy state: {error}")
+        with self.lock:
+            self.code_deploy_states = states
+            self.refresh_code_deploy_summary_locked()
+
+    def code_deploy_state_for(self, environment):
+        environment = (environment or "").strip()
+        if not environment:
+            return self.default_code_deploy_state("")
+        with self.lock:
+            state = dict(
+                self.code_deploy_states.get(environment) or self.default_code_deploy_state(environment)
+            )
+        state["environment"] = environment
+        return state
+
+    def merge_code_deploy_state(self, environment, **updates):
+        environment = (environment or "").strip()
+        if not environment:
+            raise RuntimeError("code deploy environment is required")
+
+        with self.lock:
+            state = dict(
+                self.code_deploy_states.get(environment) or self.default_code_deploy_state(environment)
+            )
+            state["environment"] = environment
+            state.update(updates)
+            if "lastError" in updates:
+                if (updates.get("lastError") or "").strip():
+                    state["lastErrorAt"] = int(updates.get("lastErrorAt") or time.time())
+                else:
+                    state["lastErrorAt"] = 0
+            self.code_deploy_states[environment] = state
+            self.refresh_code_deploy_summary_locked()
+            snapshot = dict(state)
+
+        self.persist_code_deploy_state()
+        return snapshot
+
+    def suppress_code_deploy_hook(self, environment, expected_signature=""):
+        environment = (environment or "").strip()
+        if not environment:
+            return
+        with self.lock:
+            self.code_deploy_suppressions[environment] = {
+                "expectedSignature": (expected_signature or "").strip(),
+                "mode": "any",
+                "expiresAt": int(time.time()) + max(self.code_deploy_request_timeout_seconds + 120, 600),
+            }
+
+    def narrow_code_deploy_suppression(self, environment, expected_signature=""):
+        environment = (environment or "").strip()
+        if not environment:
+            return
+        with self.lock:
+            suppression = self.code_deploy_suppressions.get(environment)
+            if suppression is None:
+                return
+            suppression["expectedSignature"] = (expected_signature or "").strip()
+            suppression["mode"] = "signature"
+
+    def clear_code_deploy_suppression(self, environment):
+        environment = (environment or "").strip()
+        if not environment:
+            return
+        with self.lock:
+            self.code_deploy_suppressions.pop(environment, None)
+
+    def hook_is_suppressed(self, environment, signature=""):
+        environment = (environment or "").strip()
+        if not environment:
+            return False
+
+        signature = (signature or "").strip()
+        with self.lock:
+            suppression = self.code_deploy_suppressions.get(environment)
+            if suppression is None:
+                return False
+            if int(suppression.get("expiresAt") or 0) <= int(time.time()):
+                self.code_deploy_suppressions.pop(environment, None)
+                return False
+            if suppression.get("mode") == "any":
+                return True
+            expected_signature = (suppression.get("expectedSignature") or "").strip()
+            return not expected_signature or expected_signature == signature
+
+    def start_code_deploy_worker(self):
+        if not self.code_deploy_enabled:
+            return
+
+        if self.code_deploy_worker_thread is not None and self.code_deploy_worker_thread.is_alive():
+            return
+
+        self.code_deploy_worker_thread = threading.Thread(
+            target=self.code_deploy_worker_loop,
+            name="conductor-relay-code-deploy",
+            daemon=True,
+        )
+        self.code_deploy_worker_thread.start()
+
+    def schedule_code_deploy(self, environment):
+        environment = (environment or "").strip()
+        if not environment:
+            return
+        with self.lock:
+            if environment in self.code_deploy_queued:
+                return
+            self.code_deploy_queued.add(environment)
+        self.code_deploy_queue.put(environment)
+
+    def code_deploy_worker_loop(self):
+        while True:
+            environment = self.code_deploy_queue.get()
+            should_retry = False
+            try:
+                self.reconcile_code_deploy_environment(environment)
+            except Exception as error:  # pragma: no cover - defensive fallback
+                log(f"Unexpected code deploy worker failure for {environment}: {error}")
+                self.merge_code_deploy_state(
+                    environment,
+                    state="failed",
+                    lastError=str(error),
+                )
+            finally:
+                with self.lock:
+                    self.code_deploy_queued.discard(environment)
+                    state = dict(self.code_deploy_states.get(environment) or {})
+                desired_signature = (state.get("desiredSignature") or "").strip()
+                actual_signature = (state.get("actualSignature") or "").strip()
+                phase = (state.get("state") or "").strip()
+                should_retry = bool(
+                    desired_signature
+                    and desired_signature != actual_signature
+                    and phase not in {"failed", "converged"}
+                )
+                self.code_deploy_queue.task_done()
+
+            if should_retry:
+                self.schedule_code_deploy(environment)
 
     def close_connection(self):
         if self.connection is not None:
@@ -1043,6 +1454,572 @@ class RelayRuntime:
                 self.command_proxy_start_error = str(error)
             self.set_status(commandProxyReady=False)
 
+    @staticmethod
+    def extract_code_deploy_result(payload, environment=""):
+        if not isinstance(payload, dict):
+            return {
+                "environment": (environment or "").strip(),
+                "status": "",
+                "deployId": 0,
+                "deploySignature": "",
+                "environmentCommit": "",
+                "codeCommit": "",
+            }
+
+        file_sync = payload.get("file-sync") or payload.get("fileSync") or {}
+        result_environment = ((payload.get("environment") or environment or "")).strip()
+        return {
+            "environment": result_environment,
+            "status": (payload.get("status") or "").strip(),
+            "deployId": int(payload.get("id") or 0),
+            "deploySignature": (
+                payload.get("deploy-signature")
+                or payload.get("deploySignature")
+                or file_sync.get("deploy-signature")
+                or file_sync.get("deploySignature")
+                or ""
+            ).strip(),
+            "environmentCommit": (
+                file_sync.get("environment-commit")
+                or file_sync.get("environmentCommit")
+                or payload.get("environment-commit")
+                or payload.get("environmentCommit")
+                or ""
+            ).strip(),
+            "codeCommit": (
+                file_sync.get("code-commit")
+                or file_sync.get("codeCommit")
+                or payload.get("code-commit")
+                or payload.get("codeCommit")
+                or ""
+            ).strip(),
+        }
+
+    @classmethod
+    def extract_code_manager_status_entries(cls, payload):
+        results = {}
+        if not isinstance(payload, dict):
+            return results
+
+        deployed = ((payload.get("file-sync-storage-status") or {}).get("deployed"))
+        if isinstance(deployed, list):
+            for item in deployed:
+                result = cls.extract_code_deploy_result(item)
+                environment = (result.get("environment") or "").strip()
+                if environment:
+                    results[environment] = result
+            return results
+
+        if isinstance(deployed, dict):
+            if (deployed.get("environment") or "").strip() or (deployed.get("deploy-signature") or "").strip():
+                result = cls.extract_code_deploy_result(deployed)
+                environment = (result.get("environment") or "").strip()
+                if environment:
+                    results[environment] = result
+                return results
+
+            for raw_environment, item in deployed.items():
+                if isinstance(item, dict):
+                    result = cls.extract_code_deploy_result(item, environment=raw_environment)
+                else:
+                    result = cls.extract_code_deploy_result(
+                        {
+                            "environment": raw_environment,
+                            "deploy-signature": item,
+                        }
+                    )
+                environment = (result.get("environment") or "").strip()
+                if environment:
+                    results[environment] = result
+
+        return results
+
+    def build_local_service_context(self):
+        _, _, _, ca_path = self.puppet_ssl_paths()
+        return ssl.create_default_context(cafile=ca_path)
+
+    def ensure_code_deploy_hook_running(self):
+        if not self.code_deploy_enabled:
+            return
+
+        if (
+            self.code_deploy_hook_server is not None
+            and self.code_deploy_hook_thread is not None
+            and self.code_deploy_hook_thread.is_alive()
+        ):
+            self.code_deploy_hook_start_error = ""
+            self.code_deploy_runtime_error = ""
+            self.refresh_code_deploy_summary()
+            return
+
+        try:
+            _, cert_path, key_path, _ = self.puppet_ssl_paths()
+            server = ThreadingHTTPServer(
+                (self.code_deploy_hook_listen_host, self.code_deploy_hook_listen_port),
+                LocalCodeDeployHookHandler,
+            )
+            server.runtime = self
+            server.daemon_threads = True
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+            thread = threading.Thread(
+                target=server.serve_forever,
+                name="conductor-relay-code-deploy-hook",
+                daemon=True,
+            )
+            thread.start()
+            self.code_deploy_hook_server = server
+            self.code_deploy_hook_thread = thread
+            self.code_deploy_hook_start_error = ""
+            self.code_deploy_runtime_error = ""
+            self.refresh_code_deploy_summary()
+            log(
+                "Started code deploy hook listener on "
+                f"{self.code_deploy_hook_listen_host}:{self.code_deploy_hook_listen_port}"
+            )
+        except Exception as error:
+            if str(error) != self.code_deploy_hook_start_error:
+                log(f"Code deploy hook startup failed: {error}")
+                self.code_deploy_hook_start_error = str(error)
+            self.code_deploy_runtime_error = str(error)
+            self.refresh_code_deploy_summary()
+
+    def issue_code_deploy_token(self):
+        if not self.code_deploy_username or not self.code_deploy_password:
+            raise RuntimeError("code deploy credentials are not configured")
+
+        context = self.build_local_service_context()
+        payload = {
+            "login": self.code_deploy_username,
+            "password": self.code_deploy_password,
+            "lifetime": self.code_deploy_token_lifetime,
+            "label": f"{self.code_deploy_token_label}-{uuid.uuid4().hex[:12]}",
+        }
+        status_code, body = http_request_json(
+            "POST",
+            f"https://{self.code_deploy_service_host}:4433/rbac-api/v1/auth/token",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            payload=payload,
+            context=context,
+            timeout=min(self.code_deploy_request_timeout_seconds, 60),
+        )
+        if status_code != 200:
+            raise RuntimeError(f"RBAC token request returned {status_code}: {body}")
+        decoded = json.loads(body)
+        if isinstance(decoded, str):
+            return decoded
+        if isinstance(decoded, dict) and (decoded.get("token") or "").strip():
+            return decoded["token"].strip()
+        raise RuntimeError("RBAC token request returned an unexpected payload")
+
+    def code_manager_request(self, method, path, payload=None):
+        token = self.issue_code_deploy_token()
+        context = self.build_local_service_context()
+        status_code, body = http_request_json(
+            method,
+            f"https://{self.code_deploy_service_host}:8170/code-manager/v1{path}",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "X-Authentication": token,
+            },
+            payload=payload,
+            context=context,
+            timeout=self.code_deploy_request_timeout_seconds,
+        )
+        if not body:
+            return status_code, None
+        try:
+            return status_code, json.loads(body)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                f"Code Manager {method} {path} returned non-JSON response: {body}"
+            ) from error
+
+    def refresh_local_code_deploy_status(self, force=False):
+        if not self.code_deploy_enabled:
+            return
+
+        now = int(time.time())
+        if not force and now - self.last_code_deploy_status_poll < self.code_deploy_status_poll_interval:
+            return
+
+        status_code, payload = self.code_manager_request("GET", "/deploys/status")
+        if status_code != 200:
+            raise RuntimeError(f"Code Manager status returned {status_code}: {payload}")
+
+        for environment, result in self.extract_code_manager_status_entries(payload).items():
+            desired_signature = (
+                self.code_deploy_state_for(environment).get("desiredSignature") or ""
+            ).strip()
+            actual_signature = (result.get("deploySignature") or "").strip()
+            updates = {
+                "actualSignature": actual_signature,
+                "actualDeployId": int(result.get("deployId") or 0),
+                "actualCodeCommit": (result.get("codeCommit") or "").strip(),
+                "actualEnvironmentCommit": (result.get("environmentCommit") or "").strip(),
+                "lastStatusPollAt": now,
+            }
+            if desired_signature and actual_signature == desired_signature:
+                updates.update(
+                    {
+                        "state": "converged",
+                        "lastConvergedAt": now,
+                        "lastError": "",
+                    }
+                )
+            elif desired_signature and actual_signature != desired_signature:
+                current_state = (self.code_deploy_state_for(environment).get("state") or "").strip()
+                updates["state"] = current_state if current_state in {"pending", "in-progress", "failed"} else "stale"
+            elif actual_signature:
+                updates.update(
+                    {
+                        "state": "observed",
+                        "lastError": "",
+                    }
+                )
+            self.merge_code_deploy_state(environment, **updates)
+
+        self.last_code_deploy_status_poll = now
+        self.code_deploy_runtime_error = ""
+        self.refresh_code_deploy_summary()
+
+    def publish_code_deploy_intent(self, environment, hook_payload, published_at):
+        environment = (environment or "").strip()
+        result = self.extract_code_deploy_result(hook_payload, environment=environment)
+        deploy_signature = (result.get("deploySignature") or "").strip()
+        if not deploy_signature:
+            raise RuntimeError(f"code deploy hook for {environment} did not include a deploy signature")
+
+        payload = {
+            "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+            "kind": "ConductorRelayCodeDeployIntent",
+            "publishedAt": int(published_at),
+            "origin": {
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "role": self.relay_role,
+                "segment": self.segment_name,
+            },
+            "targetRoles": list(self.code_deploy_target_roles),
+            "environment": environment,
+            "deploy": {
+                "environment": environment,
+                "id": int(result.get("deployId") or 0),
+                "status": (result.get("status") or "complete").strip() or "complete",
+                "deploySignature": deploy_signature,
+                "fileSync": {
+                    "environmentCommit": (result.get("environmentCommit") or "").strip(),
+                    "codeCommit": (result.get("codeCommit") or "").strip(),
+                },
+            },
+        }
+        self.publish_envelope(
+            f"relay.code-deploy.{sanitize_fragment(environment)}",
+            payload,
+        )
+        return result
+
+    def handle_local_code_deploy_hook(self, payload):
+        if not self.code_deploy_enabled:
+            raise RelayLocalCommandError(404, "code deploy hooks are disabled")
+
+        environment = (payload.get("environment") or "").strip()
+        if not environment:
+            raise RelayLocalCommandError(400, "code deploy hook is missing environment")
+
+        result = self.extract_code_deploy_result(payload, environment=environment)
+        status_value = (result.get("status") or "").strip()
+        if status_value and status_value != "complete":
+            return {
+                "environment": environment,
+                "published": False,
+                "suppressed": False,
+                "ignored": True,
+                "status": status_value,
+            }
+
+        deploy_signature = (result.get("deploySignature") or "").strip()
+        if not deploy_signature:
+            raise RelayLocalCommandError(400, "code deploy hook is missing deploy signature")
+
+        published_at = int(time.time())
+        if self.hook_is_suppressed(environment, deploy_signature):
+            self.clear_code_deploy_suppression(environment)
+            desired_signature = (
+                self.code_deploy_state_for(environment).get("desiredSignature") or ""
+            ).strip()
+            updates = {
+                "actualSignature": deploy_signature,
+                "actualDeployId": int(result.get("deployId") or 0),
+                "actualCodeCommit": (result.get("codeCommit") or "").strip(),
+                "actualEnvironmentCommit": (result.get("environmentCommit") or "").strip(),
+            }
+            if desired_signature and deploy_signature == desired_signature:
+                updates.update(
+                    {
+                        "state": "converged",
+                        "lastConvergedAt": published_at,
+                        "lastError": "",
+                    }
+                )
+            elif desired_signature and deploy_signature != desired_signature:
+                updates.update(
+                    {
+                        "state": "failed",
+                        "lastError": (
+                            "local replay converged to the wrong deploy signature: "
+                            f"expected {desired_signature}, got {deploy_signature}"
+                        ),
+                    }
+                )
+            else:
+                updates.update(
+                    {
+                        "state": "observed",
+                        "lastError": "",
+                    }
+                )
+            self.merge_code_deploy_state(environment, **updates)
+            log(
+                f"Suppressed replay hook for {environment} at {deploy_signature[:12]}"
+            )
+            return {
+                "environment": environment,
+                "deploySignature": deploy_signature,
+                "published": False,
+                "suppressed": True,
+            }
+
+        try:
+            self.publish_code_deploy_intent(environment, payload, published_at)
+            self.code_deploy_runtime_error = ""
+        except Exception as error:
+            self.code_deploy_runtime_error = str(error)
+            self.merge_code_deploy_state(
+                environment,
+                state="failed",
+                desiredSignature=deploy_signature,
+                actualSignature=deploy_signature,
+                desiredDeployId=int(result.get("deployId") or 0),
+                actualDeployId=int(result.get("deployId") or 0),
+                desiredCodeCommit=(result.get("codeCommit") or "").strip(),
+                actualCodeCommit=(result.get("codeCommit") or "").strip(),
+                desiredEnvironmentCommit=(result.get("environmentCommit") or "").strip(),
+                actualEnvironmentCommit=(result.get("environmentCommit") or "").strip(),
+                originParticipant=self.pod_name,
+                desiredPublishedAt=published_at,
+                lastPublishedAt=published_at,
+                lastError=f"failed to publish code deploy intent: {error}",
+            )
+            raise RelayLocalCommandError(503, f"failed to publish code deploy intent: {error}") from error
+
+        self.merge_code_deploy_state(
+            environment,
+            state="converged",
+            desiredSignature=deploy_signature,
+            actualSignature=deploy_signature,
+            desiredDeployId=int(result.get("deployId") or 0),
+            actualDeployId=int(result.get("deployId") or 0),
+            desiredCodeCommit=(result.get("codeCommit") or "").strip(),
+            actualCodeCommit=(result.get("codeCommit") or "").strip(),
+            desiredEnvironmentCommit=(result.get("environmentCommit") or "").strip(),
+            actualEnvironmentCommit=(result.get("environmentCommit") or "").strip(),
+            originParticipant=self.pod_name,
+            desiredPublishedAt=published_at,
+            lastPublishedAt=published_at,
+            lastConvergedAt=published_at,
+            lastError="",
+        )
+        log(f"Published code deploy intent for {environment} at {deploy_signature[:12]}")
+        return {
+            "environment": environment,
+            "deploySignature": deploy_signature,
+            "published": True,
+            "suppressed": False,
+        }
+
+    def handle_remote_code_deploy_intent(self, payload):
+        if not self.code_deploy_enabled:
+            return
+
+        origin = payload.get("origin") or {}
+        if (origin.get("participant") or "").strip() == self.pod_name:
+            return
+
+        target_roles = payload.get("targetRoles") or []
+        if target_roles and self.relay_role not in target_roles:
+            return
+
+        deploy = payload.get("deploy") or {}
+        environment = (payload.get("environment") or deploy.get("environment") or "").strip()
+        if not environment:
+            raise RuntimeError("code deploy intent is missing environment")
+
+        result = self.extract_code_deploy_result(
+            {
+                "environment": environment,
+                "id": deploy.get("id"),
+                "status": deploy.get("status"),
+                "deploySignature": deploy.get("deploySignature"),
+                "fileSync": deploy.get("fileSync"),
+            },
+            environment=environment,
+        )
+        desired_signature = (result.get("deploySignature") or "").strip()
+        if not desired_signature:
+            raise RuntimeError(f"code deploy intent for {environment} is missing deploy signature")
+
+        published_at = int(payload.get("publishedAt") or 0)
+        current_state = self.code_deploy_state_for(environment)
+        current_published_at = int(current_state.get("desiredPublishedAt") or 0)
+        if current_published_at and published_at and published_at < current_published_at:
+            return
+        if (
+            current_published_at
+            and published_at
+            and published_at == current_published_at
+            and desired_signature == (current_state.get("desiredSignature") or "").strip()
+        ):
+            return
+
+        actual_signature = (current_state.get("actualSignature") or "").strip()
+        updates = {
+            "desiredSignature": desired_signature,
+            "desiredDeployId": int(result.get("deployId") or 0),
+            "desiredCodeCommit": (result.get("codeCommit") or "").strip(),
+            "desiredEnvironmentCommit": (result.get("environmentCommit") or "").strip(),
+            "originParticipant": (origin.get("participant") or "").strip(),
+            "desiredPublishedAt": published_at or int(time.time()),
+            "lastReceivedAt": int(time.time()),
+            "lastError": "",
+        }
+        if actual_signature and actual_signature == desired_signature:
+            updates.update(
+                {
+                    "state": "converged",
+                    "lastConvergedAt": int(time.time()),
+                }
+            )
+        else:
+            updates["state"] = "pending"
+
+        self.merge_code_deploy_state(environment, **updates)
+        log(
+            "Received code deploy intent for "
+            f"{environment} at {desired_signature[:12]} from {origin.get('participant') or 'unknown'}"
+        )
+        if actual_signature != desired_signature:
+            self.schedule_code_deploy(environment)
+
+    def request_local_code_deploy(self, environment):
+        status_code, payload = self.code_manager_request(
+            "POST",
+            "/deploys",
+            payload={
+                "environments": [environment],
+                "wait": True,
+            },
+        )
+        if status_code not in {200, 202}:
+            raise RuntimeError(f"Code Manager deploy returned {status_code}: {payload}")
+
+        if isinstance(payload, list):
+            for item in payload:
+                result = self.extract_code_deploy_result(item, environment=environment)
+                if (result.get("environment") or "").strip() == environment:
+                    break
+            else:
+                result = self.extract_code_deploy_result(payload[0] if payload else {}, environment=environment)
+        else:
+            result = self.extract_code_deploy_result(payload, environment=environment)
+
+        if (result.get("status") or "").strip() != "complete":
+            raise RuntimeError(
+                f"Code Manager deploy for {environment} did not complete successfully: {result}"
+            )
+        if not (result.get("deploySignature") or "").strip():
+            raise RuntimeError(f"Code Manager deploy for {environment} did not return a deploy signature")
+        return result
+
+    def reconcile_code_deploy_environment(self, environment):
+        environment = (environment or "").strip()
+        if not environment:
+            return
+
+        state = self.code_deploy_state_for(environment)
+        desired_signature = (state.get("desiredSignature") or "").strip()
+        actual_signature = (state.get("actualSignature") or "").strip()
+        if not desired_signature:
+            return
+        if actual_signature and actual_signature == desired_signature:
+            self.merge_code_deploy_state(
+                environment,
+                state="converged",
+                lastConvergedAt=int(time.time()),
+                lastError="",
+            )
+            return
+
+        attempt_at = int(time.time())
+        self.merge_code_deploy_state(
+            environment,
+            state="in-progress",
+            lastRequestedAt=attempt_at,
+            lastAttemptAt=attempt_at,
+            lastError="",
+        )
+        self.suppress_code_deploy_hook(environment, desired_signature)
+
+        try:
+            result = self.request_local_code_deploy(environment)
+            actual_signature = (result.get("deploySignature") or "").strip()
+            self.narrow_code_deploy_suppression(environment, actual_signature or desired_signature)
+
+            updates = {
+                "actualSignature": actual_signature,
+                "actualDeployId": int(result.get("deployId") or 0),
+                "actualCodeCommit": (result.get("codeCommit") or "").strip(),
+                "actualEnvironmentCommit": (result.get("environmentCommit") or "").strip(),
+                "lastAttemptAt": int(time.time()),
+            }
+            if actual_signature != desired_signature:
+                updates.update(
+                    {
+                        "state": "failed",
+                        "lastError": (
+                            "local replay converged to the wrong deploy signature: "
+                            f"expected {desired_signature}, got {actual_signature or 'none'}"
+                        ),
+                    }
+                )
+            else:
+                updates.update(
+                    {
+                        "state": "converged",
+                        "lastConvergedAt": int(time.time()),
+                        "lastError": "",
+                    }
+                )
+            self.merge_code_deploy_state(environment, **updates)
+            self.code_deploy_runtime_error = ""
+            log(
+                f"Replayed code deploy for {environment} at {actual_signature[:12]}"
+            )
+        except Exception as error:
+            self.code_deploy_runtime_error = str(error)
+            self.merge_code_deploy_state(
+                environment,
+                state="failed",
+                lastAttemptAt=int(time.time()),
+                lastError=str(error),
+            )
+            log(f"Code deploy replay failed for {environment}: {error}")
+
     def current_publish_credentials(self):
         with self.lock:
             if self.bundle is None or not self.publish_username or not self.publish_password:
@@ -1392,6 +2369,19 @@ class RelayRuntime:
                 channel.basic_nack(method.delivery_tag, requeue=True)
             return
 
+        if kind == "ConductorRelayCodeDeployIntent":
+            try:
+                self.handle_remote_code_deploy_intent(payload)
+                self.set_status(lastReceivedAt=int(time.time()))
+                channel.basic_ack(method.delivery_tag)
+            except Exception as error:
+                self.code_deploy_runtime_error = str(error)
+                self.refresh_code_deploy_summary()
+                log(f"Remote code deploy intent handling failed: {error}")
+                time.sleep(2)
+                channel.basic_nack(method.delivery_tag, requeue=True)
+            return
+
         if kind == "ConductorRelayCaState":
             try:
                 self.apply_remote_ca_state(payload)
@@ -1486,6 +2476,7 @@ class RelayRuntime:
 
         self.refresh_peer_counts()
         self.refresh_ca_peer_counts()
+        self.refresh_code_deploy_summary()
         self.set_status(lastPublishedAt=now)
         payload_status = self.snapshot_status()
         payload_status["lastUpdatedAt"] = now
@@ -1509,6 +2500,8 @@ class RelayRuntime:
             last_error = ""
             try:
                 self.ensure_command_proxy_running()
+                self.ensure_code_deploy_hook_running()
+                self.start_code_deploy_worker()
                 self.refresh_participant_status()
             except KeyboardInterrupt:
                 raise
@@ -1532,6 +2525,16 @@ class RelayRuntime:
                     localSyncAgeSeconds=None,
                 )
                 log(f"PuppetDB status refresh failed: {error}")
+
+            try:
+                self.refresh_local_code_deploy_status()
+            except KeyboardInterrupt:
+                raise
+            except Exception as error:
+                last_error = str(error)
+                self.code_deploy_runtime_error = str(error)
+                self.refresh_code_deploy_summary()
+                log(f"Code deploy status refresh failed: {error}")
 
             try:
                 self.refresh_onboarding(force=self.connection is None or not self.connection.is_open)

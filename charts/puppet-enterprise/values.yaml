@@ -156,6 +156,22 @@ conductor:
         - replace facts
         - store report
         - deactivate node
+    codeDeploy:
+      enabled: false
+      statusPollIntervalSeconds: 60
+      requestTimeoutSeconds: 900
+      targetRoles:
+        - control-plane
+      auth:
+        username: admin
+        password: ""
+        tokenLifetime: 15m
+        tokenLabel: pe-k8s-conductor-code-deploy
+      hook:
+        listenHost: 0.0.0.0
+        listenPort: 18082
+        path: /conductor/code-manager/v1/post-environment
+        useClientSsl: true
     resources: {}
   gateway:
     enabled: false

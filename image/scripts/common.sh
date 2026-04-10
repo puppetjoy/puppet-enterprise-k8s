@@ -463,6 +463,51 @@ PY
     log "Configured Relay command submission through ${puppetdb_conf_path}"
 }
 
+sync_relay_code_manager_post_environment_hooks() {
+    local hook_enabled="${PE_K8S_CODE_DEPLOY_HOOK_ENABLED:-false}"
+    local hook_conf_path=/etc/puppetlabs/puppetserver/conf.d/pe-k8s-code-deploy-hooks.conf
+    local hook_url="${PE_K8S_CODE_DEPLOY_HOOK_URL:-}"
+    local use_client_ssl="${PE_K8S_CODE_DEPLOY_HOOK_USE_CLIENT_SSL:-true}"
+
+    if [ "${hook_enabled}" != "true" ]; then
+        rm -f "${hook_conf_path}"
+        return 0
+    fi
+
+    [ -n "${hook_url}" ] || {
+        log "Code deploy hook URL is empty; refusing to configure Code Manager hooks"
+        return 1
+    }
+
+    python3 - "${hook_conf_path}" "${hook_url}" "${use_client_ssl}" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+hook_conf_path = Path(sys.argv[1])
+hook_url = sys.argv[2]
+use_client_ssl = sys.argv[3].strip().lower() in {"1", "true", "yes", "on"}
+
+content = "\n".join([
+    "code-manager: {",
+    "  hooks: {",
+    "    post-environment: [",
+    "      {",
+    f"        url: {json.dumps(hook_url)}",
+    f"        use-client-ssl: {'true' if use_client_ssl else 'false'}",
+    "      }",
+    "    ]",
+    "  }",
+    "}",
+    "",
+])
+
+hook_conf_path.write_text(content, encoding="utf-8")
+PY
+
+    log "Configured Code Manager post-environment hooks in ${hook_conf_path}"
+}
+
 copy_exported_sysconfig_into_rootfs() {
     local path
     local target
