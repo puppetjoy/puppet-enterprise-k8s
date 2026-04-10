@@ -103,3 +103,21 @@ spec:
     - name: ace-server
       port: 44633
       targetPort: ace-svc
+{{- if .Values.controlPlane.console.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pe.consoleServiceName" . }}
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: pe-services
+    pe-k8s.puppet.com/console-active: "true"
+  ports:
+    - name: http
+      port: 80
+      targetPort: nginx-http
+{{- end }}

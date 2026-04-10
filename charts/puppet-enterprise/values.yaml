@@ -76,6 +76,9 @@ storage:
 controlPlane:
   replicaCount: 1
   podManagementPolicy: OrderedReady
+  console:
+    enabled: false
+    selectorPollIntervalSeconds: 5
   ca:
     provider: selfSigned
     importTimeoutSeconds: 300

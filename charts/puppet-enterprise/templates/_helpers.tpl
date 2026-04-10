@@ -33,6 +33,10 @@ pe
 {{- printf "%s-headless" (include "pe.controlPlaneStatefulSetName" .) -}}
 {{- end -}}
 
+{{- define "pe.consoleServiceName" -}}
+{{- printf "%s-console" (include "pe.fullname" .) -}}
+{{- end -}}
+
 {{- define "pe.controlPlanePodNameForIndex" -}}
 {{- $root := .root -}}
 {{- $index := int .index -}}

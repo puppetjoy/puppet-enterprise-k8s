@@ -27,7 +27,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "pe.fullname" . }}
+                name: {{ ternary (include "pe.consoleServiceName" .) (include "pe.fullname" .) .Values.controlPlane.console.enabled }}
                 port:
                   name: http
 {{- end }}
