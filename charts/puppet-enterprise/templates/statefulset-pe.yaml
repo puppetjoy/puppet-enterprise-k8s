@@ -405,6 +405,8 @@ spec:
           imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
           command: ["/usr/local/bin/conductor-participant"]
           env:
+            - name: CONDUCTOR_PARTICIPANT_ROLE
+              value: control-plane
             - name: CONDUCTOR_POD_NAME
               valueFrom:
                 fieldRef:
@@ -423,8 +425,22 @@ spec:
               value: {{ .Values.conductor.participant.heartbeatIntervalSeconds | quote }}
             - name: CONDUCTOR_SECRET_POLL_INTERVAL_SECONDS
               value: {{ .Values.conductor.participant.secretPollIntervalSeconds | quote }}
+            - name: CONDUCTOR_TRUST_POLL_INTERVAL_SECONDS
+              value: {{ .Values.conductor.participant.trustPollIntervalSeconds | quote }}
+            - name: CONDUCTOR_TRUST_OUTPUT_DIR
+              value: {{ .Values.conductor.participant.trustOutputDir | quote }}
+            - name: CONDUCTOR_TRUST_SOURCE_CA_PATH
+              value: {{ .Values.conductor.controlPlaneTrust.caPath | quote }}
+            - name: CONDUCTOR_TRUST_SOURCE_CRL_PATH
+              value: {{ .Values.conductor.controlPlaneTrust.crlPath | quote }}
           resources:
 {{ toYaml .Values.conductor.participant.resources | indent 12 }}
+          volumeMounts:
+            - name: etc
+              mountPath: /etc/puppetlabs
+              readOnly: true
+            - name: conductor-trust
+              mountPath: {{ .Values.conductor.participant.trustOutputDir | quote }}
         {{- end }}
       volumes:
         - name: pe-conf
@@ -432,6 +448,10 @@ spec:
             name: {{ include "pe.fullname" . }}-conf
         - name: logs
           emptyDir: {}
+        {{- if .Values.conductor.enabled }}
+        - name: conductor-trust
+          emptyDir: {}
+        {{- end }}
         {{- if .Values.license.secretName }}
         - name: license
           secret:

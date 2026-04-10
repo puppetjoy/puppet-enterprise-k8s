@@ -222,6 +222,8 @@ spec:
           imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
           command: ["/usr/local/bin/conductor-participant"]
           env:
+            - name: CONDUCTOR_PARTICIPANT_ROLE
+              value: compiler
             - name: CONDUCTOR_POD_NAME
               valueFrom:
                 fieldRef:
@@ -240,12 +242,23 @@ spec:
               value: {{ .Values.conductor.participant.heartbeatIntervalSeconds | quote }}
             - name: CONDUCTOR_SECRET_POLL_INTERVAL_SECONDS
               value: {{ .Values.conductor.participant.secretPollIntervalSeconds | quote }}
+            - name: CONDUCTOR_TRUST_POLL_INTERVAL_SECONDS
+              value: {{ .Values.conductor.participant.trustPollIntervalSeconds | quote }}
+            - name: CONDUCTOR_TRUST_OUTPUT_DIR
+              value: {{ .Values.conductor.participant.trustOutputDir | quote }}
           resources:
 {{ toYaml .Values.conductor.participant.resources | indent 12 }}
+          volumeMounts:
+            - name: conductor-trust
+              mountPath: {{ .Values.conductor.participant.trustOutputDir | quote }}
         {{- end }}
       volumes:
         - name: logs
           emptyDir: {}
+        {{- if .Values.conductor.enabled }}
+        - name: conductor-trust
+          emptyDir: {}
+        {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: etc

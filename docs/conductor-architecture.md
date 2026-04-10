@@ -53,7 +53,7 @@ The current foundation slice models that as:
 - one or more release domains inside that segment
 - one or more stable workload sets inside each release domain
 
-Today both the compiler `StatefulSet` and the `pe` control-plane `StatefulSet` fit that model. Warden can already issue onboarding bundles for those workload members, and the PE chart can consume them with optional participant sidecars. The next control-plane step is not member discovery. It is trust and state convergence between the control-plane replicas.
+Today both the compiler `StatefulSet` and the `pe` control-plane `StatefulSet` fit that model. Warden can already issue onboarding bundles for those workload members, the PE chart can consume them with optional participant sidecars, and Warden can assemble a release trust bundle from control-plane CA and CRL sources. The next control-plane step is not member discovery. It is turning that trust foundation into authoritative CA behaviour and PE-state convergence between the control-plane replicas.
 
 ## Relay
 

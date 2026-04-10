@@ -8,3 +8,6 @@ Hub management API:
 
 Warden publishes per-participant onboarding bundles into Secrets labeled:
   pe-k8s.puppet.com/conductor=onboarding-bundle
+
+Warden also assembles segment trust bundles into Secrets labeled:
+  pe-k8s.puppet.com/conductor=trust-bundle

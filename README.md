@@ -9,7 +9,7 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 - Installs PE with Helm and preserves the install result on non-shared per-replica PVCs
 - Runs PostgreSQL, PuppetDB, the non-compiler Puppet Server, and PE edge/API services in a stateful `pe` control-plane pod set
 - Supports an optional compiler pool with per-replica non-shared PVCs, local PostgreSQL/PuppetDB, file-sync/PuppetDB-based readiness, and compiler-side PCP brokers
-- Supports optional Conductor participants on the control-plane and compiler pods via Warden-issued onboarding bundles and a separate Fabric hub
+- Supports optional Conductor participants on the control-plane and compiler pods via Warden-issued onboarding bundles, release trust bundles, and a separate Fabric hub
 - Supports multiple release-scoped PE instances in one cluster for isolated development and validation
 - Treats one Helm release, not multiple separate releases, as the future active-active replication domain
 - Keeps compilers attached to one owning PE instance; compilers are not a replication mesh
@@ -160,12 +160,12 @@ This project is intentionally conservative right now:
 
 - each PE instance and compiler replica owns its own non-shared PVCs
 - the control plane now has stable per-replica identity and storage, but active-active control-plane synchronization is still in development
-- the current Conductor foundation slice can onboard one `pe` control-plane pod and the attached compiler pods into Fabric
+- the current Conductor foundation slice can onboard one `pe` control-plane pod and the attached compiler pods into Fabric, then assemble and distribute a release trust bundle
 - compiler capacity can scale horizontally behind `service/pe-compiler`
 - centralized `puppet-code deploy` remains the code rollout entrypoint
 - separate Helm releases are independent sandboxes, not synchronization peers
 - active-active HA work is Conductor-aligned: Fabric, Relay, Gateway, and Warden
-- increasing `controlPlane.replicaCount` alone does not produce safe active-active PE service yet; CA and PE-owned state still need replicated convergence
+- increasing `controlPlane.replicaCount` alone does not produce safe active-active PE service yet; trust distribution is now present, but CA authority and PE-owned state still need replicated convergence
 - the repo does not yet deliver full active-active PE replication
 - code rollout across Workers remains operator-initiated through Code Manager; later Fabric work may propagate deploy intent and convergence state between Workers
 - charts provide generic defaults, not a ready-made cluster profile

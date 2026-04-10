@@ -143,10 +143,13 @@ When `conductor.enabled=true` on the PE chart:
 - the sidecar derives its participant identity from the StatefulSet pod name
 - the sidecar fetches its Warden-managed onboarding Secret from the Kubernetes API
 - the sidecar joins the Fabric hub as a queue consumer for that pod identity
+- control-plane pods publish local `ca.pem` and `crl.pem` material back into the Conductor namespace
+- Warden assembles a segment trust bundle from those control-plane trust sources
+- participant sidecars install the current trust bundle into a pod-local directory for later Relay and Gateway consumption
 
 That gives the release a real Fabric membership model without shared storage or hard-coded peer lists.
 It does not yet mean the release is safe to run with multiple active control-plane replicas behind `service/pe`.
-The remaining gap is replicated trust and PE-owned state, especially CA and management data convergence.
+The remaining gap is authoritative CA behaviour and PE-owned state convergence across those replicas.
 
 ## Code Manager
 
@@ -218,7 +221,7 @@ Open design work remains around:
 - ownership and security hardening
 - secrets and certificate rotation
 
-One specific gap used to be that the `pe` workload had no stable per-replica identity or storage. That gap is now closed at the chart/runtime layer: `pe` is a StatefulSet with per-replica PVCs and runtime-rendered identity. Another recent gap was release-internal Fabric membership; that is now present through the optional `conductor-participant` sidecars. The remaining gap is active-active synchronization of PE-owned state across the control-plane replicas themselves.
+One specific gap used to be that the `pe` workload had no stable per-replica identity or storage. That gap is now closed at the chart/runtime layer: `pe` is a StatefulSet with per-replica PVCs and runtime-rendered identity. Another recent gap was release-internal Fabric membership and trust distribution; that is now present through the optional `conductor-participant` sidecars and Warden-assembled trust bundles. The remaining gap is active-active synchronization of PE-owned state across the control-plane replicas themselves.
 
 The mapping doc [legacy-service-mapping.md](legacy-service-mapping.md) is the source of truth for the next decomposition steps.
 

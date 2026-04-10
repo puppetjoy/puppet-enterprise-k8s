@@ -20,6 +20,7 @@ Conductor integration:
   Segment: {{ .Values.conductor.segmentName }}
   Onboarding Namespace: {{ include "pe.conductorNamespace" . }}
   Participant Prefix Source: StatefulSet pod names
+  Trust Output Dir: {{ .Values.conductor.participant.trustOutputDir }}
 {{- end }}
 
 Start with internal service access:

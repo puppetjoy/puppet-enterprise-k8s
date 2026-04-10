@@ -89,7 +89,12 @@ conductor:
       pullPolicy: IfNotPresent
     heartbeatIntervalSeconds: 15
     secretPollIntervalSeconds: 15
+    trustPollIntervalSeconds: 15
+    trustOutputDir: /var/lib/conductor/trust
     resources: {}
+  controlPlaneTrust:
+    caPath: /etc/puppetlabs/puppet/ssl/certs/ca.pem
+    crlPath: /etc/puppetlabs/puppet/ssl/crl.pem
 
 installer:
   forceReinstall: false

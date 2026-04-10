@@ -15,6 +15,10 @@ import urllib.request
 import pika
 
 
+CONDUCTOR_LABEL_KEY = "pe-k8s.puppet.com/conductor"
+TRUST_SOURCE_LABEL_VALUE = "trust-source"
+
+
 def log(message):
     print(f"[participant] {message}", flush=True)
 
@@ -31,8 +35,64 @@ def sanitize_fragment(value):
     return cleaned or "default"
 
 
+def b64encode_text(value):
+    return base64.b64encode(value.encode("utf-8")).decode("ascii")
+
+
 def b64decode_text(value):
     return base64.b64decode(value.encode("ascii")).decode("utf-8")
+
+
+def sha256_text(value):
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def participant_secret_name(prefix, segment_name, participant_name, suffix):
+    parts = [
+        sanitize_fragment(prefix),
+        sanitize_fragment(segment_name),
+        sanitize_fragment(participant_name),
+        sanitize_fragment(suffix),
+    ]
+    name = "-".join(part for part in parts if part)
+    return name[:63].rstrip("-")
+
+
+def segment_secret_name(prefix, segment_name, suffix):
+    parts = [
+        sanitize_fragment(prefix),
+        sanitize_fragment(segment_name),
+        sanitize_fragment(suffix),
+    ]
+    name = "-".join(part for part in parts if part)
+    return name[:63].rstrip("-")
+
+
+def normalize_pem_block(block):
+    return block.strip() + "\n"
+
+
+def pem_blocks(pem_text, block_type):
+    pattern = re.compile(
+        rf"-----BEGIN {re.escape(block_type)}-----.*?-----END {re.escape(block_type)}-----\s*",
+        re.DOTALL,
+    )
+    return [normalize_pem_block(match.group(0)) for match in pattern.finditer(pem_text or "")]
+
+
+def read_text_file(path):
+    with open(path, "r", encoding="utf-8") as handle:
+        return handle.read()
+
+
+def write_text_file(path, content):
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    temp_path = f"{path}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    os.replace(temp_path, path)
 
 
 def http_request(method, url, headers=None, payload=None, context=None):
@@ -90,6 +150,39 @@ class K8sApi:
         status, data = self.request("GET", path, expected={200, 404})
         return data if status == 200 else None
 
+    def upsert_secret(self, name, labels, annotations, string_data, namespace=None):
+        namespace = namespace or self.namespace
+        desired = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": name,
+                "namespace": namespace,
+                "labels": labels,
+                "annotations": annotations,
+            },
+            "type": "Opaque",
+            "data": {key: b64encode_text(value) for key, value in string_data.items()},
+        }
+        existing = self.get_secret(name, namespace=namespace)
+        if existing is not None:
+            existing_data = existing.get("data", {})
+            existing_labels = existing.get("metadata", {}).get("labels", {})
+            existing_annotations = existing.get("metadata", {}).get("annotations", {})
+            if (
+                existing_data == desired["data"]
+                and existing_labels == labels
+                and existing_annotations == annotations
+            ):
+                return False
+            desired["metadata"]["resourceVersion"] = existing["metadata"]["resourceVersion"]
+            path = f"/api/v1/namespaces/{namespace}/secrets/{name}"
+            self.request("PUT", path, payload=desired, expected={200})
+            return True
+        path = f"/api/v1/namespaces/{namespace}/secrets"
+        self.request("POST", path, payload=desired, expected={201})
+        return True
+
 
 class ParticipantRuntime:
     def __init__(self):
@@ -98,38 +191,55 @@ class ParticipantRuntime:
         self.conductor_namespace = os.environ.get("CONDUCTOR_NAMESPACE", self.pod_namespace).strip() or self.pod_namespace
         self.resource_prefix = os.environ["CONDUCTOR_RESOURCE_PREFIX"].strip()
         self.segment_name = os.environ["CONDUCTOR_SEGMENT_NAME"].strip()
+        self.participant_role = os.environ.get("CONDUCTOR_PARTICIPANT_ROLE", "worker").strip() or "worker"
         self.secret_poll_interval = env_int("CONDUCTOR_SECRET_POLL_INTERVAL_SECONDS", 15)
         self.heartbeat_interval = env_int("CONDUCTOR_HEARTBEAT_INTERVAL_SECONDS", 15)
+        self.trust_poll_interval = env_int("CONDUCTOR_TRUST_POLL_INTERVAL_SECONDS", self.secret_poll_interval)
+        self.trust_source_ca_path = os.environ.get("CONDUCTOR_TRUST_SOURCE_CA_PATH", "").strip()
+        self.trust_source_crl_path = os.environ.get("CONDUCTOR_TRUST_SOURCE_CRL_PATH", "").strip()
+        self.trust_output_dir = os.environ.get("CONDUCTOR_TRUST_OUTPUT_DIR", "").strip()
+
         self.k8s = K8sApi(self.pod_namespace)
-        self.current_fingerprint = ""
-        self.secret_name = self.build_secret_name(self.resource_prefix, self.segment_name, self.pod_name)
+        self.onboarding_secret_name = participant_secret_name(
+            self.resource_prefix,
+            self.segment_name,
+            self.pod_name,
+            "onboarding",
+        )
+        self.trust_source_secret_name = participant_secret_name(
+            self.resource_prefix,
+            self.segment_name,
+            self.pod_name,
+            "trust-source",
+        )
+        self.trust_bundle_secret_name = segment_secret_name(
+            self.resource_prefix,
+            self.segment_name,
+            "trust-bundle",
+        )
+
+        self.current_onboarding_fingerprint = ""
+        self.current_trust_source_fingerprint = ""
+        self.current_trust_bundle_fingerprint = ""
+        self.last_secret_poll = 0
+        self.last_trust_source_poll = 0
+        self.last_trust_bundle_poll = 0
+        self.pending_onboarding_warning = False
+        self.pending_trust_source_warning = False
+        self.pending_trust_bundle_warning = False
+
         self.connection = None
         self.channel = None
         self.bundle = None
-        self.last_secret_poll = 0
         self.next_heartbeat = 0
-        self.pending_secret_warning = False
 
     @staticmethod
-    def build_secret_name(prefix, segment_name, participant_name):
-        parts = [
-            sanitize_fragment(prefix),
-            sanitize_fragment(segment_name),
-            sanitize_fragment(participant_name),
-            "onboarding",
-        ]
-        name = "-".join(part for part in parts if part)
-        return name[:63].rstrip("-")
-
-    @staticmethod
-    def decode_secret(secret):
+    def decode_onboarding_secret(secret):
         data = secret.get("data", {})
         onboarding_json = b64decode_text(data["onboarding.json"])
         username = b64decode_text(data["username"])
         password = b64decode_text(data["password"])
-        fingerprint = hashlib.sha256(
-            "\n".join([onboarding_json, username, password]).encode("utf-8")
-        ).hexdigest()
+        fingerprint = sha256_text("\n".join([onboarding_json, username, password]))
         bundle = json.loads(onboarding_json)
         return fingerprint, bundle, username, password
 
@@ -190,30 +300,143 @@ class ParticipantRuntime:
             f"via {bundle['hub']['host']}:{bundle['hub']['amqpPort']}"
         )
 
-    def refresh_secret(self, force=False):
+    def refresh_onboarding(self, force=False):
         now = time.time()
         if not force and now - self.last_secret_poll < self.secret_poll_interval:
             return
         self.last_secret_poll = now
 
-        secret = self.k8s.get_secret(self.secret_name, namespace=self.conductor_namespace)
+        secret = self.k8s.get_secret(self.onboarding_secret_name, namespace=self.conductor_namespace)
         if secret is None:
-            if not self.pending_secret_warning:
+            if not self.pending_onboarding_warning:
                 log(
-                    f"Waiting for onboarding secret {self.conductor_namespace}/{self.secret_name}"
+                    f"Waiting for onboarding secret {self.conductor_namespace}/{self.onboarding_secret_name}"
                 )
-                self.pending_secret_warning = True
+                self.pending_onboarding_warning = True
             self.close_connection()
             return
 
-        self.pending_secret_warning = False
-        fingerprint, bundle, username, password = self.decode_secret(secret)
-        if fingerprint == self.current_fingerprint and self.connection is not None and self.connection.is_open:
+        self.pending_onboarding_warning = False
+        fingerprint, bundle, username, password = self.decode_onboarding_secret(secret)
+        if (
+            fingerprint == self.current_onboarding_fingerprint
+            and self.connection is not None
+            and self.connection.is_open
+        ):
             return
 
         self.close_connection()
         self.connect(bundle, username, password)
-        self.current_fingerprint = fingerprint
+        self.current_onboarding_fingerprint = fingerprint
+
+    def refresh_trust_source(self, force=False):
+        if not self.trust_source_ca_path or not self.trust_source_crl_path:
+            return
+
+        now = time.time()
+        if not force and now - self.last_trust_source_poll < self.trust_poll_interval:
+            return
+        self.last_trust_source_poll = now
+
+        if not os.path.isfile(self.trust_source_ca_path) or not os.path.isfile(self.trust_source_crl_path):
+            if not self.pending_trust_source_warning:
+                log(
+                    "Waiting for local trust material at "
+                    f"{self.trust_source_ca_path} and {self.trust_source_crl_path}"
+                )
+                self.pending_trust_source_warning = True
+            return
+
+        ca_pem = "".join(pem_blocks(read_text_file(self.trust_source_ca_path), "CERTIFICATE"))
+        crl_pem = "".join(pem_blocks(read_text_file(self.trust_source_crl_path), "X509 CRL"))
+        if not ca_pem or not crl_pem:
+            if not self.pending_trust_source_warning:
+                log(
+                    "Waiting for parseable local trust material at "
+                    f"{self.trust_source_ca_path} and {self.trust_source_crl_path}"
+                )
+                self.pending_trust_source_warning = True
+            return
+
+        self.pending_trust_source_warning = False
+        metadata = {
+            "participant": self.pod_name,
+            "role": self.participant_role,
+            "namespace": self.pod_namespace,
+            "segment": self.segment_name,
+            "caBlockCount": len(pem_blocks(ca_pem, "CERTIFICATE")),
+            "crlBlockCount": len(pem_blocks(crl_pem, "X509 CRL")),
+            "caSha256": sha256_text(ca_pem),
+            "crlSha256": sha256_text(crl_pem),
+        }
+        fingerprint = sha256_text(
+            "\n".join([ca_pem, crl_pem, json.dumps(metadata, sort_keys=True)])
+        )
+        updated = self.k8s.upsert_secret(
+            self.trust_source_secret_name,
+            labels={
+                CONDUCTOR_LABEL_KEY: TRUST_SOURCE_LABEL_VALUE,
+                "pe-k8s.puppet.com/fabric-segment": sanitize_fragment(self.segment_name),
+                "pe-k8s.puppet.com/participant": sanitize_fragment(self.pod_name),
+            },
+            annotations={
+                "pe-k8s.puppet.com/participant-role": self.participant_role,
+            },
+            string_data={
+                "ca.pem": ca_pem,
+                "crl.pem": crl_pem,
+                "metadata.json": json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+            },
+            namespace=self.conductor_namespace,
+        )
+        if updated or fingerprint != self.current_trust_source_fingerprint:
+            log(
+                f"Published trust source {self.conductor_namespace}/{self.trust_source_secret_name}"
+            )
+        self.current_trust_source_fingerprint = fingerprint
+
+    def refresh_trust_bundle(self, force=False):
+        if not self.trust_output_dir:
+            return
+
+        now = time.time()
+        if not force and now - self.last_trust_bundle_poll < self.trust_poll_interval:
+            return
+        self.last_trust_bundle_poll = now
+
+        secret = self.k8s.get_secret(self.trust_bundle_secret_name, namespace=self.conductor_namespace)
+        if secret is None:
+            if not self.pending_trust_bundle_warning:
+                log(
+                    f"Waiting for trust bundle secret {self.conductor_namespace}/{self.trust_bundle_secret_name}"
+                )
+                self.pending_trust_bundle_warning = True
+            return
+
+        data = secret.get("data", {})
+        ca_pem = b64decode_text(data["ca.pem"]) if "ca.pem" in data else ""
+        crl_pem = b64decode_text(data["crl.pem"]) if "crl.pem" in data else ""
+        metadata_json = b64decode_text(data["metadata.json"]) if "metadata.json" in data else "{}\n"
+        if not ca_pem or not crl_pem:
+            if not self.pending_trust_bundle_warning:
+                log(
+                    f"Waiting for populated trust bundle secret {self.conductor_namespace}/{self.trust_bundle_secret_name}"
+                )
+                self.pending_trust_bundle_warning = True
+            return
+
+        self.pending_trust_bundle_warning = False
+        fingerprint = sha256_text("\n".join([ca_pem, crl_pem, metadata_json]))
+        if fingerprint == self.current_trust_bundle_fingerprint:
+            return
+
+        write_text_file(os.path.join(self.trust_output_dir, "ca.pem"), ca_pem)
+        write_text_file(os.path.join(self.trust_output_dir, "crl.pem"), crl_pem)
+        write_text_file(os.path.join(self.trust_output_dir, "metadata.json"), metadata_json)
+        self.current_trust_bundle_fingerprint = fingerprint
+        log(
+            f"Installed trust bundle {self.conductor_namespace}/{self.trust_bundle_secret_name}"
+        )
 
     def publish_heartbeat(self):
         if self.connection is None or self.channel is None or self.bundle is None:
@@ -241,7 +464,9 @@ class ParticipantRuntime:
     def run(self):
         while True:
             try:
-                self.refresh_secret(force=self.connection is None)
+                self.refresh_trust_source(force=self.current_trust_source_fingerprint == "")
+                self.refresh_trust_bundle(force=self.current_trust_bundle_fingerprint == "")
+                self.refresh_onboarding(force=self.connection is None)
                 if self.connection is not None and self.connection.is_open:
                     self.publish_heartbeat()
                     self.connection.process_data_events(time_limit=1)

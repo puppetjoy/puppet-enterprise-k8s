@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -13,8 +14,10 @@ import urllib.parse
 import urllib.request
 
 
-ONBOARDING_LABEL_KEY = "pe-k8s.puppet.com/conductor"
+CONDUCTOR_LABEL_KEY = "pe-k8s.puppet.com/conductor"
 ONBOARDING_LABEL_VALUE = "onboarding-bundle"
+TRUST_SOURCE_LABEL_VALUE = "trust-source"
+TRUST_BUNDLE_LABEL_VALUE = "trust-bundle"
 API_VERSION = "pe-k8s/v1alpha1"
 KIND = "ConductorOnboardingBundle"
 
@@ -42,12 +45,22 @@ def sanitize_fragment(value):
     return cleaned or "default"
 
 
-def resource_name(prefix, segment_name, participant_name):
+def participant_secret_name(prefix, segment_name, participant_name, suffix):
     parts = [
         sanitize_fragment(prefix),
         sanitize_fragment(segment_name),
         sanitize_fragment(participant_name),
-        "onboarding",
+        sanitize_fragment(suffix),
+    ]
+    name = "-".join(part for part in parts if part)
+    return name[:63].rstrip("-")
+
+
+def segment_secret_name(prefix, segment_name, suffix):
+    parts = [
+        sanitize_fragment(prefix),
+        sanitize_fragment(segment_name),
+        sanitize_fragment(suffix),
     ]
     name = "-".join(part for part in parts if part)
     return name[:63].rstrip("-")
@@ -67,6 +80,35 @@ def b64encode_text(value):
 
 def b64decode_text(value):
     return base64.b64decode(value.encode("ascii")).decode("utf-8")
+
+
+def sha256_text(value):
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def normalize_pem_block(block):
+    return block.strip() + "\n"
+
+
+def pem_blocks(pem_text, block_type):
+    pattern = re.compile(
+        rf"-----BEGIN {re.escape(block_type)}-----.*?-----END {re.escape(block_type)}-----\s*",
+        re.DOTALL,
+    )
+    return [normalize_pem_block(match.group(0)) for match in pattern.finditer(pem_text or "")]
+
+
+def unique_pem_blocks(blocks):
+    seen = set()
+    unique = []
+    for block in blocks:
+        normalized = normalize_pem_block(block)
+        fingerprint = sha256_text(normalized)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        unique.append(normalized)
+    return unique
 
 
 def http_request(method, url, headers=None, payload=None, context=None):
@@ -198,7 +240,10 @@ class RabbitMqApi:
 class K8sApi:
     def __init__(self, namespace):
         host = os.environ.get("KUBERNETES_SERVICE_HOST", "").strip()
-        port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", os.environ.get("KUBERNETES_SERVICE_PORT", "443")).strip()
+        port = os.environ.get(
+            "KUBERNETES_SERVICE_PORT_HTTPS",
+            os.environ.get("KUBERNETES_SERVICE_PORT", "443"),
+        ).strip()
         if not host:
             raise RuntimeError("KUBERNETES_SERVICE_HOST is not set")
         self.namespace = namespace
@@ -389,7 +434,9 @@ def build_release_domain_participants(k8s, default_namespace, domain):
 
         kind = workload_set.get("kind", "StatefulSet")
         if kind.lower() != "statefulset":
-            log(f"Skipping unsupported workload kind {kind!r} in release domain {release_name or '<unnamed>'}")
+            log(
+                f"Skipping unsupported workload kind {kind!r} in release domain {release_name or '<unnamed>'}"
+            )
             continue
 
         workload_name = workload_set.get("resourceName", "").strip()
@@ -447,6 +494,39 @@ def participant_namespaces(default_namespace, segment, participants):
     return namespaces or {default_namespace}
 
 
+def decode_json_field(secret, key):
+    data = secret.get("data", {})
+    if key not in data:
+        return {}
+    try:
+        return json.loads(b64decode_text(data[key]))
+    except json.JSONDecodeError:
+        return {}
+
+
+def load_trust_source(secret):
+    data = secret.get("data", {})
+    ca_pem = b64decode_text(data["ca.pem"]) if "ca.pem" in data else ""
+    crl_pem = b64decode_text(data["crl.pem"]) if "crl.pem" in data else ""
+    ca_blocks = unique_pem_blocks(pem_blocks(ca_pem, "CERTIFICATE"))
+    crl_blocks = unique_pem_blocks(pem_blocks(crl_pem, "X509 CRL"))
+    metadata = decode_json_field(secret, "metadata.json")
+    secret_metadata = secret.get("metadata", {})
+    labels = secret_metadata.get("labels", {})
+    annotations = secret_metadata.get("annotations", {})
+    summary = {
+        "participant": metadata.get("participant") or labels.get("pe-k8s.puppet.com/participant", ""),
+        "role": metadata.get("role") or annotations.get("pe-k8s.puppet.com/participant-role", ""),
+        "namespace": metadata.get("namespace", ""),
+        "segment": metadata.get("segment", ""),
+        "caBlockCount": len(ca_blocks),
+        "crlBlockCount": len(crl_blocks),
+        "caSha256": sha256_text("".join(ca_blocks)) if ca_blocks else "",
+        "crlSha256": sha256_text("".join(crl_blocks)) if crl_blocks else "",
+    }
+    return summary, ca_blocks, crl_blocks
+
+
 def prune_stale_participants(
     k8s,
     rabbit,
@@ -459,7 +539,7 @@ def prune_stale_participants(
 ):
     segment_key = sanitize_fragment(segment["name"])
     label_selector = (
-        f"{ONBOARDING_LABEL_KEY}={ONBOARDING_LABEL_VALUE},"
+        f"{CONDUCTOR_LABEL_KEY}={ONBOARDING_LABEL_VALUE},"
         f"pe-k8s.puppet.com/fabric-segment={segment_key}"
     )
     for namespace in participant_namespaces(default_namespace, segment, participants):
@@ -483,6 +563,95 @@ def prune_stale_participants(
         if queue_name.startswith("participant.") and queue_name not in desired_queue_names:
             rabbit.delete_queue(segment["vhost"], queue_name)
             log(f"Pruned stale RabbitMQ queue {queue_name} from {segment['vhost']}")
+
+
+def reconcile_trust_bundle(k8s, prefix, default_namespace, segment, participants, prune_stale):
+    segment_name = segment["name"]
+    segment_key = sanitize_fragment(segment_name)
+    trust_namespace = default_namespace
+    desired_source_names = set()
+    source_summaries = []
+    ca_blocks = []
+    crl_blocks = []
+
+    for participant in participants:
+        if participant.get("role", "") != "control-plane":
+            continue
+        secret_name = participant_secret_name(prefix, segment_name, participant["name"], "trust-source")
+        desired_source_names.add(secret_name)
+        secret = k8s.get_secret(secret_name, namespace=trust_namespace)
+        if secret is None:
+            continue
+
+        summary, source_ca_blocks, source_crl_blocks = load_trust_source(secret)
+        if not source_ca_blocks or not source_crl_blocks:
+            log(f"Skipping incomplete trust source {secret_name} in namespace {trust_namespace}")
+            continue
+
+        summary["participant"] = participant["name"]
+        summary["role"] = participant.get("role", "")
+        if participant.get("releaseName"):
+            summary["releaseName"] = participant["releaseName"]
+        if participant.get("workloadName"):
+            summary["workloadName"] = participant["workloadName"]
+        source_summaries.append(summary)
+        ca_blocks.extend(source_ca_blocks)
+        crl_blocks.extend(source_crl_blocks)
+
+    if prune_stale:
+        label_selector = (
+            f"{CONDUCTOR_LABEL_KEY}={TRUST_SOURCE_LABEL_VALUE},"
+            f"pe-k8s.puppet.com/fabric-segment={segment_key}"
+        )
+        for secret in k8s.list_secrets(label_selector, namespace=trust_namespace):
+            secret_name = secret["metadata"]["name"]
+            if secret_name in desired_source_names:
+                continue
+            k8s.delete_secret(secret_name, namespace=trust_namespace)
+            log(f"Pruned stale trust source {secret_name} from namespace {trust_namespace}")
+
+    bundle_name = segment_secret_name(prefix, segment_name, "trust-bundle")
+    if not source_summaries:
+        if prune_stale and k8s.get_secret(bundle_name, namespace=trust_namespace) is not None:
+            k8s.delete_secret(bundle_name, namespace=trust_namespace)
+            log(f"Pruned empty trust bundle {bundle_name} from namespace {trust_namespace}")
+        return
+
+    unique_ca_blocks = unique_pem_blocks(ca_blocks)
+    unique_crl_blocks = unique_pem_blocks(crl_blocks)
+    metadata = {
+        "apiVersion": API_VERSION,
+        "kind": "ConductorTrustBundle",
+        "segment": {
+            "name": segment_name,
+            "vhost": segment["vhost"],
+            "pkiDomain": segment.get("pkiDomain", ""),
+            "region": segment.get("region", ""),
+        },
+        "generatedAt": int(time.time()),
+        "sourceCount": len(source_summaries),
+        "caBlockCount": len(unique_ca_blocks),
+        "crlBlockCount": len(unique_crl_blocks),
+        "sources": source_summaries,
+    }
+    updated = k8s.upsert_secret(
+        bundle_name,
+        labels={
+            CONDUCTOR_LABEL_KEY: TRUST_BUNDLE_LABEL_VALUE,
+            "pe-k8s.puppet.com/fabric-segment": segment_key,
+        },
+        annotations={
+            "pe-k8s.puppet.com/trust-source-count": str(len(source_summaries)),
+        },
+        string_data={
+            "ca.pem": "".join(unique_ca_blocks),
+            "crl.pem": "".join(unique_crl_blocks),
+            "metadata.json": json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        },
+        namespace=trust_namespace,
+    )
+    if updated:
+        log(f"Reconciled trust bundle {bundle_name} for segment {segment_name}")
 
 
 def reconcile_segment(k8s, rabbit, config, prefix, default_namespace, segment, prune_stale):
@@ -513,7 +682,7 @@ def reconcile_segment(k8s, rabbit, config, prefix, default_namespace, segment, p
     for participant in participants:
         namespace = participant.get("namespace") or default_namespace
         name = participant["name"]
-        secret_name = resource_name(prefix, segment_name, name)
+        secret_name = participant_secret_name(prefix, segment_name, name, "onboarding")
         secret = k8s.get_secret(secret_name, namespace=namespace)
         password = existing_password(secret) or secrets.token_urlsafe(24)
         username = participant.get("username") or participant_username(segment_name, name)
@@ -548,7 +717,7 @@ def reconcile_segment(k8s, rabbit, config, prefix, default_namespace, segment, p
         updated = k8s.upsert_secret(
             secret_name,
             labels={
-                ONBOARDING_LABEL_KEY: ONBOARDING_LABEL_VALUE,
+                CONDUCTOR_LABEL_KEY: ONBOARDING_LABEL_VALUE,
                 "pe-k8s.puppet.com/fabric-segment": sanitize_fragment(segment_name),
                 "pe-k8s.puppet.com/participant": sanitize_fragment(name),
             },
@@ -562,6 +731,8 @@ def reconcile_segment(k8s, rabbit, config, prefix, default_namespace, segment, p
         )
         if updated:
             log(f"Reconciled onboarding bundle {secret_name} for {name} in segment {segment_name}")
+
+    reconcile_trust_bundle(k8s, prefix, default_namespace, segment, participants, prune_stale)
 
     if prune_stale:
         prune_stale_participants(
