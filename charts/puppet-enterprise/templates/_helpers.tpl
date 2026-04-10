@@ -25,55 +25,81 @@ pe
 {{- include "pe.fullname" . -}}
 {{- end -}}
 
+{{- define "pe.controlPlaneStatefulSetName" -}}
+{{- include "pe.fullname" . -}}
+{{- end -}}
+
+{{- define "pe.controlPlaneHeadlessServiceName" -}}
+{{- printf "%s-headless" (include "pe.controlPlaneStatefulSetName" .) -}}
+{{- end -}}
+
+{{- define "pe.controlPlanePodNameForIndex" -}}
+{{- $root := .root -}}
+{{- $index := int .index -}}
+{{- printf "%s-%d" (include "pe.controlPlaneStatefulSetName" $root) $index -}}
+{{- end -}}
+
+{{- define "pe.controlPlaneDefaultCertnameForIndex" -}}
+{{- $root := .root -}}
+{{- $podName := include "pe.controlPlanePodNameForIndex" . -}}
+{{- printf "%s.%s.%s.svc.cluster.local" $podName (include "pe.controlPlaneHeadlessServiceName" $root) $root.Release.Namespace -}}
+{{- end -}}
+
 {{- define "pe.certname" -}}
-{{- default (include "pe.identity" .) .Values.peConfig.certname -}}
+{{- if .Values.peConfig.certname -}}
+{{- .Values.peConfig.certname -}}
+{{- else -}}
+{{- include "pe.controlPlaneDefaultCertnameForIndex" (dict "root" . "index" 0) -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "pe.puppetMasterHost" -}}
 {{- default (include "pe.identity" .) .Values.peConfig.puppetMasterHost -}}
 {{- end -}}
 
-{{- define "pe.dnsAltNames" -}}
+{{- define "pe.controlPlaneFrontDoorDnsNames" -}}
 {{- $identity := include "pe.identity" . -}}
-{{- $certname := include "pe.certname" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
-{{- $internal := list
-    $certname
-    $puppetMasterHost
+{{- $serviceNames := list
     $identity
     (printf "%s.%s" $identity .Release.Namespace)
     (printf "%s.%s.svc" $identity .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $identity .Release.Namespace)
 -}}
+{{- $frontDoorNames := list $puppetMasterHost -}}
 {{- $external := list -}}
+{{- if .Values.peConfig.certname -}}
+{{- $external = append $external .Values.peConfig.certname -}}
+{{- end -}}
 {{- if .Values.network.technicalHostname -}}
 {{- $external = append $external .Values.network.technicalHostname -}}
 {{- end -}}
 {{- $additional := default (list) .Values.network.additionalDnsAltNames -}}
-{{- $dnsAltNames := concat $internal $external $additional | uniq -}}
+{{- $dnsAltNames := concat $serviceNames $frontDoorNames $external $additional | uniq -}}
 {{- range $dnsAltNames }}
 - {{ . | quote }}
 {{- end -}}
 {{- end -}}
 
-{{- define "pe.dnsAltNamesHocon" -}}
+{{- define "pe.controlPlaneFrontDoorDnsNamesHocon" -}}
 {{- $identity := include "pe.identity" . -}}
-{{- $certname := include "pe.certname" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
-{{- $internal := list
-    $certname
-    $puppetMasterHost
+{{- $serviceNames := list
     $identity
     (printf "%s.%s" $identity .Release.Namespace)
     (printf "%s.%s.svc" $identity .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $identity .Release.Namespace)
 -}}
+{{- $frontDoorNames := list $puppetMasterHost -}}
 {{- $external := list -}}
+{{- if .Values.peConfig.certname -}}
+{{- $external = append $external .Values.peConfig.certname -}}
+{{- end -}}
 {{- if .Values.network.technicalHostname -}}
 {{- $external = append $external .Values.network.technicalHostname -}}
 {{- end -}}
 {{- $additional := default (list) .Values.network.additionalDnsAltNames -}}
-{{- $dnsAltNames := concat $internal $external $additional | uniq -}}
+{{- $dnsAltNames := concat $serviceNames $frontDoorNames $external $additional | uniq -}}
 [
 {{- range $index, $name := $dnsAltNames }}
   {{- if gt $index 0 }},{{ end }}
@@ -82,32 +108,72 @@ pe
 ]
 {{- end -}}
 
-{{- define "pe.dnsAltNamesCsv" -}}
+{{- define "pe.controlPlaneFrontDoorDnsNamesCsv" -}}
 {{- $identity := include "pe.identity" . -}}
-{{- $certname := include "pe.certname" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
-{{- $internal := list
-    $certname
-    $puppetMasterHost
+{{- $serviceNames := list
     $identity
     (printf "%s.%s" $identity .Release.Namespace)
     (printf "%s.%s.svc" $identity .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $identity .Release.Namespace)
 -}}
+{{- $frontDoorNames := list $puppetMasterHost -}}
 {{- $external := list -}}
+{{- if .Values.peConfig.certname -}}
+{{- $external = append $external .Values.peConfig.certname -}}
+{{- end -}}
 {{- if .Values.network.technicalHostname -}}
 {{- $external = append $external .Values.network.technicalHostname -}}
 {{- end -}}
 {{- $additional := default (list) .Values.network.additionalDnsAltNames -}}
-{{- $dnsAltNames := concat $internal $external $additional | uniq -}}
+{{- $dnsAltNames := concat $serviceNames $frontDoorNames $external $additional | uniq -}}
 {{ join "," $dnsAltNames }}
+{{- end -}}
+
+{{- define "pe.controlPlaneLoopbackAliases" -}}
+{{- $identity := include "pe.identity" . -}}
+{{- $aliases := list
+    $identity
+    (printf "%s.%s" $identity .Release.Namespace)
+    (printf "%s.%s.svc" $identity .Release.Namespace)
+    (printf "%s.%s.svc.cluster.local" $identity .Release.Namespace)
+-}}
+{{- $additional := default (list) .Values.network.podLoopbackAliases -}}
+{{- $aliases = concat $aliases $additional | uniq -}}
+{{ toYaml $aliases }}
+{{- end -}}
+
+{{- define "pe.controlPlaneCertnamesHocon" -}}
+[
+{{- if .Values.peConfig.certname }}
+  {{ .Values.peConfig.certname | quote }}
+{{- else }}
+{{- range $index, $_ := until (int .Values.controlPlane.replicaCount) }}
+  {{- if gt $index 0 }},{{ end }}
+  {{ include "pe.controlPlaneDefaultCertnameForIndex" (dict "root" $ "index" $index) | quote }}
+{{- end }}
+{{- end }}
+]
+{{- end -}}
+
+{{- define "pe.controlPlaneCertnamesCsv" -}}
+{{- if .Values.peConfig.certname -}}
+{{- .Values.peConfig.certname -}}
+{{- else -}}
+{{- range $index, $_ := until (int .Values.controlPlane.replicaCount) -}}
+{{- if gt $index 0 }},{{ end -}}
+{{ include "pe.controlPlaneDefaultCertnameForIndex" (dict "root" $ "index" $index) }}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "pe.generatedPeConf" -}}
 "console_admin_password" = {{ .Values.peConfig.consoleAdminPassword | quote }}
-"puppet_enterprise::puppet_master_host" = {{ include "pe.puppetMasterHost" . | quote }}
-"puppet_enterprise::certname" = {{ include "pe.certname" . | quote }}
-"puppet_enterprise::profile::master::dns_alt_names" = {{ include "pe.dnsAltNamesHocon" . | trim }}
+"puppet_enterprise::certificate_authority_host" = "__PE_CERTIFICATE_AUTHORITY_HOST__"
+"puppet_enterprise::puppet_master_host" = "__PE_PUPPET_MASTER_HOST__"
+"puppet_enterprise::certname" = "__PE_CERTNAME__"
+"pe_install::puppet_master_dnsaltnames" = __PE_DNS_ALT_NAMES_HOCON__
+"puppet_enterprise::profile::master::dns_alt_names" = __PE_DNS_ALT_NAMES_HOCON__
 {{- if .Values.codeManager.enabled }}
 "puppet_enterprise::profile::master::code_manager_auto_configure" = {{ .Values.codeManager.autoConfigure }}
 "puppet_enterprise::profile::master::r10k_remote" = {{ required "codeManager.r10kRemote is required when codeManager.enabled=true" .Values.codeManager.r10kRemote | quote }}
@@ -232,7 +298,14 @@ pe
 {{- end -}}
 
 {{- define "pe.orchestratorPcpBrokerCertnamesCsv" -}}
-{{- $certnames := list (include "pe.identity" .) -}}
+{{- $certnames := list -}}
+{{- if .Values.peConfig.certname -}}
+{{- $certnames = append $certnames .Values.peConfig.certname -}}
+{{- else -}}
+{{- range $index, $_ := until (int .Values.controlPlane.replicaCount) -}}
+{{- $certnames = append $certnames (include "pe.controlPlaneDefaultCertnameForIndex" (dict "root" $ "index" $index)) -}}
+{{- end -}}
+{{- end -}}
 {{- range $index, $_ := until (int .Values.compilers.replicaCount) -}}
 {{- $certnames = append $certnames (include "pe.compilerCertnameForIndex" (dict "root" $ "index" $index)) -}}
 {{- end -}}

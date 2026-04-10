@@ -25,7 +25,7 @@ After install, the init container exports runtime artifacts that are created out
 - `/etc/sysconfig/pe-pgsql`
 - an install marker and summary under `/var/lib/pe-k8s/install/`
 
-The `pe` runtime containers mount those same single-owner persistent volumes, restore the exported sysconfig files into their local rootfs, and run their PE services in foreground mode.
+The `pe` runtime containers mount those same per-replica persistent volumes, restore the exported sysconfig files into their local rootfs, and run their PE services in foreground mode.
 
 Compiler replicas follow the same pattern on per-replica persistent volumes:
 
@@ -39,7 +39,7 @@ Compiler replicas follow the same pattern on per-replica persistent volumes:
 
 The current chart is split into:
 
-- `pe` `Deployment`
+- `pe` `StatefulSet`
 - optional `compiler` `StatefulSet`
 - `compiler-signer` Job
 - `classifier-config` Job
@@ -58,27 +58,49 @@ The `pe` deployment uses multiple containers from the same image:
 
 This keeps one PE service per container while colocating the non-compiler Puppet Server with the tightly-coupled HTTP/API edge services. `service/pe` maps directly to the owning container ports in the pod, and compiler capacity remains separate.
 
+The control-plane `StatefulSet` adds:
+
+- stable pod identity such as `pe-0.pe-headless.<namespace>.svc.cluster.local`
+- a headless service for replica addressing
+- per-replica PVCs like `etc-pe-0`, `opt-pe-0`, and `runtime-pe-0`
+- runtime rendering of `pe.conf` so each replica gets its own certname while still advertising the shared front-door DNS names
+
 ## Installer Config Model
 
-The chart generates these `pe.conf` values automatically from the Helm release and network settings:
+The chart renders a `pe.conf` template and the install init container fills in replica-specific values at runtime. The generated config covers:
 
 - `puppet_enterprise::certname`
 - `puppet_enterprise::puppet_master_host`
+- `pe_install::puppet_master_dnsaltnames`
 - `puppet_enterprise::profile::master::dns_alt_names`
 
-Generated SANs always include the in-cluster service names for the release, and can add:
+Generated SANs always include:
+
+- the release front-door service names
+- the replica pod FQDN on the control-plane headless service
+
+They can also add:
 
 - one external technical hostname via `network.technicalHostname`
 - one external compiler hostname via `network.compilerHostname`
 - extra SANs via `network.additionalDnsAltNames`
 
-By default, the chart keeps `puppet_enterprise::puppet_master_host` on the in-cluster `service/pe` name even when you set `network.technicalHostname`. If you need a different runtime host value, override `peConfig.puppetMasterHost`. You can also override `peConfig.certname` explicitly, but the default is the Helm-generated `pe` or `pe-<release>` identity.
+For control-plane replicas, the install-time `puppet_enterprise::certname`, `certificate_authority_host`, and `puppet_master_host` default to the replica FQDN on the control-plane headless service. That ensures PE installs the local CA, master, console, PuppetDB, and database roles onto the owning pod instead of mistaking the shared service name for another node.
+
+The shared `service/pe` name remains an external front door:
+
+- it is still included in the control-plane certificate SAN set
+- Helm Jobs and compiler bootstrap flows can still target it explicitly
+- ingress and service routing still present that shared address to clients
+
+You can still override `peConfig.certname` explicitly for a single control-plane replica, but the default is the replica FQDN on the control-plane headless service.
 
 For settings that are not modeled yet, append raw installer config with `peConfig.extra`.
 
 Naming follows the Helm release name:
 
 - release `pe` renders base resources like `pe`, `pe-compiler`, and `pe-compiler-headless` when compilers are enabled
+- release `pe` also renders `pe-headless` and stateful PVC names such as `etc-pe-0`
 - release `foo` renders `pe-foo`, `pe-foo-compiler`, and `pe-foo-compiler-headless` when compilers are enabled
 
 ## Access Model
@@ -185,7 +207,7 @@ Open design work remains around:
 - ownership and security hardening
 - secrets and certificate rotation
 
-One specific gap is that the current `pe` workload is still a `Deployment` backed by release-scoped PVC names. Real multi-control-plane testing will require stable per-replica identity and storage, which points toward a stateful control-plane set rather than scaling the current `Deployment`.
+One specific gap used to be that the `pe` workload had no stable per-replica identity or storage. That gap is now closed at the chart/runtime layer: `pe` is a StatefulSet with per-replica PVCs and runtime-rendered identity. The remaining gap is active-active synchronization of PE-owned state across those replicas.
 
 The mapping doc [legacy-service-mapping.md](legacy-service-mapping.md) is the source of truth for the next decomposition steps.
 

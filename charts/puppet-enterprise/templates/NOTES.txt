@@ -2,14 +2,15 @@ Puppet Enterprise Kubernetes scaffold installed.
 
 Resources:
   Front Door: {{ include "pe.fullname" . }}
-  PE Deployment: {{ include "pe.fullname" . }}
+  PE StatefulSet: {{ include "pe.controlPlaneStatefulSetName" . }}
+  PE Headless Service: {{ include "pe.controlPlaneHeadlessServiceName" . }}
   Compiler Pool: {{ include "pe.compilerPoolServiceName" . }}
   PE Front Door: {{ include "pe.fullname" . }}
 
-The PE pod runs install sequencing in an init container before the runtime
+Each PE replica runs install sequencing in an init container before the runtime
 containers start.
 
-This chart assumes single-owner PE storage for:
+This chart uses non-shared per-replica storage for:
   - /etc/puppetlabs
   - /opt/puppetlabs
   - /var/lib/pe-k8s

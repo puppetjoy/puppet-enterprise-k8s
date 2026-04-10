@@ -73,6 +73,10 @@ storage:
     size: 2Gi
     storageClassName: ""
 
+controlPlane:
+  replicaCount: 1
+  podManagementPolicy: OrderedReady
+
 installer:
   forceReinstall: false
   resources: {}
@@ -122,7 +126,6 @@ compilers:
       storageClassName: ""
 
 peServices:
-  replicaCount: 1
   resources:
     nginx: {}
     consoleServices: {}

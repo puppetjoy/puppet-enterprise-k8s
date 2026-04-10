@@ -8,15 +8,15 @@ The legacy install currently runs these PE services:
 
 | Service | Listener(s) | Legacy ExecStart | Mutable config/data | Suggested K8s shape | Scaling notes |
 | --- | --- | --- | --- | --- | --- |
-| `pe-postgresql` | `5432` | `postgres -D /opt/puppetlabs/server/data/postgresql/14/data` | `/opt/puppetlabs/server/data/postgresql`, `/var/log/puppetlabs/postgresql` | Container in `pe` `Deployment` | Single-owner data service behind `service/pe` |
-| `pe-puppetdb` | `8081` | `puppetdb foreground` | `/etc/puppetlabs/puppetdb`, `/opt/puppetlabs/server/data/puppetdb` | Container in `pe` `Deployment` | Single-owner data service behind `service/pe` |
-| `pe-puppetserver` | `8140`, `8170` | `puppetserver foreground` | `/etc/puppetlabs/puppetserver`, `/opt/puppetlabs/server/data/puppetserver`, code data | Container in `pe` `Deployment` | `service/pe` serves the non-compiler Puppet Server; compiler capacity scales separately |
-| `pe-nginx` | `80`, `443` | `nginx -c /etc/puppetlabs/nginx/nginx.conf` | `/etc/puppetlabs/nginx` | `Deployment` container in `pe` | HTTP/TLS edge |
-| `pe-console-services` | `4433` | `console-services foreground` | `/etc/puppetlabs/console-services`, `/opt/puppetlabs/server/data/console-services` | `Deployment` container in `pe` | Depends on DB and Puppet Server |
-| `pe-orchestration-services` | `8142`, `8143` | `orchestration-services foreground` | `/etc/puppetlabs/orchestration-services`, `/opt/puppetlabs/server/data/orchestration-services` | `Deployment` container in `pe` | Controller remains behind `service/pe`; compiler brokers front agent PCP traffic separately |
-| `pe-host-action-collector` | `8147` | `host-action-collector foreground` | `/etc/puppetlabs/host-action-collector`, `/opt/puppetlabs/server/data/host-action-collector` | `Deployment` container in `pe` | Depends on DB |
-| `pe-bolt-server` | `62658` | `puma -C .../pe_bolt_server_config.rb` | `/etc/puppetlabs/bolt-server`, `/opt/puppetlabs/server/data/bolt-server` | `Deployment` container in `pe` | HTTP API service |
-| `pe-ace-server` | `44633` | `puma -C .../transport_tasks_config.rb` | `/etc/puppetlabs/ace-server`, `/opt/puppetlabs/server/data/ace-server` | `Deployment` container in `pe` | HTTP API service |
+| `pe-postgresql` | `5432` | `postgres -D /opt/puppetlabs/server/data/postgresql/14/data` | `/opt/puppetlabs/server/data/postgresql`, `/var/log/puppetlabs/postgresql` | Container in `pe` `StatefulSet` | Single-owner data service behind `service/pe` |
+| `pe-puppetdb` | `8081` | `puppetdb foreground` | `/etc/puppetlabs/puppetdb`, `/opt/puppetlabs/server/data/puppetdb` | Container in `pe` `StatefulSet` | Single-owner data service behind `service/pe` |
+| `pe-puppetserver` | `8140`, `8170` | `puppetserver foreground` | `/etc/puppetlabs/puppetserver`, `/opt/puppetlabs/server/data/puppetserver`, code data | Container in `pe` `StatefulSet` | `service/pe` serves the non-compiler Puppet Server; compiler capacity scales separately |
+| `pe-nginx` | `80`, `443` | `nginx -c /etc/puppetlabs/nginx/nginx.conf` | `/etc/puppetlabs/nginx` | `StatefulSet` container in `pe` | HTTP/TLS edge |
+| `pe-console-services` | `4433` | `console-services foreground` | `/etc/puppetlabs/console-services`, `/opt/puppetlabs/server/data/console-services` | `StatefulSet` container in `pe` | Depends on DB and Puppet Server |
+| `pe-orchestration-services` | `8142`, `8143` | `orchestration-services foreground` | `/etc/puppetlabs/orchestration-services`, `/opt/puppetlabs/server/data/orchestration-services` | `StatefulSet` container in `pe` | Controller remains behind `service/pe`; compiler brokers front agent PCP traffic separately |
+| `pe-host-action-collector` | `8147` | `host-action-collector foreground` | `/etc/puppetlabs/host-action-collector`, `/opt/puppetlabs/server/data/host-action-collector` | `StatefulSet` container in `pe` | Depends on DB |
+| `pe-bolt-server` | `62658` | `puma -C .../pe_bolt_server_config.rb` | `/etc/puppetlabs/bolt-server`, `/opt/puppetlabs/server/data/bolt-server` | `StatefulSet` container in `pe` | HTTP API service |
+| `pe-ace-server` | `44633` | `puma -C .../transport_tasks_config.rb` | `/etc/puppetlabs/ace-server`, `/opt/puppetlabs/server/data/ace-server` | `StatefulSet` container in `pe` | HTTP API service |
 
 ## Important Paths
 
@@ -58,9 +58,9 @@ These are not under `/etc/puppetlabs`, so the `pe` install init container export
 
 The current scaffold keeps storage single-owner and explicit:
 
-- single-owner RWO PVC for `/etc/puppetlabs` used only by `pe`
-- single-owner RWO PVC for `/opt/puppetlabs` used only by `pe`
-- single-owner RWO PVC for `/var/lib/pe-k8s` used only by `pe`
+- per-control-plane-replica RWO PVC for `/etc/puppetlabs` via the `pe` `StatefulSet`
+- per-control-plane-replica RWO PVC for `/opt/puppetlabs` via the `pe` `StatefulSet`
+- per-control-plane-replica RWO PVC for `/var/lib/pe-k8s` via the `pe` `StatefulSet`
 - per-compiler non-shared PVCs for `/etc/puppetlabs`, `/opt/puppetlabs`, and `/var/lib/pe-k8s`
 - per-pod ephemeral log directories
 
@@ -82,5 +82,5 @@ The Kubernetes direction is different:
 - no systemd as PID 1
 - one PE service per container
 - foreground service runners
-- init-container install sequencing persisted onto single-owner PVCs
+- init-container install sequencing persisted onto per-replica single-owner PVCs
 - exported rootfs runtime artifacts restored into each workload pod

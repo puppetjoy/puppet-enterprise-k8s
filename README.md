@@ -6,8 +6,8 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 
 - Development and validation project, not production-ready
 - Builds a PE runtime image from the official installer tarball
-- Installs PE with Helm and preserves the install result on single-owner PVCs
-- Runs PostgreSQL, PuppetDB, the non-compiler Puppet Server, and PE edge/API services in a single-owner `pe` pod
+- Installs PE with Helm and preserves the install result on non-shared per-replica PVCs
+- Runs PostgreSQL, PuppetDB, the non-compiler Puppet Server, and PE edge/API services in a stateful `pe` control-plane pod set
 - Supports an optional compiler pool with per-replica non-shared PVCs, local PostgreSQL/PuppetDB, file-sync/PuppetDB-based readiness, and compiler-side PCP brokers
 - Supports multiple release-scoped PE instances in one cluster for isolated development and validation
 - Treats one Helm release, not multiple separate releases, as the future active-active replication domain
@@ -17,7 +17,9 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 
 ## How It Relates To Traditional PE
 
-This is not a systemd container port. PE is installed once by Kubernetes, persisted onto volumes, and then run as foreground services inside separate Kubernetes workloads. `service/pe` acts as the technical front door for agent-facing and API traffic, while an optional `service/pe-compiler` can expose the compiler pool separately.
+This is not a systemd container port. Each `pe` control-plane replica installs PE onto its own PVC set, then runs the PE services as foreground containers inside a StatefulSet pod. `service/pe` acts as the technical front door for agent-facing and API traffic, while an optional `service/pe-compiler` can expose the compiler pool separately.
+
+Internally, each control-plane replica installs PE against its own stable pod certname on the headless service. The shared `service/pe` address is preserved as a front door and certificate SAN, not as the replica's install identity.
 
 For the deeper runtime and operator model, see:
 
@@ -153,7 +155,7 @@ By default it can also render a signer Job that signs the test-node certificate 
 This project is intentionally conservative right now:
 
 - each PE instance and compiler replica owns its own non-shared PVCs
-- the current `pe` workload is single-owner and single-replica oriented
+- the control plane now has stable per-replica identity and storage, but active-active control-plane synchronization is still in development
 - compiler capacity can scale horizontally behind `service/pe-compiler`
 - centralized `puppet-code deploy` remains the code rollout entrypoint
 - separate Helm releases are independent sandboxes, not synchronization peers

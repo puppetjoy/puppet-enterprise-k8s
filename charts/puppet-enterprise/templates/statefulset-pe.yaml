@@ -1,14 +1,17 @@
+{{- if and .Values.peConfig.certname (gt (int .Values.controlPlane.replicaCount) 1) }}
+{{ fail "peConfig.certname cannot be set when controlPlane.replicaCount > 1" }}
+{{- end }}
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
-  name: {{ include "pe.fullname" . }}
+  name: {{ include "pe.controlPlaneStatefulSetName" . }}
   labels:
     {{- include "pe.labels" . | nindent 4 }}
     app.kubernetes.io/component: pe-services
 spec:
-  strategy:
-    type: Recreate
-  replicas: {{ .Values.peServices.replicaCount }}
+  serviceName: {{ include "pe.controlPlaneHeadlessServiceName" . }}
+  podManagementPolicy: {{ .Values.controlPlane.podManagementPolicy }}
+  replicas: {{ .Values.controlPlane.replicaCount }}
   selector:
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name }}
@@ -21,43 +24,46 @@ spec:
         {{- include "pe.labels" . | nindent 8 }}
         app.kubernetes.io/component: pe-services
     spec:
-      hostname: {{ include "pe.identity" . }}
       serviceAccountName: {{ include "pe.serviceAccountName" . }}
       affinity:
 {{ toYaml .Values.affinity | indent 8 }}
       tolerations:
 {{ toYaml .Values.tolerations | indent 8 }}
-      {{- if or .Values.network.podLoopbackAliases .Values.network.hostAliases }}
       hostAliases:
-        {{- with .Values.network.podLoopbackAliases }}
         - ip: 127.0.0.1
           hostnames:
-{{ toYaml . | indent 12 }}
-        {{- end }}
+{{ include "pe.controlPlaneLoopbackAliases" . | indent 12 }}
         {{- with .Values.network.hostAliases }}
 {{ toYaml . | indent 8 }}
         {{- end }}
-      {{- end }}
       initContainers:
         - name: install
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/usr/local/bin/pe-k8s-entrypoint", "install"]
           env:
-            - name: PE_CONF_PATH
+            - name: PE_CONF_TEMPLATE_PATH
               value: /config/pe.conf
+            - name: PE_CONF_PATH
+              value: /var/lib/pe-k8s/install/pe.conf
             - name: FORCE_REINSTALL
               value: {{ ternary "true" "false" .Values.installer.forceReinstall | quote }}
-            - name: PE_BOOTSTRAP_PUPPET_CERTNAME
-              value: {{ include "pe.identity" . | quote }}
-            - name: PE_BOOTSTRAP_PUPPET_SERVER
-              value: {{ include "pe.identity" . | quote }}
-            - name: FACTER_hostname
-              value: {{ include "pe.identity" . | quote }}
-            - name: FACTER_fqdn
-              value: {{ include "pe.identity" . | quote }}
-            - name: FACTER_domain
-              value: ""
+            - name: PE_CONTROL_PLANE_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: PE_CONTROL_PLANE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: PE_CONTROL_PLANE_HEADLESS_SERVICE
+              value: {{ include "pe.controlPlaneHeadlessServiceName" . | quote }}
+            - name: PE_CONTROL_PLANE_SHARED_DNS_ALT_NAMES
+              value: {{ include "pe.controlPlaneFrontDoorDnsNamesCsv" . | quote }}
+            {{- if .Values.peConfig.certname }}
+            - name: PE_CONTROL_PLANE_CERTNAME
+              value: {{ .Values.peConfig.certname | quote }}
+            {{- end }}
           resources:
 {{ toYaml .Values.installer.resources | indent 12 }}
           volumeMounts:
@@ -397,15 +403,6 @@ spec:
         - name: pe-conf
           configMap:
             name: {{ include "pe.fullname" . }}-conf
-        - name: etc
-          persistentVolumeClaim:
-            claimName: {{ include "pe.pvcEtcName" . }}
-        - name: opt
-          persistentVolumeClaim:
-            claimName: {{ include "pe.pvcOptName" . }}
-        - name: runtime
-          persistentVolumeClaim:
-            claimName: {{ include "pe.pvcRuntimeName" . }}
         - name: logs
           emptyDir: {}
         {{- if .Values.license.secretName }}
@@ -421,3 +418,40 @@ spec:
               - key: {{ required "codeManager.r10kPrivateKeySecretKey is required when codeManager.enabled=true" .Values.codeManager.r10kPrivateKeySecretKey }}
                 path: {{ base (required "codeManager.r10kPrivateKeyPath is required when codeManager.enabled=true" .Values.codeManager.r10kPrivateKeyPath) }}
         {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: etc
+        labels:
+          {{- include "pe.labels" . | nindent 10 }}
+          app.kubernetes.io/component: pe-services
+      spec:
+        accessModes:
+{{ toYaml .Values.storage.etc.accessModes | indent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.etc.size }}
+        storageClassName: {{ .Values.storage.etc.storageClassName | quote }}
+    - metadata:
+        name: opt
+        labels:
+          {{- include "pe.labels" . | nindent 10 }}
+          app.kubernetes.io/component: pe-services
+      spec:
+        accessModes:
+{{ toYaml .Values.storage.opt.accessModes | indent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.opt.size }}
+        storageClassName: {{ .Values.storage.opt.storageClassName | quote }}
+    - metadata:
+        name: runtime
+        labels:
+          {{- include "pe.labels" . | nindent 10 }}
+          app.kubernetes.io/component: pe-services
+      spec:
+        accessModes:
+{{ toYaml .Values.storage.runtime.accessModes | indent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.runtime.size }}
+        storageClassName: {{ .Values.storage.runtime.storageClassName | quote }}
