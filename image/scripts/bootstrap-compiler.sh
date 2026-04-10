@@ -19,6 +19,7 @@ PE_COMPILER_APPLY_MAX_ATTEMPTS="${PE_COMPILER_APPLY_MAX_ATTEMPTS:-3}"
 PE_COMPILER_APPLY_RETRY_SECONDS="${PE_COMPILER_APPLY_RETRY_SECONDS:-10}"
 PE_COMPILER_BOOTSTRAP_DIR="${PE_COMPILER_BOOTSTRAP_DIR:-/etc/puppetlabs/pe-k8s-compiler}"
 PE_COMPILER_MANIFEST_PATH="${PE_COMPILER_MANIFEST_PATH:-${PE_COMPILER_BOOTSTRAP_DIR}/bootstrap.pp}"
+PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME="${PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME:-}"
 
 compiler_certname() {
     if [ -n "${PE_COMPILER_CERTNAME}" ]; then
@@ -127,6 +128,53 @@ bootstrap_compiler_ssl() {
 
     log "Timed out waiting for signed compiler certificate ${certname}"
     return 1
+}
+
+sync_control_plane_ca_bundle() {
+    local bundle_secret_name="${PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME:-}"
+    local deadline
+
+    [ -n "${bundle_secret_name}" ] || return 0
+
+    (
+        set -euo pipefail
+
+        local bundle_dir
+        bundle_dir="$(mktemp -d /tmp/pe-k8s-compiler-ca-bundle.XXXXXX)"
+        trap 'rm -rf "${bundle_dir}"' EXIT
+
+        deadline=$((SECONDS + PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS))
+        while [ "${SECONDS}" -lt "${deadline}" ]; do
+            if k8s_secret_data_field "${PE_COMPILER_NAMESPACE}" "${bundle_secret_name}" ca.pem > "${bundle_dir}/ca.pem"; then
+                ensure_dir /etc/puppetlabs/puppet/ssl/certs
+                ensure_dir /etc/puppetlabs/puppetserver/ca
+                if k8s_secret_data_field "${PE_COMPILER_NAMESPACE}" "${bundle_secret_name}" crl.pem > "${bundle_dir}/crl.pem"; then
+                    install -o pe-puppet -g pe-puppet -m 0644 \
+                        "${bundle_dir}/crl.pem" \
+                        /etc/puppetlabs/puppet/ssl/crl.pem
+                    install -o pe-puppet -g pe-puppet -m 0640 \
+                        "${bundle_dir}/crl.pem" \
+                        /etc/puppetlabs/puppetserver/ca/ca_crl.pem
+                    install -o pe-puppet -g pe-puppet -m 0640 \
+                        "${bundle_dir}/crl.pem" \
+                        /etc/puppetlabs/puppetserver/ca/infra_crl.pem
+                fi
+
+                install -o pe-puppet -g pe-puppet -m 0644 \
+                    "${bundle_dir}/ca.pem" \
+                    /etc/puppetlabs/puppet/ssl/certs/ca.pem
+                install -o pe-puppet -g pe-puppet -m 0640 \
+                    "${bundle_dir}/ca.pem" \
+                    /etc/puppetlabs/puppetserver/ca/ca_crt.pem
+                log "Synchronized compiler trust bundle from Secret ${PE_COMPILER_NAMESPACE}/${bundle_secret_name}"
+                return 0
+            fi
+            sleep 5
+        done
+
+        log "Timed out waiting for compiler trust bundle Secret ${PE_COMPILER_NAMESPACE}/${bundle_secret_name}"
+        return 1
+    )
 }
 
 write_compiler_manifest() {
@@ -243,6 +291,7 @@ main() {
     wait_for_pe
     write_compiler_identity
     bootstrap_compiler_ssl
+    sync_control_plane_ca_bundle
     write_compiler_manifest
     run_compiler_apply
     export_runtime_rootfs_artifacts

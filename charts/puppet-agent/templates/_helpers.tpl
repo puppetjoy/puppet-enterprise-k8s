@@ -51,7 +51,7 @@ pe
 {{- .Values.agent.caServer -}}
 {{- else -}}
 {{- $pe := include "puppet-agent.peReleaseFullname" . -}}
-{{- printf "%s-0.%s-headless.%s.svc.cluster.local" $pe $pe .Release.Namespace -}}
+{{- printf "%s-ca" $pe -}}
 {{- end -}}
 {{- end -}}
 

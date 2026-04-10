@@ -432,6 +432,38 @@ copy_exported_sysconfig_into_rootfs() {
             cp -f "${path}" "${target}"
         done
     fi
+
+    ensure_pe_puppetserver_sysconfig
+}
+
+ensure_pe_puppetserver_sysconfig() {
+    local path=/etc/sysconfig/pe-puppetserver
+
+    [ -f "${path}" ] && return 0
+
+    ensure_dir /etc/sysconfig
+    cat > "${path}" <<'EOF'
+###########################################
+# Init settings for pe-puppetserver
+###########################################
+
+JAVA_BIN="/opt/puppetlabs/server/bin/java"
+JAVA_ARGS="-Xmx2048m -Xms2048m -Xss2m -Djava.io.tmpdir=/opt/puppetlabs/server/apps/puppetserver/tmp -XX:ReservedCodeCacheSize=512m -Xlog:gc*:file=/var/log/puppetlabs/puppetserver/puppetserver_gc.log:time,uptime,level,tags:filecount=16,filesize=16m -Djdk.tls.ephemeralDHKeySize=2048 -XX:+UseStringDeduplication -Djava.security.properties==/opt/puppetlabs/share/jdk17-security"
+JAVA_ARGS_CLI="${JAVA_ARGS_CLI:-}"
+TK_ARGS=""
+USER=pe-puppet
+GROUP=pe-puppet
+INSTALL_DIR="/opt/puppetlabs/server/apps/puppetserver"
+CONFIG="/etc/puppetlabs/puppetserver/conf.d"
+BOOTSTRAP_CONFIG="/etc/puppetlabs/puppetserver/bootstrap.cfg"
+SERVICE_STOP_RETRIES=60
+START_TIMEOUT=300
+OPEN_FILE_LIMIT=12000
+RELOAD_TIMEOUT=300
+JRUBY_JAR="/opt/puppetlabs/server/apps/puppetserver/jruby-9k.jar"
+BC_JAR="/opt/puppetlabs/share/java/bcprov.jar:/opt/puppetlabs/share/java/bcpkix.jar:/opt/puppetlabs/share/java/bcutil.jar:/opt/puppetlabs/share/java/bctls.jar"
+EOF
+    log "Seeded fallback /etc/sysconfig/pe-puppetserver"
 }
 
 patch_local_pcp_controller_uri() {

@@ -494,6 +494,37 @@ sync_control_plane_ca_bundle_from_seed_secret() {
     )
 }
 
+ensure_control_plane_host_certificate() {
+    local certname
+    local dns_alt_names
+    local cert_path
+
+    certname="$(control_plane_certname)"
+    dns_alt_names="$(control_plane_dns_alt_names_csv)"
+    cert_path="/etc/puppetlabs/puppet/ssl/certs/${certname}.pem"
+
+    if cert_matches_desired_dns_alt_names "${cert_path}" "${dns_alt_names}"; then
+        return 0
+    fi
+
+    log "Regenerating host certificate for ${certname} to match desired SANs"
+    remove_pe_host_identity_material "${certname}"
+    /opt/puppetlabs/server/bin/puppetserver ca generate \
+        --certname "${certname}" \
+        --subject-alt-names "${dns_alt_names}" \
+        --ca-client \
+        --force
+    repair_pe_service_ssl_material "${certname}"
+
+    if cert_matches_desired_dns_alt_names "${cert_path}" "${dns_alt_names}"; then
+        log "Host certificate for ${certname} matches desired SANs"
+        return 0
+    fi
+
+    log "Failed to regenerate host certificate for ${certname} with desired SANs"
+    return 1
+}
+
 import_control_plane_ca() {
     case "${PE_CONTROL_PLANE_CA_PROVIDER}" in
         certManager)
@@ -640,10 +671,12 @@ run_install_sequence() {
 refresh_existing_install_state() {
     install_service_control_wrappers
     import_control_plane_ca
+    copy_exported_sysconfig_into_rootfs
+    ensure_control_plane_host_certificate
     sync_puppetdb_integration_settings
-    export_runtime_rootfs_artifacts
     ensure_pe_build_metadata
     patch_nginx_ingress_redirects
+    export_runtime_rootfs_artifacts
 }
 
 main() {

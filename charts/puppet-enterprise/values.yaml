@@ -76,6 +76,9 @@ storage:
 controlPlane:
   replicaCount: 1
   podManagementPolicy: OrderedReady
+  enrollment:
+    serviceName: ""
+    targetOrdinal: 0
   ca:
     provider: selfSigned
     importTimeoutSeconds: 300

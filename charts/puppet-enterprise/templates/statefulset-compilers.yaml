@@ -75,6 +75,10 @@ spec:
               value: {{ .Values.compilers.puppetdbSyncIntervalMinutes | quote }}
             - name: PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS
               value: {{ .Values.compilers.certWaitTimeoutSeconds | quote }}
+            {{- if eq .Values.controlPlane.ca.provider "releaseRoot" }}
+            - name: PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME
+              value: {{ include "pe.controlPlaneCaBundleSecretName" . | quote }}
+            {{- end }}
           resources:
 {{ toYaml .Values.compilers.resources.bootstrap | indent 12 }}
           volumeMounts:
