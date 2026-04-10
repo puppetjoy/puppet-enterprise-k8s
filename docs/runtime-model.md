@@ -91,6 +91,26 @@ The intended access pattern is:
 - `service/pe-compiler` is the optional compiler-pool endpoint for catalog traffic on `8140` and PCP broker traffic on `8142`
 - there are no standalone `service/pe-puppetdb` or `service/pe-postgresql` objects in the current model
 - when compilers are enabled, the `classifier-config` Job updates PE's built-in `PE Agent` node group so agent catalogs use the compiler endpoint for `server_list`, `primary_uris`, and `pcp_broker_list`
+- compilers are intentionally attached to one PE instance; this chart does not model compiler-to-compiler coordination as a replication mechanism
+
+## Conductor Direction
+
+The active-active direction for this repo is Conductor, not direct PE-to-PE synchronization.
+
+That keeps the core boundary intact:
+
+- PostgreSQL, PuppetDB, classification, RBAC, CA, and orchestration state are locally owned by a PE instance
+- compiler pods remain attached to one owning PE instance
+- compilers are not asked to replicate management state among themselves
+
+The Conductor components map onto this runtime model as follows:
+
+- Fabric provides the queue transport and node-local participant identity
+- Warden governs membership, onboarding, trust distribution, and key rotation eligibility
+- Relay handles Puppet Server to PuppetDB propagation while keeping reads local
+- Gateway fronts orchestrator and PCP traffic
+
+The current repo baseline is therefore a prerequisite for Conductor, not the finished HA design. The point of the chart today is to preserve local ownership cleanly enough that Fabric, Relay, Gateway, and Warden can be introduced without shared storage.
 
 ## Code Manager
 
@@ -112,6 +132,8 @@ The chart renders these Code Manager `pe.conf` settings when enabled:
 The deploy key is mounted from the Secret into the `pe` install init container and the `puppetserver` container at `codeManager.r10kPrivateKeyPath`. For an existing release, set `installer.forceReinstall=true` for the upgrade that introduces or materially changes Code Manager configuration so PE re-runs `puppet infrastructure configure`.
 
 If the Git remote hostname needs a Kubernetes-specific override, set `network.hostAliases`. This is useful when the SSH endpoint for the control repo resolves differently inside the cluster than it does on an operator workstation.
+
+Across multiple Workers, the operator entrypoint should remain Code Manager or r10k. The active-active extension is for Fabric to carry signed deploy intent and convergence state so that each Worker still performs its own local Code Manager deploy for the exact requested revision. That keeps code rollout PE-native on each Worker while avoiding direct PE-to-PE synchronization.
 
 ## Validation Agents
 

@@ -155,12 +155,21 @@ wait_for_tcp_port() {
     return 1
 }
 
+wait_for_postgresql_ready() {
+    runuser -u pe-postgres -- \
+        /opt/puppetlabs/server/apps/postgresql/14/bin/psql \
+        --tuples-only \
+        --quiet \
+        -p "${PGPORT:-5432}" \
+        --dbname postgres \
+        -c 'SELECT 1' >/dev/null 2>&1
+}
+
 wait_for_service_ready() {
     local service_name pid port timeout elapsed
     service_name="$(canonical_service_name "$1")"
     pid="$2"
     port="$(service_listen_port "${service_name}" 2>/dev/null || true)"
-    [ -n "${port}" ] || return 0
 
     timeout="$(service_start_timeout "${service_name}")"
     elapsed=0
@@ -168,8 +177,23 @@ wait_for_service_ready() {
         if ! kill -0 "${pid}" 2>/dev/null; then
             return 1
         fi
-        if wait_for_tcp_port "${port}"; then
-            return 0
+        case "${service_name}" in
+            pe-postgresql)
+                if wait_for_postgresql_ready; then
+                    return 0
+                fi
+                ;;
+            *)
+                [ -n "${port}" ] || return 0
+                if wait_for_tcp_port "${port}"; then
+                    return 0
+                fi
+                ;;
+        esac
+        if [ "${service_name}" = "pe-postgresql" ] && [ -f "$(service_log_file "${service_name}")" ]; then
+            if grep -q "database system is ready to accept connections" "$(service_log_file "${service_name}")"; then
+                return 0
+            fi
         fi
         sleep 1
         elapsed=$((elapsed + 1))

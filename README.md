@@ -10,8 +10,10 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 - Runs PostgreSQL, PuppetDB, the non-compiler Puppet Server, and PE edge/API services in a single-owner `pe` pod
 - Supports an optional compiler pool with per-replica non-shared PVCs, local PostgreSQL/PuppetDB, file-sync/PuppetDB-based readiness, and compiler-side PCP brokers
 - Supports multiple release-scoped PE instances in one cluster, each with its own local state and optional compiler pool
+- Treats the PE instance as the unit of local ownership from which active-active HA will be built
+- Keeps compilers attached to one owning PE instance; compilers are not a replication mesh
 - Supports optional ingress exposure, Code Manager configuration, and a validation `puppet-agent` chart with explicit certificate signing
-- Still evolving around PE-instance replication, upgrade orchestration, and hardening
+- Still evolving toward a Conductor-aligned active-active control plane, upgrade orchestration, and hardening
 
 ## How It Relates To Traditional PE
 
@@ -20,6 +22,7 @@ This is not a systemd container port. PE is installed once by Kubernetes, persis
 For the deeper runtime and operator model, see:
 
 - [docs/runtime-model.md](docs/runtime-model.md)
+- [docs/conductor-architecture.md](docs/conductor-architecture.md)
 - [docs/legacy-service-mapping.md](docs/legacy-service-mapping.md)
 - [docs/replication-roadmap.md](docs/replication-roadmap.md)
 
@@ -134,6 +137,9 @@ This project is intentionally conservative right now:
 - the current `pe` workload is single-owner and single-replica oriented
 - compiler capacity can scale horizontally behind `service/pe-compiler`
 - centralized `puppet-code deploy` remains the code rollout entrypoint
+- active-active HA work is Conductor-aligned: Fabric, Relay, Gateway, and Warden
+- the repo does not yet deliver full active-active PE replication
+- code rollout across Workers remains operator-initiated through Code Manager; later Fabric work may propagate deploy intent and convergence state between Workers
 - charts provide generic defaults, not a ready-made cluster profile
 - operators are expected to supply environment-specific values locally
 
