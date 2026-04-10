@@ -15,6 +15,13 @@ This chart uses non-shared per-replica storage for:
   - /opt/puppetlabs
   - /var/lib/pe-k8s
 
+{{- if .Values.conductor.enabled }}
+Conductor integration:
+  Segment: {{ .Values.conductor.segmentName }}
+  Onboarding Namespace: {{ include "pe.conductorNamespace" . }}
+  Participant Prefix Source: StatefulSet pod names
+{{- end }}
+
 Start with internal service access:
   Front Door: https://{{ include "pe.fullname" . }}
   Puppet Server: https://{{ include "pe.fullname" . }}:8140

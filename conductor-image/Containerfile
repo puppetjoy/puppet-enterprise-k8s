@@ -2,9 +2,12 @@ FROM python:3.12-alpine
 
 RUN addgroup -S conductor && adduser -S -G conductor conductor
 
+RUN python -m pip install --no-cache-dir pika
+
+COPY conductor-image/scripts/participant.py /usr/local/bin/conductor-participant
 COPY conductor-image/scripts/warden.py /usr/local/bin/conductor-warden
 
-RUN chmod 0755 /usr/local/bin/conductor-warden
+RUN chmod 0755 /usr/local/bin/conductor-participant /usr/local/bin/conductor-warden
 
 USER conductor
 

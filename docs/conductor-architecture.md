@@ -18,7 +18,7 @@ The Conductor spec defines two PE roles:
 - Worker: a PE instance that actively serves nodes
 - SPOG: a PE instance used for management visibility, not for catalog service
 
-For this repo, the near-term path is to treat a single release as one Worker-shaped stack under construction. Compiler replicas already exist as a stable in-release set. Control-plane replicas do not yet exist in the chart, but they are part of the intended release topology rather than a separate release.
+For this repo, the near-term path is to treat a single release as one Worker-shaped stack under construction. Compiler replicas already exist as a stable in-release set. Control-plane pods now have stable per-pod identity and can participate in Fabric, but active-active control-plane service is still blocked on replicated CA and PE-owned state.
 
 ## Component Mapping
 
@@ -53,7 +53,7 @@ The current foundation slice models that as:
 - one or more release domains inside that segment
 - one or more stable workload sets inside each release domain
 
-Today the compiler `StatefulSet` fits that model cleanly. Future multi-control-plane testing will need a stable control-plane workload set with the same property.
+Today both the compiler `StatefulSet` and the `pe` control-plane `StatefulSet` fit that model. Warden can already issue onboarding bundles for those workload members, and the PE chart can consume them with optional participant sidecars. The next control-plane step is not member discovery. It is trust and state convergence between the control-plane replicas.
 
 ## Relay
 

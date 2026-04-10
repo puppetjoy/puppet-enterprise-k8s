@@ -399,6 +399,33 @@ spec:
           resources:
 {{ toYaml .Values.peServices.resources.hostActionCollector | indent 12 }}
           volumeMounts: *peServicesMounts
+        {{- if .Values.conductor.enabled }}
+        - name: conductor-participant
+          image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
+          imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
+          command: ["/usr/local/bin/conductor-participant"]
+          env:
+            - name: CONDUCTOR_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: CONDUCTOR_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CONDUCTOR_NAMESPACE
+              value: {{ include "pe.conductorNamespace" . | quote }}
+            - name: CONDUCTOR_RESOURCE_PREFIX
+              value: {{ .Values.conductor.resourcePrefix | quote }}
+            - name: CONDUCTOR_SEGMENT_NAME
+              value: {{ .Values.conductor.segmentName | quote }}
+            - name: CONDUCTOR_HEARTBEAT_INTERVAL_SECONDS
+              value: {{ .Values.conductor.participant.heartbeatIntervalSeconds | quote }}
+            - name: CONDUCTOR_SECRET_POLL_INTERVAL_SECONDS
+              value: {{ .Values.conductor.participant.secretPollIntervalSeconds | quote }}
+          resources:
+{{ toYaml .Values.conductor.participant.resources | indent 12 }}
+        {{- end }}
       volumes:
         - name: pe-conf
           configMap:

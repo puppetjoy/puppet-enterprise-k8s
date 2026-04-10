@@ -77,6 +77,20 @@ controlPlane:
   replicaCount: 1
   podManagementPolicy: OrderedReady
 
+conductor:
+  enabled: false
+  namespace: ""
+  resourcePrefix: conductor
+  segmentName: production
+  participant:
+    image:
+      repository: registry.example.test/pe-k8s-conductor
+      tag: "dev"
+      pullPolicy: IfNotPresent
+    heartbeatIntervalSeconds: 15
+    secretPollIntervalSeconds: 15
+    resources: {}
+
 installer:
   forceReinstall: false
   resources: {}

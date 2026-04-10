@@ -135,7 +135,18 @@ The Conductor components map onto this runtime model as follows:
 
 The current repo baseline is therefore a prerequisite for Conductor, not the finished HA design. The point of the chart today is to preserve local ownership cleanly enough that Fabric, Relay, Gateway, and Warden can be introduced without shared storage.
 
-The current Conductor foundation slice is release-topology-driven. Warden is expected to expand stable workload sets, such as compiler `StatefulSet` replicas, into participant identities and onboarding bundles. That is intentionally different from treating separate Helm releases as static peers.
+The current Conductor foundation slice is release-topology-driven. Warden expands stable workload sets inside a release, including the `pe` control-plane `StatefulSet` and the compiler `StatefulSet`, into participant identities and onboarding bundles. That is intentionally different from treating separate Helm releases as static peers.
+
+When `conductor.enabled=true` on the PE chart:
+
+- each `pe` and compiler pod gets a `conductor-participant` sidecar
+- the sidecar derives its participant identity from the StatefulSet pod name
+- the sidecar fetches its Warden-managed onboarding Secret from the Kubernetes API
+- the sidecar joins the Fabric hub as a queue consumer for that pod identity
+
+That gives the release a real Fabric membership model without shared storage or hard-coded peer lists.
+It does not yet mean the release is safe to run with multiple active control-plane replicas behind `service/pe`.
+The remaining gap is replicated trust and PE-owned state, especially CA and management data convergence.
 
 ## Code Manager
 
@@ -207,7 +218,7 @@ Open design work remains around:
 - ownership and security hardening
 - secrets and certificate rotation
 
-One specific gap used to be that the `pe` workload had no stable per-replica identity or storage. That gap is now closed at the chart/runtime layer: `pe` is a StatefulSet with per-replica PVCs and runtime-rendered identity. The remaining gap is active-active synchronization of PE-owned state across those replicas.
+One specific gap used to be that the `pe` workload had no stable per-replica identity or storage. That gap is now closed at the chart/runtime layer: `pe` is a StatefulSet with per-replica PVCs and runtime-rendered identity. Another recent gap was release-internal Fabric membership; that is now present through the optional `conductor-participant` sidecars. The remaining gap is active-active synchronization of PE-owned state across the control-plane replicas themselves.
 
 The mapping doc [legacy-service-mapping.md](legacy-service-mapping.md) is the source of truth for the next decomposition steps.
 

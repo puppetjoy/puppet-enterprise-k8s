@@ -27,6 +27,12 @@ This phase introduces:
 
 This is the point where active-active HA stops being a Kubernetes deployment pattern and becomes a real distributed system.
 
+Current status:
+
+- Warden can expand the `pe` and compiler `StatefulSet` members inside one release into onboarding bundles
+- optional `conductor-participant` sidecars can join the Fabric hub as those per-pod identities
+- trust bundle distribution, health gating, and replicated control-plane state are still outstanding
+
 ## Phase 2: Relay
 
 Relay is the first data-plane Conductor component we need inside the PE runtime path.
