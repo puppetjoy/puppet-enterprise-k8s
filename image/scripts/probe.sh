@@ -99,7 +99,7 @@ if not puppetdb_status.get("write_db_up?"):
     raise SystemExit(1)
 
 sync_status = puppetdb_status.get("sync_status") or {}
-if sync_status.get("state") not in {"idle", "syncing"}:
+if sync_status.get("state") not in {"idle", "syncing", "error"}:
     raise SystemExit(1)
 
 last_successful_sync = sync_status.get("last_successful_sync") or ""

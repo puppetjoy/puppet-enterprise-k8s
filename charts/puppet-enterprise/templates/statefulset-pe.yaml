@@ -425,6 +425,8 @@ spec:
               value: {{ .Values.conductor.participant.heartbeatIntervalSeconds | quote }}
             - name: CONDUCTOR_SECRET_POLL_INTERVAL_SECONDS
               value: {{ .Values.conductor.participant.secretPollIntervalSeconds | quote }}
+            - name: CONDUCTOR_STATUS_MAX_AGE_SECONDS
+              value: {{ .Values.conductor.participant.statusMaxAgeSeconds | quote }}
             - name: CONDUCTOR_TRUST_POLL_INTERVAL_SECONDS
               value: {{ .Values.conductor.participant.trustPollIntervalSeconds | quote }}
             - name: CONDUCTOR_TRUST_OUTPUT_DIR
@@ -433,6 +435,12 @@ spec:
               value: {{ .Values.conductor.controlPlaneTrust.caPath | quote }}
             - name: CONDUCTOR_TRUST_SOURCE_CRL_PATH
               value: {{ .Values.conductor.controlPlaneTrust.crlPath | quote }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/conductor-participant", "probe", "ready"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
           resources:
 {{ toYaml .Values.conductor.participant.resources | indent 12 }}
           volumeMounts:

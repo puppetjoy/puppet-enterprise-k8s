@@ -17,6 +17,7 @@ import pika
 
 CONDUCTOR_LABEL_KEY = "pe-k8s.puppet.com/conductor"
 TRUST_SOURCE_LABEL_VALUE = "trust-source"
+DEFAULT_STATUS_FILENAME = "participant-status.json"
 
 
 def log(message):
@@ -95,6 +96,11 @@ def write_text_file(path, content):
     os.replace(temp_path, path)
 
 
+def read_json_file(path):
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
 def http_request(method, url, headers=None, payload=None, context=None):
     data = None
     if payload is not None:
@@ -109,6 +115,51 @@ def http_request(method, url, headers=None, payload=None, context=None):
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8")
         return error.code, body
+
+
+def default_status_path():
+    trust_output_dir = os.environ.get("CONDUCTOR_TRUST_OUTPUT_DIR", "").strip()
+    base_dir = trust_output_dir or "/tmp"
+    return os.environ.get("CONDUCTOR_STATUS_PATH", "").strip() or os.path.join(base_dir, DEFAULT_STATUS_FILENAME)
+
+
+def probe(mode):
+    status_path = default_status_path()
+    max_age_seconds = env_int("CONDUCTOR_STATUS_MAX_AGE_SECONDS", 60)
+
+    if not os.path.isfile(status_path):
+        return 1
+
+    try:
+        status = read_json_file(status_path)
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        return 1
+    last_updated_at = int(status.get("lastUpdatedAt") or 0)
+    if last_updated_at <= 0:
+        return 1
+
+    age_seconds = int(time.time()) - last_updated_at
+    if age_seconds > max_age_seconds:
+        return 1
+
+    if mode == "live":
+        return 0
+
+    if not status.get("onboardingSecretPresent", False):
+        return 1
+    if not status.get("connected", False):
+        return 1
+    if not status.get("trustBundleAvailable", False):
+        return 1
+    if not status.get("trustBundleInstalled", False):
+        return 1
+    if int(status.get("trustBundleSourceCount") or 0) < 1:
+        return 1
+
+    if status.get("trustSourceRequired", False) and not status.get("trustSourcePublished", False):
+        return 1
+
+    return 0
 
 
 class K8sApi:
@@ -198,6 +249,8 @@ class ParticipantRuntime:
         self.trust_source_ca_path = os.environ.get("CONDUCTOR_TRUST_SOURCE_CA_PATH", "").strip()
         self.trust_source_crl_path = os.environ.get("CONDUCTOR_TRUST_SOURCE_CRL_PATH", "").strip()
         self.trust_output_dir = os.environ.get("CONDUCTOR_TRUST_OUTPUT_DIR", "").strip()
+        self.status_path = default_status_path()
+        self.trust_source_required = bool(self.trust_source_ca_path and self.trust_source_crl_path)
 
         self.k8s = K8sApi(self.pod_namespace)
         self.onboarding_secret_name = participant_secret_name(
@@ -233,6 +286,28 @@ class ParticipantRuntime:
         self.bundle = None
         self.next_heartbeat = 0
 
+        self.status = {
+            "participant": self.pod_name,
+            "namespace": self.pod_namespace,
+            "segment": self.segment_name,
+            "role": self.participant_role,
+            "onboardingSecretName": self.onboarding_secret_name,
+            "trustSourceSecretName": self.trust_source_secret_name,
+            "trustBundleSecretName": self.trust_bundle_secret_name,
+            "trustSourceRequired": self.trust_source_required,
+            "onboardingSecretPresent": False,
+            "connected": False,
+            "trustSourcePublished": False,
+            "trustBundleAvailable": False,
+            "trustBundleInstalled": False,
+            "trustBundleSourceCount": 0,
+            "lastConnectedAt": 0,
+            "lastTrustSourcePublishedAt": 0,
+            "lastTrustBundleInstalledAt": 0,
+            "lastError": "",
+            "lastUpdatedAt": 0,
+        }
+
     @staticmethod
     def decode_onboarding_secret(secret):
         data = secret.get("data", {})
@@ -243,16 +318,23 @@ class ParticipantRuntime:
         bundle = json.loads(onboarding_json)
         return fingerprint, bundle, username, password
 
+    def set_status(self, **updates):
+        self.status.update(updates)
+
+    def write_status(self):
+        self.status["lastUpdatedAt"] = int(time.time())
+        write_text_file(self.status_path, json.dumps(self.status, indent=2, sort_keys=True) + "\n")
+
     def close_connection(self):
-        if self.connection is None:
-            return
-        try:
-            self.connection.close()
-        except Exception:
-            pass
+        if self.connection is not None:
+            try:
+                self.connection.close()
+            except Exception:
+                pass
         self.connection = None
         self.channel = None
         self.bundle = None
+        self.set_status(connected=False)
 
     def on_message(self, channel, method, _properties, body):
         routing_key = method.routing_key or ""
@@ -294,6 +376,7 @@ class ParticipantRuntime:
         self.channel = channel
         self.bundle = bundle
         self.next_heartbeat = 0
+        self.set_status(connected=True, lastConnectedAt=int(time.time()), lastError="")
         log(
             "Connected to Fabric as "
             f"{bundle['participant']['name']} on {bundle['segment']['name']} "
@@ -313,10 +396,12 @@ class ParticipantRuntime:
                     f"Waiting for onboarding secret {self.conductor_namespace}/{self.onboarding_secret_name}"
                 )
                 self.pending_onboarding_warning = True
+            self.set_status(onboardingSecretPresent=False)
             self.close_connection()
             return
 
         self.pending_onboarding_warning = False
+        self.set_status(onboardingSecretPresent=True)
         fingerprint, bundle, username, password = self.decode_onboarding_secret(secret)
         if (
             fingerprint == self.current_onboarding_fingerprint
@@ -330,7 +415,7 @@ class ParticipantRuntime:
         self.current_onboarding_fingerprint = fingerprint
 
     def refresh_trust_source(self, force=False):
-        if not self.trust_source_ca_path or not self.trust_source_crl_path:
+        if not self.trust_source_required:
             return
 
         now = time.time()
@@ -345,6 +430,7 @@ class ParticipantRuntime:
                     f"{self.trust_source_ca_path} and {self.trust_source_crl_path}"
                 )
                 self.pending_trust_source_warning = True
+            self.set_status(trustSourcePublished=False)
             return
 
         ca_pem = "".join(pem_blocks(read_text_file(self.trust_source_ca_path), "CERTIFICATE"))
@@ -356,6 +442,7 @@ class ParticipantRuntime:
                     f"{self.trust_source_ca_path} and {self.trust_source_crl_path}"
                 )
                 self.pending_trust_source_warning = True
+            self.set_status(trustSourcePublished=False)
             return
 
         self.pending_trust_source_warning = False
@@ -369,9 +456,7 @@ class ParticipantRuntime:
             "caSha256": sha256_text(ca_pem),
             "crlSha256": sha256_text(crl_pem),
         }
-        fingerprint = sha256_text(
-            "\n".join([ca_pem, crl_pem, json.dumps(metadata, sort_keys=True)])
-        )
+        fingerprint = sha256_text("\n".join([ca_pem, crl_pem, json.dumps(metadata, sort_keys=True)]))
         updated = self.k8s.upsert_secret(
             self.trust_source_secret_name,
             labels={
@@ -390,10 +475,9 @@ class ParticipantRuntime:
             namespace=self.conductor_namespace,
         )
         if updated or fingerprint != self.current_trust_source_fingerprint:
-            log(
-                f"Published trust source {self.conductor_namespace}/{self.trust_source_secret_name}"
-            )
+            log(f"Published trust source {self.conductor_namespace}/{self.trust_source_secret_name}")
         self.current_trust_source_fingerprint = fingerprint
+        self.set_status(trustSourcePublished=True, lastTrustSourcePublishedAt=int(time.time()))
 
     def refresh_trust_bundle(self, force=False):
         if not self.trust_output_dir:
@@ -411,21 +495,36 @@ class ParticipantRuntime:
                     f"Waiting for trust bundle secret {self.conductor_namespace}/{self.trust_bundle_secret_name}"
                 )
                 self.pending_trust_bundle_warning = True
+            self.set_status(
+                trustBundleAvailable=False,
+                trustBundleInstalled=False,
+                trustBundleSourceCount=0,
+            )
             return
 
         data = secret.get("data", {})
         ca_pem = b64decode_text(data["ca.pem"]) if "ca.pem" in data else ""
         crl_pem = b64decode_text(data["crl.pem"]) if "crl.pem" in data else ""
         metadata_json = b64decode_text(data["metadata.json"]) if "metadata.json" in data else "{}\n"
+        metadata = json.loads(metadata_json)
         if not ca_pem or not crl_pem:
             if not self.pending_trust_bundle_warning:
                 log(
                     f"Waiting for populated trust bundle secret {self.conductor_namespace}/{self.trust_bundle_secret_name}"
                 )
                 self.pending_trust_bundle_warning = True
+            self.set_status(
+                trustBundleAvailable=False,
+                trustBundleInstalled=False,
+                trustBundleSourceCount=0,
+            )
             return
 
         self.pending_trust_bundle_warning = False
+        self.set_status(
+            trustBundleAvailable=True,
+            trustBundleSourceCount=int(metadata.get("sourceCount") or 0),
+        )
         fingerprint = sha256_text("\n".join([ca_pem, crl_pem, metadata_json]))
         if fingerprint == self.current_trust_bundle_fingerprint:
             return
@@ -434,9 +533,8 @@ class ParticipantRuntime:
         write_text_file(os.path.join(self.trust_output_dir, "crl.pem"), crl_pem)
         write_text_file(os.path.join(self.trust_output_dir, "metadata.json"), metadata_json)
         self.current_trust_bundle_fingerprint = fingerprint
-        log(
-            f"Installed trust bundle {self.conductor_namespace}/{self.trust_bundle_secret_name}"
-        )
+        self.set_status(trustBundleInstalled=True, lastTrustBundleInstalledAt=int(time.time()))
+        log(f"Installed trust bundle {self.conductor_namespace}/{self.trust_bundle_secret_name}")
 
     def publish_heartbeat(self):
         if self.connection is None or self.channel is None or self.bundle is None:
@@ -472,15 +570,23 @@ class ParticipantRuntime:
                     self.connection.process_data_events(time_limit=1)
                 else:
                     time.sleep(1)
+                self.set_status(lastError="")
             except KeyboardInterrupt:
                 raise
             except Exception as error:
+                self.set_status(lastError=str(error))
                 log(f"Loop failed: {error}")
                 self.close_connection()
                 time.sleep(5)
+            finally:
+                self.write_status()
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "probe":
+        mode = sys.argv[2] if len(sys.argv) > 2 else "ready"
+        sys.exit(probe(mode))
+
     runtime = ParticipantRuntime()
     runtime.run()
 

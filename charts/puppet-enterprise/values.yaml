@@ -89,6 +89,7 @@ conductor:
       pullPolicy: IfNotPresent
     heartbeatIntervalSeconds: 15
     secretPollIntervalSeconds: 15
+    statusMaxAgeSeconds: 60
     trustPollIntervalSeconds: 15
     trustOutputDir: /var/lib/conductor/trust
     resources: {}

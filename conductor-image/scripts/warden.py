@@ -619,7 +619,9 @@ def reconcile_trust_bundle(k8s, prefix, default_namespace, segment, participants
 
     unique_ca_blocks = unique_pem_blocks(ca_blocks)
     unique_crl_blocks = unique_pem_blocks(crl_blocks)
-    metadata = {
+    ca_pem = "".join(unique_ca_blocks)
+    crl_pem = "".join(unique_crl_blocks)
+    stable_metadata = {
         "apiVersion": API_VERSION,
         "kind": "ConductorTrustBundle",
         "segment": {
@@ -628,12 +630,40 @@ def reconcile_trust_bundle(k8s, prefix, default_namespace, segment, participants
             "pkiDomain": segment.get("pkiDomain", ""),
             "region": segment.get("region", ""),
         },
-        "generatedAt": int(time.time()),
         "sourceCount": len(source_summaries),
         "caBlockCount": len(unique_ca_blocks),
         "crlBlockCount": len(unique_crl_blocks),
         "sources": source_summaries,
     }
+    existing = k8s.get_secret(bundle_name, namespace=trust_namespace)
+    existing_metadata = {}
+    existing_generated_at = 0
+    existing_ca_pem = ""
+    existing_crl_pem = ""
+    if existing is not None:
+        existing_data = existing.get("data", {})
+        if "ca.pem" in existing_data:
+            existing_ca_pem = b64decode_text(existing_data["ca.pem"])
+        if "crl.pem" in existing_data:
+            existing_crl_pem = b64decode_text(existing_data["crl.pem"])
+        if "metadata.json" in existing_data:
+            try:
+                existing_metadata = json.loads(b64decode_text(existing_data["metadata.json"]))
+            except json.JSONDecodeError:
+                existing_metadata = {}
+        existing_generated_at = int(existing_metadata.pop("generatedAt", 0) or 0)
+
+    generated_at = int(time.time())
+    if (
+        existing_metadata == stable_metadata
+        and existing_ca_pem == ca_pem
+        and existing_crl_pem == crl_pem
+        and existing_generated_at > 0
+    ):
+        generated_at = existing_generated_at
+
+    metadata = dict(stable_metadata)
+    metadata["generatedAt"] = generated_at
     updated = k8s.upsert_secret(
         bundle_name,
         labels={
@@ -644,8 +674,8 @@ def reconcile_trust_bundle(k8s, prefix, default_namespace, segment, participants
             "pe-k8s.puppet.com/trust-source-count": str(len(source_summaries)),
         },
         string_data={
-            "ca.pem": "".join(unique_ca_blocks),
-            "crl.pem": "".join(unique_crl_blocks),
+            "ca.pem": ca_pem,
+            "crl.pem": crl_pem,
             "metadata.json": json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         },
         namespace=trust_namespace,

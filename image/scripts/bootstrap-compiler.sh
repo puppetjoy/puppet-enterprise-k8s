@@ -15,6 +15,8 @@ PE_COMPILER_POSTGRESQL_HOST="${PE_COMPILER_POSTGRESQL_HOST:-}"
 PE_COMPILER_DNS_ALT_NAMES="${PE_COMPILER_DNS_ALT_NAMES:-}"
 PE_COMPILER_PUPPETDB_SYNC_INTERVAL_MINUTES="${PE_COMPILER_PUPPETDB_SYNC_INTERVAL_MINUTES:-5}"
 PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS="${PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS:-900}"
+PE_COMPILER_APPLY_MAX_ATTEMPTS="${PE_COMPILER_APPLY_MAX_ATTEMPTS:-3}"
+PE_COMPILER_APPLY_RETRY_SECONDS="${PE_COMPILER_APPLY_RETRY_SECONDS:-10}"
 PE_COMPILER_BOOTSTRAP_DIR="${PE_COMPILER_BOOTSTRAP_DIR:-/etc/puppetlabs/pe-k8s-compiler}"
 PE_COMPILER_MANIFEST_PATH="${PE_COMPILER_MANIFEST_PATH:-${PE_COMPILER_BOOTSTRAP_DIR}/bootstrap.pp}"
 
@@ -198,30 +200,40 @@ stop_bootstrap_services() {
 }
 
 run_compiler_apply() {
-    local certname rc
+    local certname rc attempt
     certname="$(compiler_certname)"
 
     export FACTER_hostname="${PE_COMPILER_POD_NAME}"
     export FACTER_fqdn="${certname}"
 
-    set +e
-    /opt/puppetlabs/bin/puppet apply \
-        --certname "${certname}" \
-        --detailed-exitcodes \
-        --modulepath /opt/puppetlabs/puppet/modules \
-        "${PE_COMPILER_MANIFEST_PATH}"
-    rc=$?
-    set -e
+    attempt=1
+    while [ "${attempt}" -le "${PE_COMPILER_APPLY_MAX_ATTEMPTS}" ]; do
+        set +e
+        /opt/puppetlabs/bin/puppet apply \
+            --certname "${certname}" \
+            --detailed-exitcodes \
+            --modulepath /opt/puppetlabs/puppet/modules \
+            "${PE_COMPILER_MANIFEST_PATH}"
+        rc=$?
+        set -e
 
-    case "${rc}" in
-        0|2)
-            return 0
-            ;;
-        *)
-            log "Compiler bootstrap apply exited with status ${rc}"
+        case "${rc}" in
+            0|2)
+                return 0
+                ;;
+        esac
+
+        if [ "${attempt}" -ge "${PE_COMPILER_APPLY_MAX_ATTEMPTS}" ]; then
+            log "Compiler bootstrap apply exited with status ${rc} after ${attempt} attempt(s)"
             return "${rc}"
-            ;;
-    esac
+        fi
+
+        log \
+            "Compiler bootstrap apply exited with status ${rc}; retrying in " \
+            "${PE_COMPILER_APPLY_RETRY_SECONDS}s (attempt ${attempt}/${PE_COMPILER_APPLY_MAX_ATTEMPTS})"
+        sleep "${PE_COMPILER_APPLY_RETRY_SECONDS}"
+        attempt=$((attempt + 1))
+    done
 }
 
 main() {

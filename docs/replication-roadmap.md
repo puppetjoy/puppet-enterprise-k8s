@@ -32,7 +32,8 @@ Current status:
 - Warden can expand the `pe` and compiler `StatefulSet` members inside one release into onboarding bundles
 - optional `conductor-participant` sidecars can join the Fabric hub as those per-pod identities
 - control-plane pods can publish local trust sources and Warden can assemble a segment `ca.pem` and `crl.pem` bundle
-- health gating and replicated control-plane state are still outstanding
+- participant readiness can now gate `service/pe` and `service/pe-compiler` on onboarding, Fabric connectivity, and trust-bundle installation
+- replicated control-plane state is still outstanding
 
 ## Phase 2: Relay
 

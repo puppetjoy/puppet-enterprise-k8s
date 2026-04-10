@@ -146,6 +146,7 @@ When `conductor.enabled=true` on the PE chart:
 - control-plane pods publish local `ca.pem` and `crl.pem` material back into the Conductor namespace
 - Warden assembles a segment trust bundle from those control-plane trust sources
 - participant sidecars install the current trust bundle into a pod-local directory for later Relay and Gateway consumption
+- participant readiness can remove a pod from `service/pe` or `service/pe-compiler` when onboarding, Fabric connectivity, or trust-bundle currency falls out of policy
 
 That gives the release a real Fabric membership model without shared storage or hard-coded peer lists.
 It does not yet mean the release is safe to run with multiple active control-plane replicas behind `service/pe`.
@@ -221,7 +222,7 @@ Open design work remains around:
 - ownership and security hardening
 - secrets and certificate rotation
 
-One specific gap used to be that the `pe` workload had no stable per-replica identity or storage. That gap is now closed at the chart/runtime layer: `pe` is a StatefulSet with per-replica PVCs and runtime-rendered identity. Another recent gap was release-internal Fabric membership and trust distribution; that is now present through the optional `conductor-participant` sidecars and Warden-assembled trust bundles. The remaining gap is active-active synchronization of PE-owned state across the control-plane replicas themselves.
+One specific gap used to be that the `pe` workload had no stable per-replica identity or storage. That gap is now closed at the chart/runtime layer: `pe` is a StatefulSet with per-replica PVCs and runtime-rendered identity. Another recent gap was release-internal Fabric membership and trust distribution; that is now present through the optional `conductor-participant` sidecars, Warden-assembled trust bundles, and trust-aware participant readiness. The remaining gap is active-active synchronization of PE-owned state across the control-plane replicas themselves.
 
 The mapping doc [legacy-service-mapping.md](legacy-service-mapping.md) is the source of truth for the next decomposition steps.
 
