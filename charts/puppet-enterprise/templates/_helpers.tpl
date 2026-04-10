@@ -39,6 +39,18 @@ pe
 {{- printf "%s-%d" (include "pe.controlPlaneStatefulSetName" $root) $index -}}
 {{- end -}}
 
+{{- define "pe.controlPlaneCaSecretNameForIndex" -}}
+{{- printf "%s-ca" (include "pe.controlPlanePodNameForIndex" .) -}}
+{{- end -}}
+
+{{- define "pe.controlPlaneRootCaSecretName" -}}
+{{- default (printf "%s-control-plane-root-ca" (include "pe.fullname" .)) .Values.controlPlane.ca.releaseRoot.rootSecretName -}}
+{{- end -}}
+
+{{- define "pe.controlPlaneCaBundleSecretName" -}}
+{{- default (printf "%s-control-plane-ca-bundle" (include "pe.fullname" .)) .Values.controlPlane.ca.releaseRoot.bundleSecretName -}}
+{{- end -}}
+
 {{- define "pe.controlPlaneDefaultCertnameForIndex" -}}
 {{- $root := .root -}}
 {{- $podName := include "pe.controlPlanePodNameForIndex" . -}}

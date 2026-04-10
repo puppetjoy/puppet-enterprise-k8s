@@ -1,0 +1,31 @@
+{{- if eq .Values.controlPlane.ca.provider "certManager" }}
+{{- $issuerName := required "controlPlane.ca.certManager.issuerRef.name is required when controlPlane.ca.provider=certManager" .Values.controlPlane.ca.certManager.issuerRef.name }}
+{{- range $index, $_ := until (int .Values.controlPlane.replicaCount) }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "pe.controlPlaneCaSecretNameForIndex" (dict "root" $ "index" $index) }}
+  labels:
+    {{- include "pe.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: pe-services
+spec:
+  secretName: {{ include "pe.controlPlaneCaSecretNameForIndex" (dict "root" $ "index" $index) }}
+  commonName: {{ include "pe.controlPlaneDefaultCertnameForIndex" (dict "root" $ "index" $index) | quote }}
+  isCA: true
+  duration: {{ $.Values.controlPlane.ca.certManager.duration | quote }}
+  renewBefore: {{ $.Values.controlPlane.ca.certManager.renewBefore | quote }}
+  privateKey:
+    algorithm: {{ $.Values.controlPlane.ca.certManager.privateKey.algorithm | quote }}
+    size: {{ $.Values.controlPlane.ca.certManager.privateKey.size }}
+    rotationPolicy: {{ $.Values.controlPlane.ca.certManager.privateKey.rotationPolicy | quote }}
+  usages:
+    - cert sign
+    - crl sign
+    - digital signature
+  issuerRef:
+    name: {{ $issuerName | quote }}
+    kind: {{ $.Values.controlPlane.ca.certManager.issuerRef.kind | quote }}
+    group: {{ $.Values.controlPlane.ca.certManager.issuerRef.group | quote }}
+---
+{{- end }}
+{{- end }}

@@ -76,6 +76,31 @@ storage:
 controlPlane:
   replicaCount: 1
   podManagementPolicy: OrderedReady
+  ca:
+    provider: selfSigned
+    importTimeoutSeconds: 300
+    certManager:
+      issuerRef:
+        name: ""
+        kind: ClusterIssuer
+        group: cert-manager.io
+      duration: 87600h
+      renewBefore: 720h
+      rootSecretNamespace: ""
+      rootSecretName: ""
+      privateKey:
+        algorithm: RSA
+        size: 4096
+        rotationPolicy: Never
+    releaseRoot:
+      rootSecretName: ""
+      bundleSecretName: ""
+      rootCommonName: ""
+      durationDays: 3650
+      intermediateDurationDays: 3650
+      keyAlgorithm: RSA
+      keySize: 4096
+      initialSerial: 1000
   resources:
     postgresql: {}
     puppetdb: {}

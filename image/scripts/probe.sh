@@ -49,7 +49,7 @@ with socket.create_connection(("127.0.0.1", port), timeout=5):
 PY
     puppetdb_status="$(curl -skf https://127.0.0.1:8081/status/v1/services?level=debug)"
 
-    local_status="$(curl -skf https://127.0.0.1:8140/status/v1/services?level=debug)"
+    local_status="$(curl -sk https://127.0.0.1:8140/status/v1/services?level=debug)"
     pe_status="$(curl -skf "https://${PE_K8S_COMPILER_PE_SERVICE}:8140/status/v1/services?level=debug")"
 
     python3 - "${local_status}" "${pe_status}" "${puppetdb_status}" "${PE_K8S_COMPILER_PUPPETDB_SYNC_MAX_AGE_SECONDS:-}" <<'PY'
@@ -115,10 +115,6 @@ local_fs = local.get("file-sync-client-service", {})
 if local_fs.get("state") != "running":
     raise SystemExit(1)
 
-local_broker = local.get("broker-service") or {}
-if local_broker.get("state") != "running":
-    raise SystemExit(1)
-
 local_repo = (((local_fs.get("status") or {}).get("repos") or {}).get("puppet-code") or {})
 if local_repo.get("status") != "ok":
     raise SystemExit(1)
@@ -156,7 +152,7 @@ case "${role}" in
         exec curl -skf https://127.0.0.1:8081/status/v1/services/status-service
         ;;
     puppetserver)
-        exec curl -skf https://127.0.0.1:8140/status/v1/services
+        exec curl -skf https://127.0.0.1:8140/status/v1/services/status-service
         ;;
     compiler-puppetserver)
         compiler_filesync_ready

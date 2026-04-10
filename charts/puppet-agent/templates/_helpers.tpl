@@ -46,6 +46,15 @@ pe
 {{- end -}}
 {{- end -}}
 
+{{- define "puppet-agent.caServer" -}}
+{{- if .Values.agent.caServer -}}
+{{- .Values.agent.caServer -}}
+{{- else -}}
+{{- $pe := include "puppet-agent.peReleaseFullname" . -}}
+{{- printf "%s-0.%s-headless.%s.svc.cluster.local" $pe $pe .Release.Namespace -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "puppet-agent.certnameForIndex" -}}
 {{- if .Values.agent.certname -}}
 {{- .Values.agent.certname -}}
@@ -68,10 +77,8 @@ pe
 {{- define "puppet-agent.packageRepoHost" -}}
 {{- if .Values.agent.packageRepoServer -}}
 {{- .Values.agent.packageRepoServer -}}
-{{- else if .Values.agent.caServer -}}
-{{- .Values.agent.caServer -}}
 {{- else -}}
-{{- .Values.agent.server -}}
+{{- include "puppet-agent.caServer" . -}}
 {{- end -}}
 {{- end -}}
 

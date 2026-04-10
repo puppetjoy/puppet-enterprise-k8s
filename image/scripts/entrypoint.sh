@@ -16,6 +16,9 @@ case "${command}" in
     bootstrap-compiler)
         exec /usr/local/bin/bootstrap-compiler.sh "$@"
         ;;
+    bootstrap-control-plane-ca)
+        exec python3 /usr/local/bin/bootstrap-control-plane-ca.py "$@"
+        ;;
     sign-certs)
         exec /usr/local/bin/sign-certs.sh "$@"
         ;;
@@ -43,6 +46,7 @@ Usage:
   pe-k8s-entrypoint install
   pe-k8s-entrypoint install-compiler-runtime
   pe-k8s-entrypoint bootstrap-compiler
+  pe-k8s-entrypoint bootstrap-control-plane-ca
   pe-k8s-entrypoint sign-certs
   pe-k8s-entrypoint configure-classifier
   pe-k8s-entrypoint regenerate-cert

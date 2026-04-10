@@ -33,7 +33,7 @@ spec:
             - name: PE_AGENT_SERVER
               value: {{ .Values.agent.server | quote }}
             - name: PE_AGENT_CA_SERVER
-              value: {{ .Values.agent.caServer | quote }}
+              value: {{ include "puppet-agent.caServer" . | quote }}
             - name: PE_AGENT_SERVER_LIST
               value: {{ .Values.agent.serverList | quote }}
             - name: PE_AGENT_ENVIRONMENT

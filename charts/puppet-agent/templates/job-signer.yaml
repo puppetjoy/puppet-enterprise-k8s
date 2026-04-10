@@ -34,7 +34,7 @@ spec:
             - name: PE_SIGN_CERT_LABEL
               value: "agent certificate"
             - name: PE_SIGN_PE_SERVICE
-              value: {{ include "puppet-agent.peReleaseFullname" . | quote }}
+              value: {{ include "puppet-agent.caServer" . | quote }}
             - name: PE_SIGN_PE_CONF_PATH
               value: /config/pe.conf
           resources:

@@ -60,6 +60,20 @@ spec:
               value: {{ include "pe.controlPlaneHeadlessServiceName" . | quote }}
             - name: PE_CONTROL_PLANE_SHARED_DNS_ALT_NAMES
               value: {{ include "pe.controlPlaneFrontDoorDnsNamesCsv" . | quote }}
+            - name: PE_CONTROL_PLANE_CA_PROVIDER
+              value: {{ .Values.controlPlane.ca.provider | quote }}
+            - name: PE_CONTROL_PLANE_CA_IMPORT_TIMEOUT_SECONDS
+              value: {{ .Values.controlPlane.ca.importTimeoutSeconds | quote }}
+            {{- if eq .Values.controlPlane.ca.provider "releaseRoot" }}
+            - name: PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME
+              value: {{ include "pe.controlPlaneCaBundleSecretName" . | quote }}
+            {{- end }}
+            {{- if eq .Values.controlPlane.ca.provider "certManager" }}
+            - name: PE_CONTROL_PLANE_CA_ROOT_SECRET_NAMESPACE
+              value: {{ default .Release.Namespace .Values.controlPlane.ca.certManager.rootSecretNamespace | quote }}
+            - name: PE_CONTROL_PLANE_CA_ROOT_SECRET_NAME
+              value: {{ required "controlPlane.ca.certManager.rootSecretName is required when controlPlane.ca.provider=certManager" .Values.controlPlane.ca.certManager.rootSecretName | quote }}
+            {{- end }}
             {{- if .Values.peConfig.certname }}
             - name: PE_CONTROL_PLANE_CERTNAME
               value: {{ .Values.peConfig.certname | quote }}

@@ -42,6 +42,7 @@ COPY image/scripts/entrypoint.sh /usr/local/bin/pe-k8s-entrypoint
 COPY image/scripts/install-pe.sh /usr/local/bin/install-pe.sh
 COPY image/scripts/install-compiler-runtime.sh /usr/local/bin/install-compiler-runtime.sh
 COPY image/scripts/bootstrap-compiler.sh /usr/local/bin/bootstrap-compiler.sh
+COPY image/scripts/bootstrap-control-plane-ca.py /usr/local/bin/bootstrap-control-plane-ca.py
 COPY image/scripts/sign-certs.sh /usr/local/bin/sign-certs.sh
 COPY image/scripts/configure-classifier.sh /usr/local/bin/configure-classifier.sh
 COPY image/scripts/regenerate-cert.sh /usr/local/bin/regenerate-cert.sh
@@ -55,6 +56,7 @@ RUN chmod 0755 /usr/local/bin/pe-k8s-entrypoint \
                 /usr/local/bin/install-pe.sh \
                 /usr/local/bin/install-compiler-runtime.sh \
                 /usr/local/bin/bootstrap-compiler.sh \
+                /usr/local/bin/bootstrap-control-plane-ca.py \
                 /usr/local/bin/sign-certs.sh \
                 /usr/local/bin/configure-classifier.sh \
                 /usr/local/bin/regenerate-cert.sh \

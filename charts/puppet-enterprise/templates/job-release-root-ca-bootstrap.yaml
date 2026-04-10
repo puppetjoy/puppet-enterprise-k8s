@@ -1,0 +1,58 @@
+{{- if eq .Values.controlPlane.ca.provider "releaseRoot" }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "pe.fullname" . }}-release-root-ca-bootstrap-r{{ .Release.Revision }}
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane-ca-bootstrap
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "pe.labels" . | nindent 8 }}
+        app.kubernetes.io/component: control-plane-ca-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "pe.fullname" . }}-control-plane-ca-bootstrap
+      affinity:
+{{ toYaml .Values.affinity | indent 8 }}
+      tolerations:
+{{ toYaml .Values.tolerations | indent 8 }}
+      containers:
+        - name: bootstrap
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "bootstrap-control-plane-ca"]
+          env:
+            - name: PE_CONTROL_PLANE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: PE_CONTROL_PLANE_STATEFULSET_NAME
+              value: {{ include "pe.controlPlaneStatefulSetName" . | quote }}
+            - name: PE_CONTROL_PLANE_HEADLESS_SERVICE
+              value: {{ include "pe.controlPlaneHeadlessServiceName" . | quote }}
+            - name: PE_CONTROL_PLANE_REPLICA_COUNT
+              value: {{ .Values.controlPlane.replicaCount | quote }}
+            - name: PE_CONTROL_PLANE_CA_ROOT_SECRET_NAME
+              value: {{ include "pe.controlPlaneRootCaSecretName" . | quote }}
+            - name: PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME
+              value: {{ include "pe.controlPlaneCaBundleSecretName" . | quote }}
+            - name: PE_CONTROL_PLANE_CA_ROOT_COMMON_NAME
+              value: {{ default (printf "Puppet Root CA: %s" (include "pe.fullname" .)) .Values.controlPlane.ca.releaseRoot.rootCommonName | quote }}
+            - name: PE_CONTROL_PLANE_CA_DURATION_DAYS
+              value: {{ .Values.controlPlane.ca.releaseRoot.durationDays | quote }}
+            - name: PE_CONTROL_PLANE_CA_INTERMEDIATE_DURATION_DAYS
+              value: {{ .Values.controlPlane.ca.releaseRoot.intermediateDurationDays | quote }}
+            - name: PE_CONTROL_PLANE_CA_KEY_ALGORITHM
+              value: {{ .Values.controlPlane.ca.releaseRoot.keyAlgorithm | quote }}
+            - name: PE_CONTROL_PLANE_CA_KEY_SIZE
+              value: {{ .Values.controlPlane.ca.releaseRoot.keySize | quote }}
+            - name: PE_CONTROL_PLANE_CA_INITIAL_SERIAL
+              value: {{ .Values.controlPlane.ca.releaseRoot.initialSerial | quote }}
+          resources:
+{{ toYaml .Values.installer.resources | indent 12 }}
+{{- end }}

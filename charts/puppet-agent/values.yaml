@@ -17,7 +17,7 @@ tolerations: []
 agent:
   replicaCount: 1
   server: pe
-  caServer: pe
+  caServer: ""
   serverList: ""
   environment: production
   certname: ""

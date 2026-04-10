@@ -75,6 +75,70 @@ k8s_api_get() {
         "$(k8s_api_server)${path}"
 }
 
+k8s_api_get_optional() {
+    local path="$1"
+    local token_path
+    local ca_path
+    local token
+    local response_path
+    local status_code
+
+    token_path="$(k8s_serviceaccount_token_path)"
+    ca_path="$(k8s_serviceaccount_ca_path)"
+
+    require_file "${token_path}" >/dev/null
+    require_file "${ca_path}" >/dev/null
+    token="$(cat "${token_path}")"
+    response_path="$(mktemp)"
+
+    status_code="$(
+        curl -sS -o "${response_path}" -w '%{http_code}' \
+            --cacert "${ca_path}" \
+            -H "Authorization: Bearer ${token}" \
+            "$(k8s_api_server)${path}"
+    )"
+
+    case "${status_code}" in
+        200)
+            cat "${response_path}"
+            rm -f "${response_path}"
+            return 0
+            ;;
+        404)
+            rm -f "${response_path}"
+            return 1
+            ;;
+        *)
+            cat "${response_path}" >&2 || true
+            rm -f "${response_path}"
+            return 1
+            ;;
+    esac
+}
+
+k8s_secret_data_field() {
+    local namespace="$1"
+    local secret_name="$2"
+    local field_name="$3"
+    local payload
+
+    payload="$(k8s_api_get_optional "/api/v1/namespaces/${namespace}/secrets/${secret_name}")" || return 1
+
+    python3 - "${payload}" "${field_name}" <<'PY'
+import base64
+import json
+import sys
+
+secret = json.loads(sys.argv[1])
+field_name = sys.argv[2]
+data = (secret.get("data") or {}).get(field_name, "")
+if not data:
+    raise SystemExit(1)
+
+sys.stdout.write(base64.b64decode(data.encode("ascii")).decode("utf-8"))
+PY
+}
+
 job_completion_state() {
     local namespace="$1"
     local job_name="$2"
