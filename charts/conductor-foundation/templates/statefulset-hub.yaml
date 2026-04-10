@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "conductor.hubServiceName" . }}
+  labels:
+{{ include "conductor.labels" . | indent 4 }}
+    app.kubernetes.io/component: hub
+spec:
+  serviceName: {{ include "conductor.hubHeadlessServiceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "conductor.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: hub
+  template:
+    metadata:
+      labels:
+{{ include "conductor.labels" . | indent 8 }}
+        app.kubernetes.io/component: hub
+    spec:
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml .Values.imagePullSecrets | indent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      containers:
+        - name: hub
+          image: "{{ .Values.hub.image.repository }}:{{ .Values.hub.image.tag }}"
+          imagePullPolicy: {{ .Values.hub.image.pullPolicy }}
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "conductor.hubAuthSecretName" . }}
+                  key: {{ .Values.hub.auth.usernameKey }}
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "conductor.hubAuthSecretName" . }}
+                  key: {{ .Values.hub.auth.passwordKey }}
+{{- if .Values.hub.extraEnv }}
+{{ toYaml .Values.hub.extraEnv | indent 12 }}
+{{- end }}
+          ports:
+            - name: amqp
+              containerPort: {{ .Values.hub.service.amqpPort }}
+            - name: management
+              containerPort: {{ .Values.hub.service.managementPort }}
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - rabbitmq-diagnostics -q ping
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - rabbitmq-diagnostics -q ping
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+{{ toYaml .Values.hub.resources | indent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+      {{- if not .Values.hub.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.hub.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+{{ include "conductor.labels" . | indent 10 }}
+          app.kubernetes.io/component: hub
+      spec:
+        accessModes:
+{{ toYaml .Values.hub.persistence.accessModes | indent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.hub.persistence.size }}
+        {{- if .Values.hub.persistence.storageClassName }}
+        storageClassName: {{ .Values.hub.persistence.storageClassName }}
+        {{- end }}
+  {{- end }}

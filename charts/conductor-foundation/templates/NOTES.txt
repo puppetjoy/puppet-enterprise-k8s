@@ -1,0 +1,10 @@
+Conductor foundation deployed.
+
+Hub service:
+  {{ include "conductor.hubServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.hub.service.amqpPort }}
+
+Hub management API:
+  http://{{ include "conductor.hubServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.hub.service.managementPort }}
+
+Warden publishes per-participant onboarding bundles into Secrets labeled:
+  pe-k8s.puppet.com/conductor=onboarding-bundle

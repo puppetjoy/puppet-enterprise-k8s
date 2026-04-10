@@ -9,8 +9,8 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 - Installs PE with Helm and preserves the install result on single-owner PVCs
 - Runs PostgreSQL, PuppetDB, the non-compiler Puppet Server, and PE edge/API services in a single-owner `pe` pod
 - Supports an optional compiler pool with per-replica non-shared PVCs, local PostgreSQL/PuppetDB, file-sync/PuppetDB-based readiness, and compiler-side PCP brokers
-- Supports multiple release-scoped PE instances in one cluster, each with its own local state and optional compiler pool
-- Treats the PE instance as the unit of local ownership from which active-active HA will be built
+- Supports multiple release-scoped PE instances in one cluster for isolated development and validation
+- Treats one Helm release, not multiple separate releases, as the future active-active replication domain
 - Keeps compilers attached to one owning PE instance; compilers are not a replication mesh
 - Supports optional ingress exposure, Code Manager configuration, and a validation `puppet-agent` chart with explicit certificate signing
 - Still evolving toward a Conductor-aligned active-active control plane, upgrade orchestration, and hardening
@@ -29,8 +29,9 @@ For the deeper runtime and operator model, see:
 ## Repository Layout
 
 - `image/`: PE runtime image and entrypoint scripts
+- `conductor-image/`: Warden bootstrap image for the Conductor foundation slice
 - `agent-image/`: validation agent image
-- `charts/`: Helm charts for PE and the validation agent
+- `charts/`: Helm charts for PE, the Conductor foundation, and the validation agent
 - `docs/`: runtime notes and legacy service mapping
 
 ## Prerequisites
@@ -52,6 +53,7 @@ Cluster-specific settings belong in ignored local files, not in tracked defaults
 
 - `local/values-pe.yaml`
 - `local/values-agent.yaml`
+- `local/values-conductor.yaml`
 
 Typical overrides include:
 
@@ -106,6 +108,18 @@ make push-k8s-agent \
 
 Override `K8S_RUNTIME_IMAGE_NAME` or `K8S_AGENT_IMAGE_NAME` if you want to publish to a different registry or repository.
 
+Build and push the Conductor Warden image:
+
+```bash
+CONTAINER_ENGINE=podman \
+make build-conductor \
+  CONDUCTOR_IMAGE_VERSION=0.1.0
+
+CONTAINER_ENGINE=podman \
+make push-conductor \
+  CONDUCTOR_IMAGE_VERSION=0.1.0
+```
+
 ## Deploy
 
 Render the PE chart locally:
@@ -126,6 +140,11 @@ Deploy the validation agent:
 1. Put agent-specific overrides in `local/values-agent.yaml`.
 2. Run `make deploy-agent`.
 
+Deploy the Conductor foundation slice:
+
+1. Put Conductor-specific overrides in `local/values-conductor.yaml`.
+2. Run `make deploy-conductor`.
+
 The validation agent chart is optional. It exists to exercise certificate issuance, catalog compilation, reporting, and Code Manager changes against a real `puppet-agent` run.
 By default it can also render a signer Job that signs the test-node certificate against the in-cluster PE CA.
 
@@ -137,6 +156,7 @@ This project is intentionally conservative right now:
 - the current `pe` workload is single-owner and single-replica oriented
 - compiler capacity can scale horizontally behind `service/pe-compiler`
 - centralized `puppet-code deploy` remains the code rollout entrypoint
+- separate Helm releases are independent sandboxes, not synchronization peers
 - active-active HA work is Conductor-aligned: Fabric, Relay, Gateway, and Warden
 - the repo does not yet deliver full active-active PE replication
 - code rollout across Workers remains operator-initiated through Code Manager; later Fabric work may propagate deploy intent and convergence state between Workers

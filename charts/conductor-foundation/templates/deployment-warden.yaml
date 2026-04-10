@@ -1,0 +1,80 @@
+{{- if .Values.warden.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "conductor.fullname" . }}-warden
+  labels:
+{{ include "conductor.labels" . | indent 4 }}
+    app.kubernetes.io/component: warden
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "conductor.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: warden
+  template:
+    metadata:
+      labels:
+{{ include "conductor.labels" . | indent 8 }}
+        app.kubernetes.io/component: warden
+    spec:
+      serviceAccountName: {{ include "conductor.serviceAccountName" . }}
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml .Values.imagePullSecrets | indent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      containers:
+        - name: warden
+          image: "{{ .Values.warden.image.repository }}:{{ .Values.warden.image.tag }}"
+          imagePullPolicy: {{ .Values.warden.image.pullPolicy }}
+          env:
+            - name: WARDEN_CONFIG_PATH
+              value: /config/config.json
+            - name: WARDEN_INTERVAL_SECONDS
+              value: {{ .Values.warden.intervalSeconds | quote }}
+            - name: WARDEN_LOG_LEVEL
+              value: {{ .Values.warden.logLevel | quote }}
+            - name: WARDEN_PRUNE_STALE_PARTICIPANTS
+              value: {{ ternary "true" "false" .Values.warden.pruneStaleParticipants | quote }}
+            - name: WARDEN_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: WARDEN_RESOURCE_PREFIX
+              value: {{ include "conductor.fullname" . | quote }}
+            - name: WARDEN_RABBITMQ_API_URL
+              value: {{ printf "http://%s:%v" (include "conductor.hubServiceName" .) .Values.hub.service.managementPort | quote }}
+            - name: WARDEN_RABBITMQ_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "conductor.hubAuthSecretName" . }}
+                  key: {{ .Values.hub.auth.usernameKey }}
+            - name: WARDEN_RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "conductor.hubAuthSecretName" . }}
+                  key: {{ .Values.hub.auth.passwordKey }}
+          resources:
+{{ toYaml .Values.warden.resources | indent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "conductor.wardenConfigMapName" . }}
+{{- end }}

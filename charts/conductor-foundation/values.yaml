@@ -1,0 +1,63 @@
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+nodeSelector: {}
+
+affinity: {}
+
+tolerations: []
+
+serviceAccount:
+  create: true
+  name: ""
+
+hub:
+  image:
+    repository: docker.io/library/rabbitmq
+    tag: "3.13-management-alpine"
+    pullPolicy: IfNotPresent
+  auth:
+    username: admin
+    password: change-me-now
+    existingSecretName: ""
+    usernameKey: username
+    passwordKey: password
+  service:
+    type: ClusterIP
+    loadBalancerIP: ""
+    amqpPort: 5672
+    managementPort: 15672
+  persistence:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    size: 8Gi
+    storageClassName: ""
+  resources: {}
+  extraEnv: []
+
+warden:
+  enabled: true
+  image:
+    repository: registry.example.test/pe-k8s-conductor
+    tag: "dev"
+    pullPolicy: IfNotPresent
+  intervalSeconds: 30
+  logLevel: info
+  pruneStaleParticipants: true
+  resources: {}
+
+fabric:
+  exchanges:
+    data: fabric.events
+    control: system.control
+    wardenWork: warden.work
+  segments:
+    - name: default
+      vhost: conductor-default
+      pkiDomain: default
+      region: default
+      participants: []
+      releaseDomains: []

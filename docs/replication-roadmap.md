@@ -11,7 +11,7 @@ The current chart already proves the foundation we need:
 - each PE instance can own an attached compiler pool with non-shared PVCs
 - catalog service and PCP broker traffic can be separated from the PE API/control surface
 
-That baseline is important because Conductor assumes local ownership first and cross-instance coordination second.
+Those separate releases are useful as isolated sandboxes, but they are not the HA domain. The HA target is release-internal replication: multiple control-plane replicas and multiple compiler replicas inside one release. The baseline is still important because Conductor assumes local ownership first and cross-participant coordination second.
 
 ## Phase 1: Fabric And Warden
 
@@ -19,10 +19,10 @@ Before any PE state can replicate credibly, the mesh needs a transport and a tru
 
 This phase introduces:
 
-- a local Fabric participant per PE instance
+- a local Fabric participant per stable replicated workload member inside a release
 - a separately managed HA Fabric hub
 - signed message envelopes and channel isolation
-- Warden-driven join approval, onboarding bundles, and key distribution
+- Warden-driven join approval, onboarding bundles, key distribution, and stale-participant pruning
 - Warden assembly of compiled `ca.pem` and merged `crl.pem`
 
 This is the point where active-active HA stops being a Kubernetes deployment pattern and becomes a real distributed system.
@@ -84,6 +84,7 @@ The following are not the target architecture:
 - compiler-to-compiler replication
 - direct PE-to-PE classifier reconciliation as the HA mechanism
 - direct PE-to-PE Code Manager deploy fanout that bypasses Fabric
+- treating separate Helm releases as one active-active mesh
 - shared RWX storage across PE instances
 
 Code deployment across Workers should remain rooted in supported PE tooling. The Conductor layer can transport deploy intent and convergence state, but it should not replace Code Manager or r10k.

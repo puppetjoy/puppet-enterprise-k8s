@@ -1,14 +1,17 @@
-.PHONY: help build-k8s-runtime build-k8s-agent push-k8s-runtime push-k8s-agent check-current-state create-r10k-secret create-license-secret deploy-pe deploy-agent deploy lint
+.PHONY: help build-k8s-runtime build-k8s-agent build-conductor push-k8s-runtime push-k8s-agent push-conductor check-current-state create-r10k-secret create-license-secret deploy-pe deploy-agent deploy-conductor deploy lint
 
 CONTAINER_ENGINE ?= podman
 PE_VERSION ?=
 PE_NAMESPACE ?= puppet
 PE_RELEASE ?= pe
 PE_AGENT_RELEASE ?= test-node
+CONDUCTOR_NAMESPACE ?= $(PE_NAMESPACE)
+CONDUCTOR_RELEASE ?= conductor
 LOCAL_DIR ?= local
 INSTALLERS_DIR ?= installers
 PE_VALUES_FILE ?= $(LOCAL_DIR)/values-pe.yaml
 PE_AGENT_VALUES_FILE ?= $(LOCAL_DIR)/values-agent.yaml
+CONDUCTOR_VALUES_FILE ?= $(LOCAL_DIR)/values-conductor.yaml
 LOCAL_KEYS_DIR ?= $(LOCAL_DIR)/keys
 R10K_DEPLOY_KEY_PATH ?= $(LOCAL_KEYS_DIR)/id-control_repo.ed25519
 R10K_DEPLOY_KEY_SECRET_NAME ?= pe-r10k-deploy-key
@@ -21,6 +24,8 @@ K8S_RUNTIME_IMAGE_VERSION ?= $(PE_VERSION)
 K8S_INSTALLER_CONTEXT_PATH ?= image/assets/pe-installer/installer.tar.gz
 K8S_AGENT_IMAGE_NAME ?= pe-k8s-agent
 K8S_AGENT_IMAGE_VERSION ?= dev
+CONDUCTOR_IMAGE_NAME ?= pe-k8s-conductor
+CONDUCTOR_IMAGE_VERSION ?= dev
 
 help:
 	@echo "Puppet Enterprise on Kubernetes"
@@ -30,17 +35,21 @@ help:
 	@echo "  make push-k8s-runtime PE_VERSION=<version>"
 	@echo "  make build-k8s-agent K8S_AGENT_IMAGE_VERSION=<version>"
 	@echo "  make push-k8s-agent K8S_AGENT_IMAGE_VERSION=<version>"
+	@echo "  make build-conductor CONDUCTOR_IMAGE_VERSION=<version>"
+	@echo "  make push-conductor CONDUCTOR_IMAGE_VERSION=<version>"
 	@echo ""
 	@echo "Deploy from repo-local operator values:"
 	@echo "  make check-current-state PE_VERSION=<version>"
 	@echo "  make deploy-pe"
 	@echo "  make deploy-agent"
+	@echo "  make deploy-conductor"
 	@echo "  make deploy"
 	@echo ""
 	@echo "Repo-local artifact paths:"
 	@echo "  installer: $(INSTALLERS_DIR)/puppet-enterprise-<version>-el-9-x86_64.tar.gz"
 	@echo "  pe values: $(PE_VALUES_FILE)"
 	@echo "  agent values: $(PE_AGENT_VALUES_FILE)"
+	@echo "  conductor values: $(CONDUCTOR_VALUES_FILE)"
 	@echo "  r10k key: $(R10K_DEPLOY_KEY_PATH)"
 	@echo "  license: $(PE_LICENSE_PATH) (optional)"
 	@echo ""
@@ -100,6 +109,18 @@ build-k8s-agent:
 		--file agent-image/Containerfile \
 		.
 
+build-conductor:
+	@if [ -z "$(CONTAINER_ENGINE)" ]; then \
+		echo "ERROR: CONTAINER_ENGINE is required"; \
+		exit 1; \
+	fi
+	@echo "[Build] Starting $(CONTAINER_ENGINE) build for $(CONDUCTOR_IMAGE_NAME):$(CONDUCTOR_IMAGE_VERSION)"
+	@"$(CONTAINER_ENGINE)" build \
+		--tag "$(CONDUCTOR_IMAGE_NAME):$(CONDUCTOR_IMAGE_VERSION)" \
+		--tag "$(CONDUCTOR_IMAGE_NAME):latest" \
+		--file conductor-image/Containerfile \
+		.
+
 push-k8s-runtime:
 	@if [ -z "$(CONTAINER_ENGINE)" ]; then \
 		echo "ERROR: CONTAINER_ENGINE is required"; \
@@ -116,9 +137,17 @@ push-k8s-agent:
 	@echo "[Push] Pushing $(K8S_AGENT_IMAGE_NAME):$(K8S_AGENT_IMAGE_VERSION)"
 	@"$(CONTAINER_ENGINE)" push "$(K8S_AGENT_IMAGE_NAME):$(K8S_AGENT_IMAGE_VERSION)"
 
+push-conductor:
+	@if [ -z "$(CONTAINER_ENGINE)" ]; then \
+		echo "ERROR: CONTAINER_ENGINE is required"; \
+		exit 1; \
+	fi
+	@echo "[Push] Pushing $(CONDUCTOR_IMAGE_NAME):$(CONDUCTOR_IMAGE_VERSION)"
+	@"$(CONTAINER_ENGINE)" push "$(CONDUCTOR_IMAGE_NAME):$(CONDUCTOR_IMAGE_VERSION)"
+
 check-current-state:
 	@missing=0; \
-	for path in "$(PE_VALUES_FILE)" "$(PE_AGENT_VALUES_FILE)" "$(R10K_DEPLOY_KEY_PATH)"; do \
+	for path in "$(PE_VALUES_FILE)" "$(PE_AGENT_VALUES_FILE)" "$(CONDUCTOR_VALUES_FILE)" "$(R10K_DEPLOY_KEY_PATH)"; do \
 		if [ -f "$$path" ]; then \
 			echo "[OK] $$path"; \
 		else \
@@ -181,8 +210,19 @@ deploy-agent:
 		--create-namespace \
 		-f "$(PE_AGENT_VALUES_FILE)"
 
+deploy-conductor:
+	@if [ ! -f "$(CONDUCTOR_VALUES_FILE)" ]; then \
+		echo "ERROR: conductor values file not found: $(CONDUCTOR_VALUES_FILE)"; \
+		exit 1; \
+	fi
+	helm upgrade --install "$(CONDUCTOR_RELEASE)" charts/conductor-foundation \
+		--namespace "$(CONDUCTOR_NAMESPACE)" \
+		--create-namespace \
+		-f "$(CONDUCTOR_VALUES_FILE)"
+
 deploy: deploy-pe deploy-agent
 
 lint:
 	@helm lint charts/puppet-enterprise
 	@helm lint charts/puppet-agent
+	@helm lint charts/conductor-foundation

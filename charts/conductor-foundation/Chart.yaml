@@ -1,0 +1,6 @@
+apiVersion: v2
+name: conductor-foundation
+description: Fabric hub and Warden bootstrap services for Conductor-aligned PE meshes
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

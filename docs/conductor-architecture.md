@@ -4,8 +4,10 @@ This repo is pivoting from a single-owner PE-on-Kubernetes baseline toward a Con
 
 The important boundary is simple:
 
-- a PE instance is the unit of control-plane ownership
-- a compiler pool stays attached to one PE instance
+- a Helm release is the intended replication domain
+- separate Helm releases are independent stacks, not synchronization peers
+- a release will eventually contain multiple control-plane replicas and multiple compiler replicas
+- a compiler pool stays attached to the control-plane set inside its own release
 - compilers do not form their own replication mesh
 - shared storage is not part of the design
 
@@ -16,7 +18,7 @@ The Conductor spec defines two PE roles:
 - Worker: a PE instance that actively serves nodes
 - SPOG: a PE instance used for management visibility, not for catalog service
 
-For this repo, the near-term path is to make the PE instance the thing that can become a Worker. Compiler replicas remain the node-serving edge attached to that PE instance until the Conductor data paths are fully in place.
+For this repo, the near-term path is to treat a single release as one Worker-shaped stack under construction. Compiler replicas already exist as a stable in-release set. Control-plane replicas do not yet exist in the chart, but they are part of the intended release topology rather than a separate release.
 
 ## Component Mapping
 
@@ -28,9 +30,9 @@ Fabric is the queue layer. It provides signed message transport, encryption, loc
 
 In Kubernetes terms, that means:
 
-- one local Fabric participant per PE instance
+- one local Fabric participant per replicated workload member inside the release
 - a separately managed HA Fabric hub outside the `pe` workload
-- explicit onboarding and key distribution instead of PVC sharing or direct PE-to-PE sync
+- explicit onboarding and key distribution instead of PVC sharing or direct release-to-release sync
 
 ## Warden
 
@@ -42,6 +44,16 @@ It should not be bundled into the `pe` pod. It is a separate control service wit
 - onboarding bundles
 - key rotation eligibility
 - compiled `ca.pem` and merged `crl.pem` distribution
+
+Warden should be driven by release topology, not hard-coded peers. That means it needs to expand stable workload sets, notice replica-count changes, and prune stale participants automatically.
+
+The current foundation slice models that as:
+
+- one Fabric Segment definition
+- one or more release domains inside that segment
+- one or more stable workload sets inside each release domain
+
+Today the compiler `StatefulSet` fits that model cleanly. Future multi-control-plane testing will need a stable control-plane workload set with the same property.
 
 ## Relay
 
@@ -83,6 +95,7 @@ The repo should not treat these as the HA architecture:
 
 - direct PE-to-PE reconciliation of classifier or RBAC state
 - direct PE-to-PE Code Manager deploy fanout that bypasses Fabric
+- separate Helm releases acting as a fake HA control plane
 - compiler-to-compiler coordination for replication
 - shared RWX storage between PE instances
 

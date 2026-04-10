@@ -99,9 +99,10 @@ The active-active direction for this repo is Conductor, not direct PE-to-PE sync
 
 That keeps the core boundary intact:
 
-- PostgreSQL, PuppetDB, classification, RBAC, CA, and orchestration state are locally owned by a PE instance
-- compiler pods remain attached to one owning PE instance
+- PostgreSQL, PuppetDB, classification, RBAC, CA, and orchestration state are locally owned inside one Helm release
+- compiler pods remain attached to the control-plane stack inside that same release
 - compilers are not asked to replicate management state among themselves
+- separate Helm releases are independent development stacks, not replication peers
 
 The Conductor components map onto this runtime model as follows:
 
@@ -111,6 +112,8 @@ The Conductor components map onto this runtime model as follows:
 - Gateway fronts orchestrator and PCP traffic
 
 The current repo baseline is therefore a prerequisite for Conductor, not the finished HA design. The point of the chart today is to preserve local ownership cleanly enough that Fabric, Relay, Gateway, and Warden can be introduced without shared storage.
+
+The current Conductor foundation slice is release-topology-driven. Warden is expected to expand stable workload sets, such as compiler `StatefulSet` replicas, into participant identities and onboarding bundles. That is intentionally different from treating separate Helm releases as static peers.
 
 ## Code Manager
 
@@ -176,11 +179,13 @@ This scaffold is intentionally Kubernetes-first, but not yet production-ready.
 
 Open design work remains around:
 
-- replication of PE-local management state between independent PE instances
+- release-internal replication of PE-local management state across multiple control-plane replicas
 - service boundaries inside `/opt/puppetlabs/server/data/*`
 - upgrade orchestration
 - ownership and security hardening
 - secrets and certificate rotation
+
+One specific gap is that the current `pe` workload is still a `Deployment` backed by release-scoped PVC names. Real multi-control-plane testing will require stable per-replica identity and storage, which points toward a stateful control-plane set rather than scaling the current `Deployment`.
 
 The mapping doc [legacy-service-mapping.md](legacy-service-mapping.md) is the source of truth for the next decomposition steps.
 

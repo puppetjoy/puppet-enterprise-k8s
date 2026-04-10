@@ -1,0 +1,21 @@
+{{- if .Values.warden.enabled }}
+{{- $config := dict
+      "apiVersion" "pe-k8s/v1alpha1"
+      "kind" "ConductorFabricConfig"
+      "hub" (dict
+        "host" (printf "%s.%s.svc.cluster.local" (include "conductor.hubServiceName" .) .Release.Namespace)
+        "amqpPort" .Values.hub.service.amqpPort
+        "managementPort" .Values.hub.service.managementPort)
+      "exchanges" .Values.fabric.exchanges
+      "segments" .Values.fabric.segments
+-}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "conductor.wardenConfigMapName" . }}
+  labels:
+{{ include "conductor.labels" . | indent 4 }}
+data:
+  config.json: |
+{{ toPrettyJson $config | indent 4 }}
+{{- end }}
