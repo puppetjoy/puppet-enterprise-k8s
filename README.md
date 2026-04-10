@@ -10,7 +10,7 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 - Runs PostgreSQL, PuppetDB, the non-compiler Puppet Server, and PE edge/API services in a stateful `pe` control-plane pod set
 - Supports an optional compiler pool with per-replica non-shared PVCs, local PostgreSQL/PuppetDB, file-sync/PuppetDB-based readiness, and compiler-side PCP brokers
 - Supports optional Conductor participants on the control-plane and compiler pods via Warden-issued onboarding bundles, release trust bundles, participant readiness, and a separate Fabric hub
-- Supports an initial optional Conductor Relay sidecar that publishes local PuppetDB health into Fabric and records peer Relay status snapshots for routing and future replication work
+- Supports an optional Conductor Relay sidecar that publishes local PuppetDB health into Fabric, records peer Relay status snapshots, and captures selected PuppetDB submit-only commands for replay to control-plane peers
 - Supports multiple release-scoped PE instances in one cluster for isolated development and validation
 - Treats one Helm release, not multiple separate releases, as the future active-active replication domain
 - Keeps compilers attached to one owning PE instance; compilers are not a replication mesh
@@ -164,14 +164,14 @@ This project is intentionally conservative right now:
 - the control plane now has stable per-replica identity and storage, but active-active control-plane synchronization is still in development
 - the current Conductor foundation slice can onboard the `pe` control-plane pods and attached compiler pods into Fabric, then assemble and distribute a release trust bundle
 - when Conductor is enabled, pod readiness can follow onboarding, Fabric connectivity, and trust-bundle installation so `service/pe` and `service/pe-compiler` stop routing to stale or disconnected participants
-- when `conductor.relay.enabled=true`, control-plane and compiler pods also publish Relay status into Fabric and can gate readiness on participant trust plus local PuppetDB health
+- when `conductor.relay.enabled=true`, control-plane and compiler pods also publish Relay status into Fabric, can gate readiness on participant trust plus local PuppetDB health, and can replay selected PuppetDB command traffic through Fabric
 - compiler capacity can scale horizontally behind `service/pe-compiler`
 - centralized `puppet-code deploy` remains the code rollout entrypoint
 - separate Helm releases are independent sandboxes, not synchronization peers
 - active-active HA work is Conductor-aligned: Fabric, Relay, Gateway, and Warden
 - increasing `controlPlane.replicaCount` alone does not produce safe active-active PE service yet; trust-aware routing is now present, but CA authority and PE-owned state still need replicated convergence
 - the repo does not yet deliver full active-active PE replication
-- the current Relay implementation is a status and health-distribution slice; PuppetDB write capture and replay are still ahead
+- the current Relay implementation now captures selected PuppetDB submit-only commands, replays facts and reports to the control-plane role, and intentionally keeps full catalogs local-only
 - code rollout across Workers remains operator-initiated through Code Manager; later Fabric work may propagate deploy intent and convergence state between Workers
 - charts provide generic defaults, not a ready-made cluster profile
 - operators are expected to supply environment-specific values locally

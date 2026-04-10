@@ -94,6 +94,7 @@ wait_for_install_marker
 copy_exported_sysconfig_into_rootfs
 if [ "${role}" = "puppetserver" ]; then
     sync_puppetdb_integration_settings
+    sync_relay_puppetdb_command_submission_settings
 fi
 ensure_role_runtime_dirs
 

@@ -112,6 +112,15 @@ conductor:
     puppetdbSyncMaxAgeSeconds: 900
     puppetdbStatusUrl: https://127.0.0.1:8081/status/v1/services?level=debug
     outputDir: /var/lib/conductor/relay
+    commandProxy:
+      enabled: false
+      port: 18081
+      targetRoles:
+        - control-plane
+      replicatedCommands:
+        - replace facts
+        - store report
+        - deactivate node
     resources: {}
   controlPlaneTrust:
     caPath: /etc/puppetlabs/puppet/ssl/certs/ca.pem

@@ -158,10 +158,13 @@ When `conductor.relay.enabled=true` as well:
 - each `pe` and compiler pod also gets a `conductor-relay` sidecar from the same Conductor image
 - Relay reuses the pod's onboarding Secret, but consumes Fabric on its own durable `relay.<pod>` queue
 - Relay polls local PuppetDB status over the pod-local listener and publishes that health view into Fabric
+- Puppet Server keeps local PuppetDB `server_urls`, while runtime startup patches `submit_only_server_urls` to the pod-local Relay command proxy
+- Relay captures selected submit-only PuppetDB commands from the local Puppet Server and replays those commands to the `control-plane` role through Fabric
 - Relay stores fresh peer Relay snapshots in a pod-local directory so later routing and replay logic can reason about peer state without shared storage
 - Relay readiness can remove a pod from service when participant trust is stale or the local PuppetDB state is not healthy enough for that pod role
+- facts, reports, and deactivate-node commands can now traverse Fabric; full catalogs remain local-only by default
 
-The current Relay implementation is deliberately narrow. It distributes status and health, but it does not yet proxy PuppetDB writes into Fabric or replay them on peer workers.
+The current Relay implementation is still deliberately narrow. It now has a working selected-command write path, but it is not yet the full Conductor data plane for PCP, orchestration, or broader control-plane state convergence.
 
 That gives the release a real Fabric membership model without shared storage or hard-coded peer lists.
 It does not yet mean the release is safe to run with multiple active control-plane replicas behind `service/pe`.

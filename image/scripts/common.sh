@@ -266,6 +266,94 @@ sync_puppetdb_integration_settings() {
     "${puppet_bin}" config set reports puppetdb,store --section master
 }
 
+sync_relay_puppetdb_command_submission_settings() {
+    local puppet_conf_path=/etc/puppetlabs/puppet/puppet.conf
+    local puppetdb_conf_path=/etc/puppetlabs/puppet/puppetdb.conf
+    local relay_port="${PE_K8S_RELAY_COMMAND_PROXY_PORT:-18081}"
+
+    if [ "${PE_K8S_RELAY_COMMAND_PROXY_ENABLED:-false}" != "true" ]; then
+        return 0
+    fi
+
+    if [ ! -f "${puppet_conf_path}" ]; then
+        log "puppet.conf missing; skipping Relay PuppetDB command submission sync"
+        return 0
+    fi
+
+    python3 - "${puppet_conf_path}" "${puppetdb_conf_path}" "${relay_port}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+puppet_conf_path = Path(sys.argv[1])
+puppetdb_conf_path = Path(sys.argv[2])
+relay_port = sys.argv[3]
+
+certname = ""
+for line in puppet_conf_path.read_text(encoding="utf-8").splitlines():
+    match = re.match(r"^\s*certname\s*=\s*(\S+)\s*$", line)
+    if match:
+        certname = match.group(1)
+        break
+
+if not certname:
+    raise SystemExit(f"certname not found in {puppet_conf_path}")
+
+existing = {}
+if puppetdb_conf_path.exists():
+    current_section = ""
+    for line in puppetdb_conf_path.read_text(encoding="utf-8").splitlines():
+        section_match = re.match(r"^\s*\[(.+?)\]\s*$", line)
+        if section_match:
+            current_section = section_match.group(1).strip()
+            continue
+        if current_section != "main":
+            continue
+        setting_match = re.match(r"^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$", line)
+        if setting_match:
+            existing[setting_match.group(1)] = setting_match.group(2)
+
+ordered_settings = [
+    "server_urls",
+    "submit_only_server_urls",
+    "command_broadcast",
+    "include_unchanged_resources",
+    "include_catalog_edges",
+    "soft_write_failure",
+    "sticky_read_failover",
+]
+defaults = {
+    "command_broadcast": "true",
+    "include_unchanged_resources": "true",
+    "include_catalog_edges": "false",
+    "soft_write_failure": "false",
+    "sticky_read_failover": "true",
+}
+
+existing["server_urls"] = f"https://{certname}:8081"
+existing["submit_only_server_urls"] = f"https://{certname}:{relay_port}"
+existing["command_broadcast"] = "true"
+
+lines = ["[main]"]
+for setting in ordered_settings:
+    value = existing.get(setting, defaults.get(setting, ""))
+    if value:
+        lines.append(f"{setting} = {value}")
+
+for setting in sorted(existing):
+    if setting in ordered_settings:
+        continue
+    value = existing[setting]
+    if value:
+        lines.append(f"{setting} = {value}")
+
+puppetdb_conf_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+print(certname)
+PY
+
+    log "Configured Relay command submission through ${puppetdb_conf_path}"
+}
+
 copy_exported_sysconfig_into_rootfs() {
     local path
     local target

@@ -73,9 +73,12 @@ The current repo now has the first Relay slice wired into the runtime model:
 - an optional `conductor-relay` sidecar can run beside the control-plane and compiler service containers
 - Relay reuses the pod's Warden-issued onboarding bundle to join Fabric on its own queue
 - Relay polls local PuppetDB status, publishes that health view into Fabric, and stores fresh peer Relay snapshots locally
+- Puppet Server keeps `server_urls` pointed at local PuppetDB while `submit_only_server_urls` is patched to the pod-local Relay command proxy
+- Relay captures selected submit-only PuppetDB commands from local Puppet Server, publishes them into Fabric, and replays them to the `control-plane` role
+- facts, reports, and deactivate-node commands can now traverse Fabric; full catalogs still remain local-only by default
 - Relay readiness is tied to participant trust readiness plus local PuppetDB health
 
-This is intentionally not the whole Relay design yet. The current implementation distributes status and health, but it does not yet proxy PuppetDB writes into Fabric or replay them on peers.
+This is intentionally not the whole Relay design yet. The current implementation now has a working write path for selected PuppetDB commands, but broader Gateway/PCP work, authoritative control-plane convergence, and any optional catalog-resource replication are still ahead.
 
 ## Gateway
 

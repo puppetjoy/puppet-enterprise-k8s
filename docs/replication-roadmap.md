@@ -54,8 +54,10 @@ Current status:
 
 - an optional `conductor-relay` sidecar now runs inside the PE and compiler workload shapes
 - Relay reuses the per-pod onboarding bundle, publishes local PuppetDB health into Fabric, and stores fresh peer Relay status snapshots
+- Puppet Server runtime config now keeps local `server_urls` and points `submit_only_server_urls` at the pod-local Relay command proxy
+- Relay now captures selected PuppetDB submit-only commands and replays facts, reports, and deactivate-node commands to the control-plane role
 - Relay readiness can now gate a pod on participant trust plus role-aware local PuppetDB health
-- PuppetDB write capture, Fabric transport of those writes, and peer replay are still outstanding
+- full catalog replication is still intentionally out of scope for the current slice
 
 ## Phase 3: Gateway
 

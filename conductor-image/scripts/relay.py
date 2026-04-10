@@ -7,15 +7,28 @@ import os
 import re
 import ssl
 import sys
+import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pika
 
 
 DEFAULT_STATUS_FILENAME = "relay-status.json"
+DEFAULT_REPLICATED_COMMANDS = [
+    "replace facts",
+    "store report",
+    "deactivate node",
+]
+DEFAULT_TARGET_ROLES = [
+    "control-plane",
+]
+DEFAULT_COMMAND_PROXY_PATH = "/pdb/cmd/v1"
 
 
 def log(message):
@@ -29,9 +42,32 @@ def env_int(name, default):
     return int(value)
 
 
+def env_bool(name, default=False):
+    value = os.environ.get(name, "").strip().lower()
+    if not value:
+        return default
+    return value in {"1", "true", "yes", "on"}
+
+
+def env_csv(name, default=None):
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return list(default or [])
+    items = []
+    for entry in value.split(","):
+        entry = entry.strip()
+        if entry and entry not in items:
+            items.append(entry)
+    return items
+
+
 def sanitize_fragment(value):
     cleaned = re.sub(r"[^a-z0-9-]+", "-", value.strip().lower()).strip("-")
     return cleaned or "default"
+
+
+def normalize_command_name(value):
+    return re.sub(r"\s+", " ", value.replace("_", " ").replace("-", " ").strip().lower())
 
 
 def b64decode_text(value):
@@ -68,10 +104,7 @@ def write_text_file(path, content):
     os.replace(temp_path, path)
 
 
-def http_request(method, url, headers=None, payload=None, context=None):
-    data = None
-    if payload is not None:
-        data = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+def http_request_raw(method, url, headers=None, data=None, context=None):
     request = urllib.request.Request(url, method=method, data=data)
     for key, value in (headers or {}).items():
         request.add_header(key, value)
@@ -82,6 +115,13 @@ def http_request(method, url, headers=None, payload=None, context=None):
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8")
         return error.code, body
+
+
+def http_request_json(method, url, headers=None, payload=None, context=None):
+    data = None
+    if payload is not None:
+        data = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return http_request_raw(method, url, headers=headers, data=data, context=context)
 
 
 def default_status_path():
@@ -144,8 +184,91 @@ def probe(mode):
         return 1
     if not status.get("localPuppetdbHealthy", False):
         return 1
+    if status.get("commandProxyEnabled", False) and not status.get("commandProxyReady", False):
+        return 1
 
     return 0
+
+
+class RelayLocalCommandError(RuntimeError):
+    def __init__(self, status_code, message):
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
+
+
+class LocalCommandHandler(BaseHTTPRequestHandler):
+    server_version = "ConductorRelay/0.2"
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, _format, *_args):
+        return
+
+    def text_response(self, status_code, message):
+        body = (message.rstrip() + "\n").encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def json_response(self, status_code, payload):
+        body = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def read_request_body(self):
+        transfer_encoding = self.headers.get("Transfer-Encoding", "").strip().lower()
+        if "chunked" in transfer_encoding:
+            chunks = []
+            while True:
+                line = self.rfile.readline()
+                if not line:
+                    raise RelayLocalCommandError(400, "unexpected EOF while reading chunked body")
+                chunk_size_text = line.split(b";", 1)[0].strip()
+                try:
+                    chunk_size = int(chunk_size_text, 16)
+                except ValueError as error:
+                    raise RelayLocalCommandError(400, "invalid chunk size") from error
+                if chunk_size == 0:
+                    while True:
+                        trailer_line = self.rfile.readline()
+                        if not trailer_line or trailer_line in {b"\r\n", b"\n"}:
+                            return b"".join(chunks)
+                chunk = self.rfile.read(chunk_size)
+                if len(chunk) != chunk_size:
+                    raise RelayLocalCommandError(400, "unexpected EOF while reading chunk data")
+                chunks.append(chunk)
+                crlf = self.rfile.read(2)
+                if crlf != b"\r\n":
+                    raise RelayLocalCommandError(400, "invalid chunk terminator")
+
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as error:
+            raise RelayLocalCommandError(400, "invalid content length") from error
+        return self.rfile.read(content_length) if content_length > 0 else b""
+
+    def do_POST(self):
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path != self.server.runtime.command_proxy_path:
+            self.text_response(404, "unknown relay endpoint")
+            return
+
+        try:
+            body = self.read_request_body()
+            payload = self.server.runtime.handle_local_command_submission(parsed, self.headers, body)
+        except RelayLocalCommandError as error:
+            self.text_response(error.status_code, error.message)
+            return
+        except Exception as error:  # pragma: no cover - defensive fallback
+            self.text_response(500, str(error))
+            return
+
+        self.json_response(200, payload)
 
 
 class K8sApi:
@@ -168,7 +291,7 @@ class K8sApi:
         self.context = ssl.create_default_context(cafile="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
 
     def request(self, method, path, payload=None, expected=None):
-        status, body = http_request(
+        status, body = http_request_json(
             method,
             f"{self.base_url}{path}",
             headers=self.headers,
@@ -190,6 +313,7 @@ class K8sApi:
 
 class RelayRuntime:
     def __init__(self):
+        self.lock = threading.RLock()
         self.pod_name = os.environ["CONDUCTOR_POD_NAME"].strip()
         self.pod_namespace = os.environ["CONDUCTOR_POD_NAMESPACE"].strip()
         self.conductor_namespace = os.environ.get("CONDUCTOR_NAMESPACE", self.pod_namespace).strip() or self.pod_namespace
@@ -208,12 +332,46 @@ class RelayRuntime:
             os.environ.get("CONDUCTOR_RELAY_PUPPETDB_STATUS_URL", "").strip()
             or "https://127.0.0.1:8081/status/v1/services?level=debug"
         )
+        self.local_puppetdb_command_url = (
+            os.environ.get("CONDUCTOR_RELAY_LOCAL_PUPPETDB_COMMAND_URL", "").strip()
+            or "https://127.0.0.1:8081/pdb/cmd/v1"
+        )
         self.output_dir = os.environ.get("CONDUCTOR_RELAY_OUTPUT_DIR", "").strip() or "/tmp"
         self.status_path = default_status_path()
         self.peer_dir = os.path.join(self.output_dir, "peers")
+        self.processed_dir = os.path.join(self.output_dir, "processed")
         self.participant_status_path = (
             os.environ.get("CONDUCTOR_RELAY_PARTICIPANT_STATUS_PATH", "").strip()
             or "/tmp/participant-status.json"
+        )
+        self.command_proxy_enabled = env_bool("CONDUCTOR_RELAY_COMMAND_PROXY_ENABLED", False)
+        self.command_proxy_bind_host = (
+            os.environ.get("CONDUCTOR_RELAY_COMMAND_PROXY_BIND_HOST", "").strip()
+            or "0.0.0.0"
+        )
+        self.command_proxy_port = env_int("CONDUCTOR_RELAY_COMMAND_PROXY_PORT", 18081)
+        self.command_proxy_path = (
+            os.environ.get("CONDUCTOR_RELAY_COMMAND_PROXY_PATH", "").strip()
+            or DEFAULT_COMMAND_PROXY_PATH
+        )
+        self.command_target_roles = env_csv(
+            "CONDUCTOR_RELAY_COMMAND_TARGET_ROLES",
+            default=DEFAULT_TARGET_ROLES,
+        )
+        self.replicated_commands = set(
+            normalize_command_name(command)
+            for command in env_csv(
+                "CONDUCTOR_RELAY_REPLICATED_COMMANDS",
+                default=DEFAULT_REPLICATED_COMMANDS,
+            )
+        )
+        self.puppet_conf_path = (
+            os.environ.get("CONDUCTOR_RELAY_PUPPET_CONF_PATH", "").strip()
+            or "/etc/puppetlabs/puppet/puppet.conf"
+        )
+        self.puppet_ssl_dir = (
+            os.environ.get("CONDUCTOR_RELAY_PUPPET_SSL_DIR", "").strip()
+            or "/etc/puppetlabs/puppet/ssl"
         )
 
         self.k8s = K8sApi(self.pod_namespace)
@@ -228,11 +386,17 @@ class RelayRuntime:
         self.current_onboarding_fingerprint = ""
         self.last_secret_poll = 0
         self.pending_onboarding_warning = False
+        self.command_proxy_start_error = ""
 
         self.connection = None
         self.channel = None
         self.bundle = None
+        self.publish_username = ""
+        self.publish_password = ""
         self.next_publish = 0
+
+        self.command_proxy_server = None
+        self.command_proxy_thread = None
 
         self.status = {
             "participant": self.pod_name,
@@ -242,6 +406,7 @@ class RelayRuntime:
             "onboardingSecretName": self.onboarding_secret_name,
             "queueName": self.queue_name,
             "connected": False,
+            "onboardingSecretPresent": False,
             "participantReady": False,
             "participantStatusAgeSeconds": None,
             "localPuppetdbHealthy": False,
@@ -250,6 +415,18 @@ class RelayRuntime:
             "localSyncState": "",
             "localLastSuccessfulSyncAt": "",
             "localSyncAgeSeconds": None,
+            "commandProxyEnabled": self.command_proxy_enabled,
+            "commandProxyReady": False,
+            "commandProxySubmitUrl": "",
+            "commandTargetRoles": list(self.command_target_roles),
+            "replicatedCommands": sorted(self.replicated_commands),
+            "localPublishedCommandCount": 0,
+            "localSkippedCommandCount": 0,
+            "replayedCommandCount": 0,
+            "replayFailureCount": 0,
+            "lastCommandPublishedAt": 0,
+            "lastCommandReplayedAt": 0,
+            "lastReplayError": "",
             "peerStatusCount": 0,
             "peerControlPlaneCount": 0,
             "peerCompilerCount": 0,
@@ -271,11 +448,19 @@ class RelayRuntime:
         return fingerprint, bundle, username, password
 
     def set_status(self, **updates):
-        self.status.update(updates)
+        with self.lock:
+            self.status.update(updates)
+
+    def snapshot_status(self):
+        with self.lock:
+            return dict(self.status)
 
     def write_status(self):
-        self.status["lastUpdatedAt"] = int(time.time())
-        write_text_file(self.status_path, json.dumps(self.status, indent=2, sort_keys=True) + "\n")
+        status = self.snapshot_status()
+        status["lastUpdatedAt"] = int(time.time())
+        with self.lock:
+            self.status["lastUpdatedAt"] = status["lastUpdatedAt"]
+        write_text_file(self.status_path, json.dumps(status, indent=2, sort_keys=True) + "\n")
 
     def close_connection(self):
         if self.connection is not None:
@@ -285,12 +470,101 @@ class RelayRuntime:
                 pass
         self.connection = None
         self.channel = None
-        self.bundle = None
+        with self.lock:
+            self.bundle = None
+            self.publish_username = ""
+            self.publish_password = ""
         self.set_status(connected=False)
 
     def peer_status_path(self, participant_name):
         filename = f"{sanitize_fragment(participant_name)}.json"
         return os.path.join(self.peer_dir, filename)
+
+    def processed_message_path(self, message_id):
+        return os.path.join(self.processed_dir, f"{sanitize_fragment(message_id)}.json")
+
+    def parse_puppet_certname(self):
+        if not os.path.isfile(self.puppet_conf_path):
+            raise RuntimeError(f"puppet.conf not found at {self.puppet_conf_path}")
+        with open(self.puppet_conf_path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                match = re.match(r"^\s*certname\s*=\s*(\S+)\s*$", line)
+                if match:
+                    return match.group(1)
+        raise RuntimeError(f"certname not found in {self.puppet_conf_path}")
+
+    def puppet_ssl_paths(self):
+        certname = self.parse_puppet_certname()
+        cert_path = os.path.join(self.puppet_ssl_dir, "certs", f"{certname}.pem")
+        key_path = os.path.join(self.puppet_ssl_dir, "private_keys", f"{certname}.pem")
+        ca_path = os.path.join(self.puppet_ssl_dir, "certs", "ca.pem")
+        for path in [cert_path, key_path, ca_path]:
+            if not os.path.isfile(path):
+                raise RuntimeError(f"required SSL file not found: {path}")
+        return certname, cert_path, key_path, ca_path
+
+    def command_proxy_submit_url(self):
+        certname, _, _, _ = self.puppet_ssl_paths()
+        return f"https://{certname}:{self.command_proxy_port}{self.command_proxy_path}"
+
+    def build_local_puppetdb_context(self):
+        _, cert_path, key_path, ca_path = self.puppet_ssl_paths()
+        context = ssl.create_default_context(cafile=ca_path)
+        context.check_hostname = False
+        context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+        return context
+
+    def ensure_command_proxy_running(self):
+        if not self.command_proxy_enabled:
+            return
+
+        if (
+            self.command_proxy_server is not None
+            and self.command_proxy_thread is not None
+            and self.command_proxy_thread.is_alive()
+        ):
+            self.set_status(commandProxyReady=True)
+            return
+
+        try:
+            _, cert_path, key_path, _ = self.puppet_ssl_paths()
+            server = ThreadingHTTPServer(
+                (self.command_proxy_bind_host, self.command_proxy_port),
+                LocalCommandHandler,
+            )
+            server.runtime = self
+            server.daemon_threads = True
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+            thread = threading.Thread(
+                target=server.serve_forever,
+                name="conductor-relay-command-proxy",
+                daemon=True,
+            )
+            thread.start()
+            self.command_proxy_server = server
+            self.command_proxy_thread = thread
+            self.command_proxy_start_error = ""
+            self.set_status(
+                commandProxyReady=True,
+                commandProxySubmitUrl=self.command_proxy_submit_url(),
+            )
+            log(
+                "Started command proxy on "
+                f"{self.command_proxy_bind_host}:{self.command_proxy_port}"
+            )
+        except Exception as error:
+            if str(error) != self.command_proxy_start_error:
+                log(f"Command proxy startup failed: {error}")
+                self.command_proxy_start_error = str(error)
+            self.set_status(commandProxyReady=False)
+
+    def current_publish_credentials(self):
+        with self.lock:
+            if self.bundle is None or not self.publish_username or not self.publish_password:
+                raise RuntimeError("Relay is not connected to Fabric")
+            return self.bundle, self.publish_username, self.publish_password
 
     def refresh_participant_status(self):
         if not os.path.isfile(self.participant_status_path):
@@ -312,7 +586,7 @@ class RelayRuntime:
 
     def refresh_local_puppetdb_status(self):
         context = ssl._create_unverified_context()
-        status_code, body = http_request("GET", self.puppetdb_status_url, context=context)
+        status_code, body = http_request_raw("GET", self.puppetdb_status_url, context=context)
         if status_code != 200:
             raise RuntimeError(f"PuppetDB status endpoint returned {status_code}")
 
@@ -374,6 +648,207 @@ class RelayRuntime:
             peerCompilerCount=sum(1 for status in fresh_statuses if status.get("role") == "compiler"),
         )
 
+    def publish_envelope(self, routing_key, payload):
+        bundle, username, password = self.current_publish_credentials()
+        credentials = pika.PlainCredentials(username, password)
+        parameters = pika.ConnectionParameters(
+            host=bundle["hub"]["host"],
+            port=int(bundle["hub"]["amqpPort"]),
+            virtual_host=bundle["hub"]["vhost"],
+            credentials=credentials,
+            heartbeat=max(self.publish_interval * 2, 30),
+            blocked_connection_timeout=30,
+            client_properties={
+                "connection_name": f"{self.pod_namespace}/{self.pod_name}/relay-publisher",
+            },
+        )
+        connection = pika.BlockingConnection(parameters)
+        try:
+            channel = connection.channel()
+            exchange = bundle["hub"]["exchanges"]["data"]
+            channel.exchange_declare(exchange=exchange, exchange_type="topic", durable=True)
+            channel.basic_publish(
+                exchange=exchange,
+                routing_key=routing_key,
+                body=json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+                properties=pika.BasicProperties(content_type="application/json", delivery_mode=2),
+            )
+        finally:
+            connection.close()
+
+    def normalize_command_headers(self, headers):
+        result = {
+            "Accept": headers.get("Accept", "application/json"),
+            "Content-Type": headers.get("Content-Type", "application/json"),
+        }
+        for header_name in ["Content-Encoding", "X-Uncompressed-Length"]:
+            value = headers.get(header_name, "").strip()
+            if value:
+                result[header_name] = value
+        return result
+
+    def handle_local_command_submission(self, parsed, headers, body):
+        if not self.command_proxy_enabled:
+            raise RelayLocalCommandError(404, "relay command proxy is disabled")
+
+        params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        command = (params.get("command") or [""])[0].strip()
+        canonical_command = normalize_command_name(command)
+        version = (params.get("version") or [""])[0].strip()
+        certname = (params.get("certname") or [""])[0].strip()
+        producer_timestamp = (params.get("producer-timestamp") or [""])[0].strip()
+        if not command or not version or not certname or not producer_timestamp:
+            raise RelayLocalCommandError(400, "missing required PuppetDB command parameters")
+
+        query_string = parsed.query
+        request_headers = self.normalize_command_headers(headers)
+        payload_b64 = base64.b64encode(body).decode("ascii")
+        message_id = sha256_text(
+            "\n".join(
+                [
+                    parsed.path,
+                    query_string,
+                    json.dumps(request_headers, sort_keys=True),
+                    payload_b64,
+                ]
+            )
+        )
+        response_uuid = str(uuid.uuid4())
+
+        if canonical_command not in self.replicated_commands:
+            self.set_status(
+                localSkippedCommandCount=int(self.snapshot_status().get("localSkippedCommandCount") or 0) + 1
+            )
+            return {
+                "command": command,
+                "canonical_command": canonical_command,
+                "message_id": message_id,
+                "replicated": False,
+                "uuid": response_uuid,
+            }
+
+        envelope = {
+            "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+            "kind": "ConductorRelayCommand",
+            "messageId": message_id,
+            "publishedAt": int(time.time()),
+            "origin": {
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "role": self.relay_role,
+                "segment": self.segment_name,
+            },
+            "targetRoles": list(self.command_target_roles),
+            "command": {
+                "name": command,
+                "canonicalName": canonical_command,
+                "version": version,
+                "certname": certname,
+                "producerTimestamp": producer_timestamp,
+            },
+            "request": {
+                "path": parsed.path,
+                "query": query_string,
+                "headers": request_headers,
+                "bodyBase64": payload_b64,
+            },
+        }
+
+        try:
+            self.publish_envelope(
+                f"relay.command.{sanitize_fragment(canonical_command)}",
+                envelope,
+            )
+        except Exception as error:
+            raise RelayLocalCommandError(503, f"failed to publish relay command: {error}") from error
+
+        status = self.snapshot_status()
+        self.set_status(
+            localPublishedCommandCount=int(status.get("localPublishedCommandCount") or 0) + 1,
+            lastCommandPublishedAt=int(time.time()),
+            lastReplayError="",
+        )
+        log(f"Published relay command '{command}' for {certname}")
+        return {
+            "command": command,
+            "canonical_command": canonical_command,
+            "message_id": message_id,
+            "replicated": True,
+            "uuid": response_uuid,
+        }
+
+    def has_processed_message(self, message_id):
+        return os.path.isfile(self.processed_message_path(message_id))
+
+    def mark_processed_message(self, message_id, payload):
+        write_text_file(
+            self.processed_message_path(message_id),
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        )
+
+    def replay_remote_command(self, payload):
+        request = payload.get("request") or {}
+        query_string = (request.get("query") or "").strip()
+        url = self.local_puppetdb_command_url
+        if query_string:
+            url = f"{url}?{query_string}"
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        headers.update(request.get("headers") or {})
+        body = base64.b64decode((request.get("bodyBase64") or "").encode("ascii"))
+        context = self.build_local_puppetdb_context()
+        status_code, response_body = http_request_raw(
+            "POST",
+            url,
+            headers=headers,
+            data=body,
+            context=context,
+        )
+        if status_code not in {200, 202}:
+            raise RuntimeError(
+                f"local PuppetDB replay returned {status_code}: {response_body}"
+            )
+        return response_body
+
+    def handle_remote_command(self, payload):
+        origin = payload.get("origin") or {}
+        if (origin.get("participant") or "").strip() == self.pod_name:
+            return
+
+        target_roles = payload.get("targetRoles") or []
+        if target_roles and self.relay_role not in target_roles:
+            return
+
+        command = ((payload.get("command") or {}).get("name") or "").strip()
+        canonical_command = normalize_command_name(
+            ((payload.get("command") or {}).get("canonicalName") or command).strip()
+        )
+        if canonical_command not in self.replicated_commands:
+            return
+
+        message_id = (payload.get("messageId") or "").strip()
+        if not message_id:
+            raise RuntimeError("relay command message is missing messageId")
+
+        if self.has_processed_message(message_id):
+            return
+
+        self.replay_remote_command(payload)
+        self.mark_processed_message(message_id, payload)
+        status = self.snapshot_status()
+        certname = ((payload.get("command") or {}).get("certname") or "").strip()
+        self.set_status(
+            replayedCommandCount=int(status.get("replayedCommandCount") or 0) + 1,
+            lastCommandReplayedAt=int(time.time()),
+            lastReplayError="",
+        )
+        log(
+            f"Replayed relay command '{canonical_command}' for {certname} "
+            f"from {origin.get('participant') or 'unknown'}"
+        )
+
     def on_message(self, channel, method, _properties, body):
         try:
             payload = json.loads(body.decode("utf-8"))
@@ -381,21 +856,35 @@ class RelayRuntime:
             channel.basic_ack(method.delivery_tag)
             return
 
-        if payload.get("kind") != "ConductorRelayStatus":
+        kind = payload.get("kind")
+        if kind == "ConductorRelayStatus":
+            status = payload.get("status") or {}
+            participant_name = (status.get("participant") or "").strip()
+            if participant_name and participant_name != self.pod_name:
+                write_text_file(
+                    self.peer_status_path(participant_name),
+                    json.dumps(status, indent=2, sort_keys=True) + "\n",
+                )
+                self.set_status(lastReceivedAt=int(time.time()))
             channel.basic_ack(method.delivery_tag)
             return
 
-        status = payload.get("status") or {}
-        participant_name = (status.get("participant") or "").strip()
-        if not participant_name or participant_name == self.pod_name:
-            channel.basic_ack(method.delivery_tag)
+        if kind == "ConductorRelayCommand":
+            try:
+                self.handle_remote_command(payload)
+                self.set_status(lastReceivedAt=int(time.time()))
+                channel.basic_ack(method.delivery_tag)
+            except Exception as error:
+                status = self.snapshot_status()
+                self.set_status(
+                    replayFailureCount=int(status.get("replayFailureCount") or 0) + 1,
+                    lastReplayError=str(error),
+                )
+                log(f"Remote relay command replay failed: {error}")
+                time.sleep(5)
+                channel.basic_nack(method.delivery_tag, requeue=True)
             return
 
-        write_text_file(
-            self.peer_status_path(participant_name),
-            json.dumps(status, indent=2, sort_keys=True) + "\n",
-        )
-        self.set_status(lastReceivedAt=int(time.time()))
         channel.basic_ack(method.delivery_tag)
 
     def connect(self, bundle, username, password):
@@ -422,9 +911,12 @@ class RelayRuntime:
 
         self.connection = connection
         self.channel = channel
-        self.bundle = bundle
+        with self.lock:
+            self.bundle = bundle
+            self.publish_username = username
+            self.publish_password = password
         self.next_publish = 0
-        self.set_status(connected=True, lastConnectedAt=int(time.time()))
+        self.set_status(connected=True, lastConnectedAt=int(time.time()), lastError="")
         log(
             "Connected to Fabric as "
             f"{bundle['participant']['name']} on {bundle['segment']['name']} "
@@ -444,10 +936,12 @@ class RelayRuntime:
                     f"Waiting for onboarding secret {self.conductor_namespace}/{self.onboarding_secret_name}"
                 )
                 self.pending_onboarding_warning = True
+            self.set_status(onboardingSecretPresent=False)
             self.close_connection()
             return
 
         self.pending_onboarding_warning = False
+        self.set_status(onboardingSecretPresent=True)
         fingerprint, bundle, username, password = self.decode_onboarding_secret(secret)
         if (
             fingerprint == self.current_onboarding_fingerprint
@@ -469,7 +963,7 @@ class RelayRuntime:
 
         self.refresh_peer_counts()
         self.set_status(lastPublishedAt=now)
-        payload_status = dict(self.status)
+        payload_status = self.snapshot_status()
         payload_status["lastUpdatedAt"] = now
         payload = {
             "apiVersion": "pe-k8s.puppet.com/v1alpha1",
@@ -490,6 +984,7 @@ class RelayRuntime:
         while True:
             last_error = ""
             try:
+                self.ensure_command_proxy_running()
                 self.refresh_participant_status()
             except KeyboardInterrupt:
                 raise

@@ -182,6 +182,10 @@ spec:
               value: {{ .Values.compilers.puppetdbMaxSyncAgeSeconds | quote }}
             - name: PE_K8S_COMPILER_PCP_BROKER_PORT
               value: {{ .Values.services.compilers.pcpPort | quote }}
+            - name: PE_K8S_RELAY_COMMAND_PROXY_ENABLED
+              value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled .Values.conductor.relay.commandProxy.enabled) | quote }}
+            - name: PE_K8S_RELAY_COMMAND_PROXY_PORT
+              value: {{ .Values.conductor.relay.commandProxy.port | quote }}
           ports:
             - name: puppetserver
               containerPort: 8140
@@ -264,6 +268,8 @@ spec:
           image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
           imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
           command: ["/usr/local/bin/conductor-relay"]
+          securityContext:
+            runAsUser: 0
           env:
             - name: CONDUCTOR_RELAY_ROLE
               value: compiler
@@ -299,6 +305,14 @@ spec:
               value: {{ printf "%s/participant-status.json" .Values.conductor.participant.trustOutputDir | quote }}
             - name: CONDUCTOR_RELAY_PARTICIPANT_STATUS_MAX_AGE_SECONDS
               value: {{ .Values.conductor.participant.statusMaxAgeSeconds | quote }}
+            - name: CONDUCTOR_RELAY_COMMAND_PROXY_ENABLED
+              value: {{ ternary "true" "false" .Values.conductor.relay.commandProxy.enabled | quote }}
+            - name: CONDUCTOR_RELAY_COMMAND_PROXY_PORT
+              value: {{ .Values.conductor.relay.commandProxy.port | quote }}
+            - name: CONDUCTOR_RELAY_COMMAND_TARGET_ROLES
+              value: {{ join "," .Values.conductor.relay.commandProxy.targetRoles | quote }}
+            - name: CONDUCTOR_RELAY_REPLICATED_COMMANDS
+              value: {{ join "," .Values.conductor.relay.commandProxy.replicatedCommands | quote }}
           readinessProbe:
             exec:
               command: ["/usr/local/bin/conductor-relay", "probe", "ready"]
@@ -308,6 +322,9 @@ spec:
           resources:
 {{ toYaml .Values.conductor.relay.resources | indent 12 }}
           volumeMounts:
+            - name: etc
+              mountPath: /etc/puppetlabs
+              readOnly: true
             - name: conductor-trust
               mountPath: {{ .Values.conductor.participant.trustOutputDir | quote }}
               readOnly: true
