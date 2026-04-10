@@ -63,6 +63,7 @@ Typical overrides include:
 - image repositories and tags
 - storage classes
 - affinity and tolerations
+- `controlPlane.resources.*` and `compilers.resources.*` container resources
 - ingress class, host, and TLS annotations
 - PE and compiler technical hostnames
 - Code Manager settings and secret references

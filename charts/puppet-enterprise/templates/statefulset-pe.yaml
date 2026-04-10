@@ -115,7 +115,7 @@ spec:
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
           resources:
-{{ toYaml .Values.postgresql.resources | indent 12 }}
+{{ toYaml .Values.controlPlane.resources.postgresql | indent 12 }}
           volumeMounts:
             - name: etc
               mountPath: /etc/puppetlabs
@@ -156,7 +156,7 @@ spec:
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
           resources:
-{{ toYaml .Values.puppetdb.resources | indent 12 }}
+{{ toYaml .Values.controlPlane.resources.puppetdb | indent 12 }}
           volumeMounts:
             - name: etc
               mountPath: /etc/puppetlabs
@@ -196,7 +196,7 @@ spec:
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
           resources:
-{{ toYaml .Values.puppetserver.resources | indent 12 }}
+{{ toYaml .Values.controlPlane.resources.puppetserver | indent 12 }}
           volumeMounts:
             - name: etc
               mountPath: /etc/puppetlabs
@@ -239,8 +239,8 @@ spec:
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
           resources:
-{{ toYaml .Values.peServices.resources.nginx | indent 12 }}
-          volumeMounts: &peServicesMounts
+{{ toYaml .Values.controlPlane.resources.nginx | indent 12 }}
+          volumeMounts: &controlPlaneMounts
             - name: etc
               mountPath: /etc/puppetlabs
             - name: opt
@@ -280,8 +280,8 @@ spec:
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
           resources:
-{{ toYaml .Values.peServices.resources.consoleServices | indent 12 }}
-          volumeMounts: *peServicesMounts
+{{ toYaml .Values.controlPlane.resources.consoleServices | indent 12 }}
+          volumeMounts: *controlPlaneMounts
         - name: orchestration-services
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -313,8 +313,8 @@ spec:
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
           resources:
-{{ toYaml .Values.peServices.resources.orchestrationServices | indent 12 }}
-          volumeMounts: *peServicesMounts
+{{ toYaml .Values.controlPlane.resources.orchestrationServices | indent 12 }}
+          volumeMounts: *controlPlaneMounts
         - name: bolt-server
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -341,8 +341,8 @@ spec:
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
           resources:
-{{ toYaml .Values.peServices.resources.boltServer | indent 12 }}
-          volumeMounts: *peServicesMounts
+{{ toYaml .Values.controlPlane.resources.boltServer | indent 12 }}
+          volumeMounts: *controlPlaneMounts
         - name: ace-server
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -369,8 +369,8 @@ spec:
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
           resources:
-{{ toYaml .Values.peServices.resources.aceServer | indent 12 }}
-          volumeMounts: *peServicesMounts
+{{ toYaml .Values.controlPlane.resources.aceServer | indent 12 }}
+          volumeMounts: *controlPlaneMounts
         - name: host-action-collector
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -397,8 +397,8 @@ spec:
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
           resources:
-{{ toYaml .Values.peServices.resources.hostActionCollector | indent 12 }}
-          volumeMounts: *peServicesMounts
+{{ toYaml .Values.controlPlane.resources.hostActionCollector | indent 12 }}
+          volumeMounts: *controlPlaneMounts
         {{- if .Values.conductor.enabled }}
         - name: conductor-participant
           image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"

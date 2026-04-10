@@ -58,6 +58,11 @@ The `pe` deployment uses multiple containers from the same image:
 
 This keeps one PE service per container while colocating the non-compiler Puppet Server with the tightly-coupled HTTP/API edge services. `service/pe` maps directly to the owning container ports in the pod, and compiler capacity remains separate.
 
+Resource tuning follows the same workload boundary:
+
+- `controlPlane.resources.*` configures the containers in the `pe` pod
+- `compilers.resources.*` configures the containers in the compiler pod set
+
 The control-plane `StatefulSet` adds:
 
 - stable pod identity such as `pe-0.pe-headless.<namespace>.svc.cluster.local`

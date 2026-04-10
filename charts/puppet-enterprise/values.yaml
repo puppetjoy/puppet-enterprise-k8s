@@ -76,6 +76,16 @@ storage:
 controlPlane:
   replicaCount: 1
   podManagementPolicy: OrderedReady
+  resources:
+    postgresql: {}
+    puppetdb: {}
+    puppetserver: {}
+    nginx: {}
+    consoleServices: {}
+    orchestrationServices: {}
+    boltServer: {}
+    aceServer: {}
+    hostActionCollector: {}
 
 conductor:
   enabled: false
@@ -99,15 +109,6 @@ conductor:
 
 installer:
   forceReinstall: false
-  resources: {}
-
-postgresql:
-  resources: {}
-
-puppetdb:
-  resources: {}
-
-puppetserver:
   resources: {}
 
 compilers:
@@ -144,15 +145,6 @@ compilers:
         - ReadWriteOnce
       size: 2Gi
       storageClassName: ""
-
-peServices:
-  resources:
-    nginx: {}
-    consoleServices: {}
-    orchestrationServices: {}
-    boltServer: {}
-    aceServer: {}
-    hostActionCollector: {}
 
 services:
   pe:
