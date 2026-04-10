@@ -15,37 +15,39 @@ spec:
   ports:
     - name: http
       port: 80
-      targetPort: proxy-http
+      targetPort: nginx-http
     - name: https
       port: 443
-      targetPort: proxy-https
+      targetPort: nginx-https
     - name: postgresql
       port: 5432
-      targetPort: proxy-postgres
+      targetPort: postgresql
     - name: puppetdb
       port: 8081
-      targetPort: proxy-puppetdb
+      targetPort: puppetdb
     - name: puppetserver
       port: 8140
-      targetPort: proxy-pserver
+      targetPort: puppetserver
     - name: pcp-broker
       port: 8142
-      targetPort: proxy-pcp
+      targetPort: orch-pcp
     - name: orchestration
       port: 8143
-      targetPort: proxy-orch
+      targetPort: orch-svc
     - name: host-action
       port: 8147
-      targetPort: proxy-action
+      targetPort: hac-svc
+    {{- if .Values.codeManager.enabled }}
     - name: code-manager
       port: 8170
-      targetPort: proxy-codemgr
+      targetPort: code-manager
+    {{- end }}
     - name: console-api
       port: 4433
-      targetPort: proxy-console
+      targetPort: console-svc
     - name: bolt-server
       port: 62658
-      targetPort: proxy-bolt
+      targetPort: bolt-svc
     - name: ace-server
       port: 44633
-      targetPort: proxy-ace
+      targetPort: ace-svc

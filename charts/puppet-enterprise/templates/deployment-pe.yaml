@@ -17,7 +17,6 @@ spec:
     metadata:
       annotations:
         pe-k8s/release-revision: {{ .Release.Revision | quote }}
-        checksum/proxy-config: {{ include (print $.Template.BasePath "/configmap-pe-proxy.yaml") . | sha256sum }}
       labels:
         {{- include "pe.labels" . | nindent 8 }}
         app.kubernetes.io/component: pe-services
@@ -84,47 +83,6 @@ spec:
               readOnly: true
             {{- end }}
       containers:
-        - name: proxy
-          image: "{{ .Values.peProxy.image.repository }}:{{ .Values.peProxy.image.tag }}"
-          imagePullPolicy: {{ .Values.peProxy.image.pullPolicy }}
-          securityContext:
-            runAsUser: 0
-            runAsGroup: 0
-          args:
-            - -f
-            - /usr/local/etc/haproxy/haproxy.cfg
-            - -W
-          ports:
-            - name: proxy-http
-              containerPort: 10080
-            - name: proxy-https
-              containerPort: 10443
-            - name: proxy-postgres
-              containerPort: 15432
-            - name: proxy-puppetdb
-              containerPort: 18081
-            - name: proxy-pserver
-              containerPort: 18140
-            - name: proxy-pcp
-              containerPort: 18142
-            - name: proxy-orch
-              containerPort: 18143
-            - name: proxy-action
-              containerPort: 18147
-            - name: proxy-codemgr
-              containerPort: 18170
-            - name: proxy-console
-              containerPort: 14433
-            - name: proxy-bolt
-              containerPort: 32658
-            - name: proxy-ace
-              containerPort: 34633
-          resources:
-{{ toYaml .Values.peProxy.resources | indent 12 }}
-          volumeMounts:
-            - name: proxy-config
-              mountPath: /usr/local/etc/haproxy
-              readOnly: true
         - name: postgresql
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -463,6 +421,3 @@ spec:
               - key: {{ required "codeManager.r10kPrivateKeySecretKey is required when codeManager.enabled=true" .Values.codeManager.r10kPrivateKeySecretKey }}
                 path: {{ base (required "codeManager.r10kPrivateKeyPath is required when codeManager.enabled=true" .Values.codeManager.r10kPrivateKeyPath) }}
         {{- end }}
-        - name: proxy-config
-          configMap:
-            name: {{ include "pe.fullname" . }}-proxy

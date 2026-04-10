@@ -46,7 +46,6 @@ The current chart is split into:
 
 The `pe` deployment uses multiple containers from the same image:
 
-- `proxy`
 - `postgresql`
 - `puppetdb`
 - `puppetserver`
@@ -57,7 +56,7 @@ The `pe` deployment uses multiple containers from the same image:
 - `ace-server`
 - `host-action-collector`
 
-This keeps one PE service per container while colocating the non-compiler Puppet Server with the tightly-coupled HTTP/API edge services. Compiler capacity remains separate.
+This keeps one PE service per container while colocating the non-compiler Puppet Server with the tightly-coupled HTTP/API edge services. `service/pe` maps directly to the owning container ports in the pod, and compiler capacity remains separate.
 
 ## Installer Config Model
 
