@@ -50,33 +50,6 @@ spec:
       port: 44633
       targetPort: ace-svc
 ---
-{{- $targetOrdinal := int .Values.controlPlane.enrollment.targetOrdinal -}}
-{{- if lt $targetOrdinal 0 }}
-{{ fail "controlPlane.enrollment.targetOrdinal must be greater than or equal to 0" }}
-{{- end }}
-{{- if ge $targetOrdinal (int .Values.controlPlane.replicaCount) }}
-{{ fail "controlPlane.enrollment.targetOrdinal must be less than controlPlane.replicaCount" }}
-{{- end }}
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "pe.controlPlaneEnrollmentServiceName" . }}
-  labels:
-    {{- include "pe.labels" . | nindent 4 }}
-spec:
-  type: ClusterIP
-  selector:
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/component: pe-services
-    statefulset.kubernetes.io/pod-name: {{ include "pe.controlPlaneEnrollmentPodName" . }}
-  ports:
-    - name: puppetserver
-      port: 8140
-      targetPort: puppetserver
-    - name: console-api
-      port: 4433
-      targetPort: console-svc
----
 apiVersion: v1
 kind: Service
 metadata:

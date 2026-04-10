@@ -33,18 +33,10 @@ pe
 {{- printf "%s-headless" (include "pe.controlPlaneStatefulSetName" .) -}}
 {{- end -}}
 
-{{- define "pe.controlPlaneEnrollmentServiceName" -}}
-{{- default (printf "%s-ca" (include "pe.fullname" .)) .Values.controlPlane.enrollment.serviceName -}}
-{{- end -}}
-
 {{- define "pe.controlPlanePodNameForIndex" -}}
 {{- $root := .root -}}
 {{- $index := int .index -}}
 {{- printf "%s-%d" (include "pe.controlPlaneStatefulSetName" $root) $index -}}
-{{- end -}}
-
-{{- define "pe.controlPlaneEnrollmentPodName" -}}
-{{- include "pe.controlPlanePodNameForIndex" (dict "root" . "index" (int .Values.controlPlane.enrollment.targetOrdinal)) -}}
 {{- end -}}
 
 {{- define "pe.controlPlaneCaSecretNameForIndex" -}}
@@ -79,17 +71,12 @@ pe
 
 {{- define "pe.controlPlaneFrontDoorDnsNames" -}}
 {{- $identity := include "pe.identity" . -}}
-{{- $enrollmentService := include "pe.controlPlaneEnrollmentServiceName" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
 {{- $serviceNames := list
     $identity
     (printf "%s.%s" $identity .Release.Namespace)
     (printf "%s.%s.svc" $identity .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $identity .Release.Namespace)
-    $enrollmentService
-    (printf "%s.%s" $enrollmentService .Release.Namespace)
-    (printf "%s.%s.svc" $enrollmentService .Release.Namespace)
-    (printf "%s.%s.svc.cluster.local" $enrollmentService .Release.Namespace)
 -}}
 {{- $frontDoorNames := list $puppetMasterHost -}}
 {{- $external := list -}}
@@ -108,17 +95,12 @@ pe
 
 {{- define "pe.controlPlaneFrontDoorDnsNamesHocon" -}}
 {{- $identity := include "pe.identity" . -}}
-{{- $enrollmentService := include "pe.controlPlaneEnrollmentServiceName" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
 {{- $serviceNames := list
     $identity
     (printf "%s.%s" $identity .Release.Namespace)
     (printf "%s.%s.svc" $identity .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $identity .Release.Namespace)
-    $enrollmentService
-    (printf "%s.%s" $enrollmentService .Release.Namespace)
-    (printf "%s.%s.svc" $enrollmentService .Release.Namespace)
-    (printf "%s.%s.svc.cluster.local" $enrollmentService .Release.Namespace)
 -}}
 {{- $frontDoorNames := list $puppetMasterHost -}}
 {{- $external := list -}}
@@ -140,17 +122,12 @@ pe
 
 {{- define "pe.controlPlaneFrontDoorDnsNamesCsv" -}}
 {{- $identity := include "pe.identity" . -}}
-{{- $enrollmentService := include "pe.controlPlaneEnrollmentServiceName" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
 {{- $serviceNames := list
     $identity
     (printf "%s.%s" $identity .Release.Namespace)
     (printf "%s.%s.svc" $identity .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $identity .Release.Namespace)
-    $enrollmentService
-    (printf "%s.%s" $enrollmentService .Release.Namespace)
-    (printf "%s.%s.svc" $enrollmentService .Release.Namespace)
-    (printf "%s.%s.svc.cluster.local" $enrollmentService .Release.Namespace)
 -}}
 {{- $frontDoorNames := list $puppetMasterHost -}}
 {{- $external := list -}}

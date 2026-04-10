@@ -2,7 +2,7 @@ FROM python:3.12-alpine
 
 RUN addgroup -S conductor && adduser -S -G conductor conductor
 
-RUN python -m pip install --no-cache-dir pika
+RUN python -m pip install --no-cache-dir cryptography pika
 
 COPY conductor-image/scripts/participant.py /usr/local/bin/conductor-participant
 COPY conductor-image/scripts/relay.py /usr/local/bin/conductor-relay

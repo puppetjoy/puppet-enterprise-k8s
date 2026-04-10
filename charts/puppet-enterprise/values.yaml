@@ -76,9 +76,6 @@ storage:
 controlPlane:
   replicaCount: 1
   podManagementPolicy: OrderedReady
-  enrollment:
-    serviceName: ""
-    targetOrdinal: 0
   ca:
     provider: selfSigned
     importTimeoutSeconds: 300
@@ -140,6 +137,13 @@ conductor:
     puppetdbSyncMaxAgeSeconds: 900
     puppetdbStatusUrl: https://127.0.0.1:8081/status/v1/services?level=debug
     outputDir: /var/lib/conductor/relay
+    caSync:
+      enabled: false
+      publishIntervalSeconds: 15
+      maxAgeSeconds: 60
+      stateDir: /etc/puppetlabs/puppetserver/ca
+      targetRoles:
+        - control-plane
     commandProxy:
       enabled: false
       port: 18081

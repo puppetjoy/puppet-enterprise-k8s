@@ -7,6 +7,7 @@ PE_SIGN_CERTNAMES="${PE_SIGN_CERTNAMES:-${PE_COMPILER_CERTNAMES:-}}"
 PE_SIGN_CERT_WAIT_TIMEOUT_SECONDS="${PE_SIGN_CERT_WAIT_TIMEOUT_SECONDS:-900}"
 PE_SIGN_CERT_LABEL="${PE_SIGN_CERT_LABEL:-certificate}"
 PE_SIGN_PE_SERVICE="${PE_SIGN_PE_SERVICE:-pe}"
+PE_SIGN_TARGET_SERVICE="${PE_SIGN_TARGET_SERVICE:-}"
 PE_SIGN_LOGIN="${PE_SIGN_LOGIN:-admin}"
 PE_SIGN_PASSWORD="${PE_SIGN_PASSWORD:-}"
 PE_SIGN_PE_CONF_PATH="${PE_SIGN_PE_CONF_PATH:-/config/pe.conf}"
@@ -45,6 +46,7 @@ signing_password() {
 fetch_cert_status() {
     local certname="$1"
     local token="$2"
+    local service="${3:-${PE_SIGN_TARGET_SERVICE:-${PE_SIGN_PE_SERVICE}}}"
     local response_path
 
     response_path="$(cert_status_response_path "${certname}")"
@@ -52,16 +54,17 @@ fetch_cert_status() {
         -o "${response_path}" \
         -w '%{http_code}' \
         -H "X-Authentication: ${token}" \
-        "https://${PE_SIGN_PE_SERVICE}:8140/puppet-ca/v1/certificate_status/${certname}"
+        "https://${service}:8140/puppet-ca/v1/certificate_status/${certname}"
 }
 
 sign_pending_request() {
     local certname="$1"
     local token="$2"
+    local service="${3:-${PE_SIGN_TARGET_SERVICE:-${PE_SIGN_PE_SERVICE}}}"
     local http_code response_path state sign_path sign_http_code
 
     response_path="$(cert_status_response_path "${certname}")"
-    http_code="$(fetch_cert_status "${certname}" "${token}")"
+    http_code="$(fetch_cert_status "${certname}" "${token}" "${service}")"
 
     case "${http_code}" in
         200)
@@ -80,7 +83,7 @@ sign_pending_request() {
                         -H "X-Authentication: ${token}" \
                         -H "Content-Type: application/json" \
                         --data '{"desired_state":"signed"}' \
-                        "https://${PE_SIGN_PE_SERVICE}:8140/puppet-ca/v1/certificate_status/${certname}")"
+                        "https://${service}:8140/puppet-ca/v1/certificate_status/${certname}")"
                     case "${sign_http_code}" in
                         200|204)
                             return 0
@@ -109,12 +112,13 @@ sign_pending_request() {
 
 all_certs_signed() {
     local token="$1"
-    shift
+    local service="${2:-${PE_SIGN_TARGET_SERVICE:-${PE_SIGN_PE_SERVICE}}}"
+    shift 2
     local certname http_code response_path state
 
     for certname in "$@"; do
         response_path="$(cert_status_response_path "${certname}")"
-        http_code="$(fetch_cert_status "${certname}" "${token}")"
+        http_code="$(fetch_cert_status "${certname}" "${token}" "${service}")"
         if [ "${http_code}" != "200" ]; then
             return 1
         fi
@@ -126,7 +130,7 @@ all_certs_signed() {
 }
 
 main() {
-    local certnames deadline certname password token
+    local certnames deadline certname password token selected_service
 
     [ -n "${PE_SIGN_CERTNAMES}" ] || {
         log "No certnames requested; skipping signer job"
@@ -141,7 +145,16 @@ main() {
 
     wait_for_remote_pe_status "${PE_SIGN_PE_SERVICE}" "${PE_SIGN_CERT_WAIT_TIMEOUT_SECONDS}"
     wait_for_remote_console "${PE_SIGN_PE_SERVICE}" "${PE_SIGN_CERT_WAIT_TIMEOUT_SECONDS}"
-    token="$(issue_rbac_token "${PE_SIGN_PE_SERVICE}" "${PE_SIGN_LOGIN}" "${password}" "1h" "pe-k8s-${PE_SIGN_CERT_LABEL}")" || {
+    selected_service="$(select_remote_pe_endpoint "${PE_SIGN_PE_SERVICE}" || true)"
+    if [ -n "${selected_service}" ]; then
+        PE_SIGN_TARGET_SERVICE="${selected_service}"
+    else
+        PE_SIGN_TARGET_SERVICE="${PE_SIGN_PE_SERVICE}"
+    fi
+    wait_for_remote_pe_status "${PE_SIGN_TARGET_SERVICE}" "${PE_SIGN_CERT_WAIT_TIMEOUT_SECONDS}"
+    wait_for_remote_console "${PE_SIGN_TARGET_SERVICE}" "${PE_SIGN_CERT_WAIT_TIMEOUT_SECONDS}"
+    log "Using ${PE_SIGN_CERT_LABEL} signer endpoint ${PE_SIGN_TARGET_SERVICE}"
+    token="$(issue_rbac_token "${PE_SIGN_TARGET_SERVICE}" "${PE_SIGN_LOGIN}" "${password}" "1h" "pe-k8s-${PE_SIGN_CERT_LABEL}")" || {
         log "Failed to generate an RBAC token for signer job"
         exit 1
     }
@@ -152,10 +165,10 @@ main() {
     while [ "${SECONDS}" -lt "${deadline}" ]; do
         for certname in "${certnames[@]}"; do
             [ -n "${certname}" ] || continue
-            sign_pending_request "${certname}" "${token}" || true
+            sign_pending_request "${certname}" "${token}" "${PE_SIGN_TARGET_SERVICE}" || true
         done
 
-        if all_certs_signed "${token}" "${certnames[@]}"; then
+        if all_certs_signed "${token}" "${PE_SIGN_TARGET_SERVICE}" "${certnames[@]}"; then
             log "All requested certificates are signed"
             exit 0
         fi
@@ -164,7 +177,7 @@ main() {
     done
 
     for certname in "${certnames[@]}"; do
-        if ! all_certs_signed "${token}" "${certname}"; then
+        if ! all_certs_signed "${token}" "${PE_SIGN_TARGET_SERVICE}" "${certname}"; then
             log "Timed out waiting to sign ${PE_SIGN_CERT_LABEL} ${certname}"
         fi
     done

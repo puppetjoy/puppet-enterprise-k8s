@@ -116,6 +116,51 @@ k8s_api_get_optional() {
     esac
 }
 
+remote_pe_headless_service() {
+    local service="${1:-$(remote_pe_service)}"
+
+    if [ -n "${PE_REMOTE_HEADLESS_SERVICE:-}" ]; then
+        printf '%s\n' "${PE_REMOTE_HEADLESS_SERVICE}"
+        return 0
+    fi
+
+    printf '%s-headless\n' "${service}"
+}
+
+select_remote_pe_endpoint() {
+    local service="${1:-$(remote_pe_service)}"
+    local namespace="${2:-$(k8s_namespace)}"
+    local headless_service="${3:-$(remote_pe_headless_service "${service}")}"
+    local payload
+
+    payload="$(k8s_api_get_optional "/api/v1/namespaces/${namespace}/endpoints/${service}" 2>/dev/null)" || return 1
+
+    python3 - "${payload}" "${namespace}" "${headless_service}" <<'PY'
+import json
+import sys
+
+endpoints = json.loads(sys.argv[1])
+namespace = sys.argv[2]
+headless_service = sys.argv[3]
+hosts = []
+
+for subset in endpoints.get("subsets") or []:
+    for address in subset.get("addresses") or []:
+        target_ref = address.get("targetRef") or {}
+        pod_name = (target_ref.get("name") or address.get("hostname") or "").strip()
+        if not pod_name:
+            continue
+        host = f"{pod_name}.{headless_service}.{namespace}.svc.cluster.local"
+        if host not in hosts:
+            hosts.append(host)
+
+if not hosts:
+    raise SystemExit(1)
+
+print(sorted(hosts)[0])
+PY
+}
+
 k8s_secret_data_field() {
     local namespace="$1"
     local secret_name="$2"

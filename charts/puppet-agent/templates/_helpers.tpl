@@ -51,7 +51,7 @@ pe
 {{- .Values.agent.caServer -}}
 {{- else -}}
 {{- $pe := include "puppet-agent.peReleaseFullname" . -}}
-{{- printf "%s-ca" $pe -}}
+{{- $pe -}}
 {{- end -}}
 {{- end -}}
 

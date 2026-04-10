@@ -510,6 +510,16 @@ spec:
               value: {{ printf "%s/participant-status.json" .Values.conductor.participant.trustOutputDir | quote }}
             - name: CONDUCTOR_RELAY_PARTICIPANT_STATUS_MAX_AGE_SECONDS
               value: {{ .Values.conductor.participant.statusMaxAgeSeconds | quote }}
+            - name: CONDUCTOR_RELAY_CA_SYNC_ENABLED
+              value: {{ ternary "true" "false" .Values.conductor.relay.caSync.enabled | quote }}
+            - name: CONDUCTOR_RELAY_CA_SYNC_DIR
+              value: {{ .Values.conductor.relay.caSync.stateDir | quote }}
+            - name: CONDUCTOR_RELAY_CA_SYNC_PUBLISH_INTERVAL_SECONDS
+              value: {{ .Values.conductor.relay.caSync.publishIntervalSeconds | quote }}
+            - name: CONDUCTOR_RELAY_CA_SYNC_MAX_AGE_SECONDS
+              value: {{ .Values.conductor.relay.caSync.maxAgeSeconds | quote }}
+            - name: CONDUCTOR_RELAY_CA_SYNC_TARGET_ROLES
+              value: {{ join "," .Values.conductor.relay.caSync.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_COMMAND_PROXY_ENABLED
               value: {{ ternary "true" "false" .Values.conductor.relay.commandProxy.enabled | quote }}
             - name: CONDUCTOR_RELAY_COMMAND_PROXY_PORT
@@ -529,7 +539,7 @@ spec:
           volumeMounts:
             - name: etc
               mountPath: /etc/puppetlabs
-              readOnly: true
+              readOnly: {{ not .Values.conductor.relay.caSync.enabled }}
             - name: conductor-trust
               mountPath: {{ .Values.conductor.participant.trustOutputDir | quote }}
               readOnly: true

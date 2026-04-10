@@ -6,6 +6,7 @@ import json
 import os
 import re
 import ssl
+import stat
 import sys
 import threading
 import time
@@ -17,6 +18,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pika
+from cryptography import x509
 
 
 DEFAULT_STATUS_FILENAME = "relay-status.json"
@@ -29,6 +31,7 @@ DEFAULT_TARGET_ROLES = [
     "control-plane",
 ]
 DEFAULT_COMMAND_PROXY_PATH = "/pdb/cmd/v1"
+DEFAULT_CA_SYNC_DIR = "/etc/puppetlabs/puppetserver/ca"
 
 
 def log(message):
@@ -78,6 +81,10 @@ def sha256_text(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def sha256_bytes(value):
+    return hashlib.sha256(value).hexdigest()
+
+
 def participant_secret_name(prefix, segment_name, participant_name, suffix):
     parts = [
         sanitize_fragment(prefix),
@@ -103,6 +110,100 @@ def write_text_file(path, content):
         handle.write(content)
     os.replace(temp_path, path)
 
+
+def write_bytes_file(path, content):
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    temp_path = f"{path}.tmp"
+    with open(temp_path, "wb") as handle:
+        handle.write(content)
+    os.replace(temp_path, path)
+
+
+def normalize_datetime(value):
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def datetime_sort_value(value):
+    value = normalize_datetime(value)
+    return int(value.timestamp()) if value is not None else 0
+
+
+def split_pem_blocks(content, label):
+    pattern = re.compile(
+        rf"-----BEGIN {re.escape(label)}-----\s*.*?-----END {re.escape(label)}-----\s*",
+        re.DOTALL,
+    )
+    blocks = []
+    for match in pattern.finditer(content or ""):
+        block = match.group(0).strip()
+        if block:
+            blocks.append(block + "\n")
+    return blocks
+
+
+def merge_crl_pem_bundles(contents):
+    selected = {}
+    for content in contents:
+        for block in split_pem_blocks(content, "X509 CRL"):
+            try:
+                crl = x509.load_pem_x509_crl(block.encode("utf-8"))
+            except ValueError as error:
+                raise RuntimeError(f"invalid PEM CRL bundle entry: {error}") from error
+            issuer = crl.issuer.rfc4514_string()
+            try:
+                crl_number = crl.extensions.get_extension_for_class(x509.CRLNumber).value.crl_number
+            except x509.ExtensionNotFound:
+                crl_number = 0
+            sort_key = (
+                crl_number,
+                datetime_sort_value(getattr(crl, "next_update", None)),
+                datetime_sort_value(getattr(crl, "last_update", None)),
+                sha256_text(block),
+            )
+            current = selected.get(issuer)
+            if current is None or sort_key > current[0]:
+                selected[issuer] = (sort_key, block)
+    return "".join(selected[issuer][1] for issuer in sorted(selected))
+
+
+def certificate_sort_key(pem_bytes):
+    cert = x509.load_pem_x509_certificate(pem_bytes)
+    return (
+        datetime_sort_value(getattr(cert, "not_valid_before", None)),
+        datetime_sort_value(getattr(cert, "not_valid_after", None)),
+        cert.serial_number,
+        sha256_bytes(pem_bytes),
+    )
+
+
+def normalize_pem_entry_name(value):
+    name = (value or "").strip()
+    if not name or name != os.path.basename(name) or "/" in name or "\\" in name:
+        return ""
+    if not name.endswith(".pem"):
+        return ""
+    return name
+
+
+def parse_hex_serial(serial_bytes):
+    text = serial_bytes.decode("utf-8")
+    stripped = text.strip()
+    if not stripped:
+        return 0, max(len(text), 2), text.endswith("\n")
+    return int(stripped, 16), max(len(stripped), 2), text.endswith("\n")
+
+
+def render_hex_serial(value, width, trailing_newline):
+    rendered = f"{value:0{max(width, 2)}X}"
+    if trailing_newline:
+        rendered += "\n"
+    return rendered.encode("utf-8")
 
 def http_request_raw(method, url, headers=None, data=None, context=None):
     request = urllib.request.Request(url, method=method, data=data)
@@ -185,6 +286,8 @@ def probe(mode):
     if not status.get("localPuppetdbHealthy", False):
         return 1
     if status.get("commandProxyEnabled", False) and not status.get("commandProxyReady", False):
+        return 1
+    if status.get("caSyncEnabled", False) and not status.get("caSyncReady", False):
         return 1
 
     return 0
@@ -339,6 +442,7 @@ class RelayRuntime:
         self.output_dir = os.environ.get("CONDUCTOR_RELAY_OUTPUT_DIR", "").strip() or "/tmp"
         self.status_path = default_status_path()
         self.peer_dir = os.path.join(self.output_dir, "peers")
+        self.ca_peer_dir = os.path.join(self.output_dir, "ca-peers")
         self.processed_dir = os.path.join(self.output_dir, "processed")
         self.participant_status_path = (
             os.environ.get("CONDUCTOR_RELAY_PARTICIPANT_STATUS_PATH", "").strip()
@@ -373,6 +477,23 @@ class RelayRuntime:
             os.environ.get("CONDUCTOR_RELAY_PUPPET_SSL_DIR", "").strip()
             or "/etc/puppetlabs/puppet/ssl"
         )
+        self.ca_sync_enabled = env_bool("CONDUCTOR_RELAY_CA_SYNC_ENABLED", False)
+        self.ca_sync_dir = (
+            os.environ.get("CONDUCTOR_RELAY_CA_SYNC_DIR", "").strip()
+            or DEFAULT_CA_SYNC_DIR
+        )
+        self.ca_sync_publish_interval = env_int(
+            "CONDUCTOR_RELAY_CA_SYNC_PUBLISH_INTERVAL_SECONDS",
+            self.publish_interval,
+        )
+        self.ca_sync_max_age = env_int(
+            "CONDUCTOR_RELAY_CA_SYNC_MAX_AGE_SECONDS",
+            max(self.publish_interval * 4, 60),
+        )
+        self.ca_sync_target_roles = env_csv(
+            "CONDUCTOR_RELAY_CA_SYNC_TARGET_ROLES",
+            default=DEFAULT_TARGET_ROLES,
+        )
 
         self.k8s = K8sApi(self.pod_namespace)
         self.onboarding_secret_name = participant_secret_name(
@@ -394,6 +515,8 @@ class RelayRuntime:
         self.publish_username = ""
         self.publish_password = ""
         self.next_publish = 0
+        self.next_ca_publish = 0
+        self.last_published_ca_hash = ""
 
         self.command_proxy_server = None
         self.command_proxy_thread = None
@@ -427,6 +550,19 @@ class RelayRuntime:
             "lastCommandPublishedAt": 0,
             "lastCommandReplayedAt": 0,
             "lastReplayError": "",
+            "caSyncEnabled": self.ca_sync_enabled,
+            "caSyncReady": not self.ca_sync_enabled,
+            "caSyncDir": self.ca_sync_dir if self.ca_sync_enabled else "",
+            "caSyncTargetRoles": list(self.ca_sync_target_roles),
+            "caSyncPeerStateCount": 0,
+            "caSyncRequestCount": 0,
+            "caSyncSignedCount": 0,
+            "caSyncPublishedStateCount": 0,
+            "caSyncAppliedStateCount": 0,
+            "caSyncLastPublishedAt": 0,
+            "caSyncLastAppliedAt": 0,
+            "caSyncStateHash": "",
+            "caSyncLastError": "",
             "peerStatusCount": 0,
             "peerControlPlaneCount": 0,
             "peerCompilerCount": 0,
@@ -482,6 +618,353 @@ class RelayRuntime:
 
     def processed_message_path(self, message_id):
         return os.path.join(self.processed_dir, f"{sanitize_fragment(message_id)}.json")
+
+    def ca_peer_state_path(self, participant_name):
+        filename = f"{sanitize_fragment(participant_name)}.json"
+        return os.path.join(self.ca_peer_dir, filename)
+
+    def ca_requests_dir(self):
+        return os.path.join(self.ca_sync_dir, "requests")
+
+    def ca_signed_dir(self):
+        return os.path.join(self.ca_sync_dir, "signed")
+
+    def ca_inventory_path(self):
+        return os.path.join(self.ca_sync_dir, "inventory.txt")
+
+    def ca_serial_path(self):
+        return os.path.join(self.ca_sync_dir, "serial")
+
+    def ca_crl_path(self):
+        return os.path.join(self.ca_sync_dir, "ca_crl.pem")
+
+    def ca_infra_crl_path(self):
+        return os.path.join(self.ca_sync_dir, "infra_crl.pem")
+
+    def ca_owner(self):
+        owner = os.stat(self.ca_sync_dir)
+        return owner.st_uid, owner.st_gid
+
+    def ensure_owned_directory(self, path, mode):
+        uid, gid = self.ca_owner()
+        if not os.path.isdir(path):
+            os.makedirs(path, exist_ok=True)
+        os.chown(path, uid, gid)
+        os.chmod(path, mode)
+
+    def write_owned_bytes_file(self, path, content, default_mode):
+        uid, gid = self.ca_owner()
+        existing_mode = default_mode
+        if os.path.exists(path):
+            existing_mode = stat.S_IMODE(os.stat(path).st_mode)
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        temp_path = f"{path}.tmp-{uuid.uuid4().hex}"
+        try:
+            with open(temp_path, "wb") as handle:
+                handle.write(content)
+            os.chown(temp_path, uid, gid)
+            os.chmod(temp_path, existing_mode)
+            os.replace(temp_path, path)
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+
+    @staticmethod
+    def decode_file_map(payload):
+        result = {}
+        for raw_name, encoded in (payload or {}).items():
+            name = normalize_pem_entry_name(raw_name)
+            if not name or not isinstance(encoded, str):
+                continue
+            result[name] = base64.b64decode(encoded.encode("ascii"))
+        return result
+
+    @staticmethod
+    def merge_inventory_text(local_text, remote_text):
+        lines = []
+        seen = set()
+        for source in [local_text, remote_text]:
+            for line in source.splitlines():
+                cleaned = line.strip()
+                if not cleaned or cleaned in seen:
+                    continue
+                seen.add(cleaned)
+                lines.append(cleaned)
+        return "".join(f"{line}\n" for line in lines)
+
+    @staticmethod
+    def preferred_signed_bytes(local_bytes, remote_bytes):
+        if local_bytes == remote_bytes:
+            return local_bytes
+        try:
+            return remote_bytes if certificate_sort_key(remote_bytes) >= certificate_sort_key(local_bytes) else local_bytes
+        except ValueError:
+            return remote_bytes
+
+    def read_ca_state(self):
+        if not self.ca_sync_enabled:
+            return None
+
+        self.ensure_owned_directory(self.ca_requests_dir(), 0o700)
+        self.ensure_owned_directory(self.ca_signed_dir(), 0o750)
+
+        requests = {}
+        for entry in sorted(os.scandir(self.ca_requests_dir()), key=lambda item: item.name):
+            if not entry.is_file():
+                continue
+            name = normalize_pem_entry_name(entry.name)
+            if not name:
+                continue
+            with open(entry.path, "rb") as handle:
+                requests[name] = base64.b64encode(handle.read()).decode("ascii")
+
+        signed = {}
+        for entry in sorted(os.scandir(self.ca_signed_dir()), key=lambda item: item.name):
+            if not entry.is_file():
+                continue
+            name = normalize_pem_entry_name(entry.name)
+            if not name:
+                continue
+            with open(entry.path, "rb") as handle:
+                signed[name] = base64.b64encode(handle.read()).decode("ascii")
+
+        serial_bytes = b""
+        if os.path.isfile(self.ca_serial_path()):
+            with open(self.ca_serial_path(), "rb") as handle:
+                serial_bytes = handle.read()
+        inventory_bytes = b""
+        if os.path.isfile(self.ca_inventory_path()):
+            with open(self.ca_inventory_path(), "rb") as handle:
+                inventory_bytes = handle.read()
+        ca_crl_bytes = b""
+        if os.path.isfile(self.ca_crl_path()):
+            with open(self.ca_crl_path(), "rb") as handle:
+                ca_crl_bytes = handle.read()
+        infra_crl_bytes = b""
+        if os.path.isfile(self.ca_infra_crl_path()):
+            with open(self.ca_infra_crl_path(), "rb") as handle:
+                infra_crl_bytes = handle.read()
+
+        state = {
+            "requests": requests,
+            "signed": signed,
+            "inventoryTxtBase64": base64.b64encode(inventory_bytes).decode("ascii"),
+            "serialBase64": base64.b64encode(serial_bytes).decode("ascii"),
+            "caCrlPemBase64": base64.b64encode(ca_crl_bytes).decode("ascii"),
+            "infraCrlPemBase64": base64.b64encode(infra_crl_bytes).decode("ascii"),
+        }
+        state["hash"] = sha256_text(json.dumps(state, separators=(",", ":"), sort_keys=True))
+        return state
+
+    def write_ca_peer_summary(self, participant, published_at, state):
+        summary = {
+            "participant": participant,
+            "publishedAt": published_at,
+            "hash": (state or {}).get("hash", ""),
+            "requestCount": len((state or {}).get("requests") or {}),
+            "signedCount": len((state or {}).get("signed") or {}),
+            "lastAppliedAt": int(time.time()),
+        }
+        write_text_file(
+            self.ca_peer_state_path(participant),
+            json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        )
+
+    def apply_remote_ca_state(self, payload):
+        if not self.ca_sync_enabled:
+            return
+
+        origin = payload.get("origin") or {}
+        participant = (origin.get("participant") or "").strip()
+        if not participant or participant == self.pod_name:
+            return
+
+        target_roles = payload.get("targetRoles") or []
+        if target_roles and self.relay_role not in target_roles:
+            return
+
+        published_at = int(payload.get("publishedAt") or 0)
+        existing_summary_path = self.ca_peer_state_path(participant)
+        if os.path.isfile(existing_summary_path):
+            try:
+                existing_summary = read_json_file(existing_summary_path)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                existing_summary = {}
+            if published_at and published_at <= int(existing_summary.get("publishedAt") or 0):
+                return
+
+        state = payload.get("state") or {}
+        remote_requests = self.decode_file_map(state.get("requests"))
+        remote_signed = self.decode_file_map(state.get("signed"))
+        remote_inventory_bytes = base64.b64decode((state.get("inventoryTxtBase64") or "").encode("ascii"))
+        remote_serial_bytes = base64.b64decode((state.get("serialBase64") or "").encode("ascii"))
+        remote_ca_crl_bytes = base64.b64decode((state.get("caCrlPemBase64") or "").encode("ascii"))
+        remote_infra_crl_bytes = base64.b64decode((state.get("infraCrlPemBase64") or "").encode("ascii"))
+
+        updates = {
+            "requests": 0,
+            "signed": 0,
+            "inventory": 0,
+            "serial": 0,
+            "ca_crl": 0,
+            "infra_crl": 0,
+        }
+
+        for name, remote_bytes in remote_signed.items():
+            path = os.path.join(self.ca_signed_dir(), name)
+            local_bytes = b""
+            if os.path.isfile(path):
+                with open(path, "rb") as handle:
+                    local_bytes = handle.read()
+            selected_bytes = self.preferred_signed_bytes(local_bytes, remote_bytes) if local_bytes else remote_bytes
+            if local_bytes != selected_bytes:
+                self.write_owned_bytes_file(path, selected_bytes, 0o644)
+                updates["signed"] += 1
+            request_path = os.path.join(self.ca_requests_dir(), name)
+            if os.path.isfile(request_path):
+                os.unlink(request_path)
+                updates["requests"] += 1
+
+        for name, remote_bytes in remote_requests.items():
+            if os.path.isfile(os.path.join(self.ca_signed_dir(), name)):
+                continue
+            path = os.path.join(self.ca_requests_dir(), name)
+            local_bytes = b""
+            if os.path.isfile(path):
+                with open(path, "rb") as handle:
+                    local_bytes = handle.read()
+            if local_bytes != remote_bytes:
+                self.write_owned_bytes_file(path, remote_bytes, 0o640)
+                updates["requests"] += 1
+
+        local_inventory_text = ""
+        if os.path.isfile(self.ca_inventory_path()):
+            with open(self.ca_inventory_path(), "r", encoding="utf-8") as handle:
+                local_inventory_text = handle.read()
+        remote_inventory_text = remote_inventory_bytes.decode("utf-8")
+        merged_inventory_text = self.merge_inventory_text(local_inventory_text, remote_inventory_text)
+        if merged_inventory_text != local_inventory_text:
+            self.write_owned_bytes_file(
+                self.ca_inventory_path(),
+                merged_inventory_text.encode("utf-8"),
+                0o640,
+            )
+            updates["inventory"] += 1
+
+        local_serial_bytes = b""
+        if os.path.isfile(self.ca_serial_path()):
+            with open(self.ca_serial_path(), "rb") as handle:
+                local_serial_bytes = handle.read()
+        if remote_serial_bytes:
+            local_serial_value, local_serial_width, local_has_newline = parse_hex_serial(local_serial_bytes)
+            remote_serial_value, remote_serial_width, remote_has_newline = parse_hex_serial(remote_serial_bytes)
+            if remote_serial_value > local_serial_value:
+                self.write_owned_bytes_file(
+                    self.ca_serial_path(),
+                    render_hex_serial(
+                        remote_serial_value,
+                        max(local_serial_width, remote_serial_width),
+                        local_has_newline or remote_has_newline,
+                    ),
+                    0o644,
+                )
+                updates["serial"] += 1
+
+        if remote_ca_crl_bytes:
+            local_ca_crl_text = ""
+            if os.path.isfile(self.ca_crl_path()):
+                with open(self.ca_crl_path(), "r", encoding="utf-8") as handle:
+                    local_ca_crl_text = handle.read()
+            merged_ca_crl_text = merge_crl_pem_bundles(
+                [local_ca_crl_text, remote_ca_crl_bytes.decode("utf-8")]
+            )
+            if merged_ca_crl_text != local_ca_crl_text:
+                self.write_owned_bytes_file(
+                    self.ca_crl_path(),
+                    merged_ca_crl_text.encode("utf-8"),
+                    0o640,
+                )
+                updates["ca_crl"] += 1
+
+        if remote_infra_crl_bytes:
+            local_infra_crl_text = ""
+            if os.path.isfile(self.ca_infra_crl_path()):
+                with open(self.ca_infra_crl_path(), "r", encoding="utf-8") as handle:
+                    local_infra_crl_text = handle.read()
+            merged_infra_crl_text = merge_crl_pem_bundles(
+                [local_infra_crl_text, remote_infra_crl_bytes.decode("utf-8")]
+            )
+            if merged_infra_crl_text != local_infra_crl_text:
+                self.write_owned_bytes_file(
+                    self.ca_infra_crl_path(),
+                    merged_infra_crl_text.encode("utf-8"),
+                    0o640,
+                )
+                updates["infra_crl"] += 1
+
+        self.write_ca_peer_summary(participant, published_at, state)
+        status = self.snapshot_status()
+        self.set_status(
+            caSyncReady=True,
+            caSyncAppliedStateCount=int(status.get("caSyncAppliedStateCount") or 0) + 1,
+            caSyncLastAppliedAt=int(time.time()),
+            caSyncLastError="",
+        )
+        updated_items = [name for name, count in updates.items() if count > 0]
+        if updated_items:
+            log(
+                f"Applied CA state from {participant}: "
+                + ", ".join(f"{name}={updates[name]}" for name in updated_items)
+            )
+
+    def publish_ca_state(self):
+        if not self.ca_sync_enabled or self.connection is None or self.channel is None or self.bundle is None:
+            return
+
+        state = self.read_ca_state()
+        now = int(time.time())
+        state_hash = state.get("hash", "")
+        self.set_status(
+            caSyncReady=True,
+            caSyncStateHash=state_hash,
+            caSyncRequestCount=len(state.get("requests") or {}),
+            caSyncSignedCount=len(state.get("signed") or {}),
+            caSyncLastError="",
+        )
+
+        should_publish = state_hash != self.last_published_ca_hash or now >= self.next_ca_publish
+        if not should_publish:
+            return
+
+        payload = {
+            "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+            "kind": "ConductorRelayCaState",
+            "publishedAt": now,
+            "origin": {
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "role": self.relay_role,
+                "segment": self.segment_name,
+            },
+            "targetRoles": list(self.ca_sync_target_roles),
+            "state": state,
+        }
+        routing_key = f"relay.ca-state.{sanitize_fragment(self.pod_name)}"
+        self.channel.basic_publish(
+            exchange=self.bundle["hub"]["exchanges"]["data"],
+            routing_key=routing_key,
+            body=json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+            properties=pika.BasicProperties(content_type="application/json", delivery_mode=2),
+        )
+        status = self.snapshot_status()
+        self.set_status(
+            caSyncPublishedStateCount=int(status.get("caSyncPublishedStateCount") or 0) + 1,
+            caSyncLastPublishedAt=now,
+        )
+        self.last_published_ca_hash = state_hash
+        self.next_ca_publish = now + self.ca_sync_publish_interval
 
     def parse_puppet_certname(self):
         if not os.path.isfile(self.puppet_conf_path):
@@ -647,6 +1130,30 @@ class RelayRuntime:
             peerControlPlaneCount=sum(1 for status in fresh_statuses if status.get("role") == "control-plane"),
             peerCompilerCount=sum(1 for status in fresh_statuses if status.get("role") == "compiler"),
         )
+
+    def refresh_ca_peer_counts(self):
+        if not self.ca_sync_enabled:
+            self.set_status(caSyncPeerStateCount=0)
+            return
+
+        fresh_statuses = []
+        os.makedirs(self.ca_peer_dir, exist_ok=True)
+        now = int(time.time())
+        for entry in os.scandir(self.ca_peer_dir):
+            if not entry.is_file() or not entry.name.endswith(".json"):
+                continue
+            try:
+                status = read_json_file(entry.path)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                continue
+            published_at = int(status.get("publishedAt") or 0)
+            if published_at <= 0:
+                continue
+            if now - published_at > self.ca_sync_max_age:
+                continue
+            fresh_statuses.append(status)
+
+        self.set_status(caSyncPeerStateCount=len(fresh_statuses))
 
     def publish_envelope(self, routing_key, payload):
         bundle, username, password = self.current_publish_credentials()
@@ -885,6 +1392,21 @@ class RelayRuntime:
                 channel.basic_nack(method.delivery_tag, requeue=True)
             return
 
+        if kind == "ConductorRelayCaState":
+            try:
+                self.apply_remote_ca_state(payload)
+                self.set_status(lastReceivedAt=int(time.time()))
+                channel.basic_ack(method.delivery_tag)
+            except Exception as error:
+                self.set_status(
+                    caSyncReady=False,
+                    caSyncLastError=str(error),
+                )
+                log(f"Remote CA state apply failed: {error}")
+                time.sleep(2)
+                channel.basic_nack(method.delivery_tag, requeue=True)
+            return
+
         channel.basic_ack(method.delivery_tag)
 
     def connect(self, bundle, username, password):
@@ -916,6 +1438,7 @@ class RelayRuntime:
             self.publish_username = username
             self.publish_password = password
         self.next_publish = 0
+        self.next_ca_publish = 0
         self.set_status(connected=True, lastConnectedAt=int(time.time()), lastError="")
         log(
             "Connected to Fabric as "
@@ -962,6 +1485,7 @@ class RelayRuntime:
             return
 
         self.refresh_peer_counts()
+        self.refresh_ca_peer_counts()
         self.set_status(lastPublishedAt=now)
         payload_status = self.snapshot_status()
         payload_status["lastUpdatedAt"] = now
@@ -1013,6 +1537,7 @@ class RelayRuntime:
                 self.refresh_onboarding(force=self.connection is None or not self.connection.is_open)
                 if self.connection is not None and self.connection.is_open:
                     self.publish_status()
+                    self.publish_ca_state()
                     self.connection.process_data_events(time_limit=1)
                 else:
                     time.sleep(1)
@@ -1025,6 +1550,7 @@ class RelayRuntime:
                 time.sleep(5)
 
             self.refresh_peer_counts()
+            self.refresh_ca_peer_counts()
             self.set_status(lastError=last_error)
             self.write_status()
 
