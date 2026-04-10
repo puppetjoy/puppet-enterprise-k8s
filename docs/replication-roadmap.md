@@ -123,6 +123,27 @@ Current decision:
 - do not introduce SPOG-only replicas unless they solve a real Kubernetes problem that pooled `service/pe` cannot solve cleanly
 - prefer making pooled control-plane replicas equivalent over introducing topology splits inherited from bare metal or VM deployments
 
+## Phase 6: PE-Owned State Convergence
+
+Once transport, trust, PuppetDB command relay, Gateway, and code deployment
+convergence exist, the next job is to remove the remaining replica-local PE
+surfaces that make pooled `service/pe` unsafe for some traffic classes.
+
+This phase should prove:
+
+- user-managed classifier state can converge across `pe` replicas without cloning PE's built-in infrastructure groups
+- readiness can reflect whether a control-plane replica is current enough for shared PE-owned state
+- broader console-backed state can move through Fabric rather than through ad hoc direct PE-to-PE repair
+- tactical routing exceptions can shrink as replica equivalence improves
+
+Current status:
+
+- relay now owns a shared-classification slice under the fixed `Conductor Shared Classification` root group
+- that subtree is created locally as needed, published through Fabric, and replayed on peer control-plane replicas with stable classifier group IDs
+- PE's built-in classifier groups remain replica-local because their IDs and host payloads are instance-specific
+- live validation in Kubernetes confirmed create and delete convergence for a child group between `pe-0` and `pe-1`
+- remaining PE-owned state, including RBAC-adjacent writes and session behaviour, is still outstanding
+
 ## Explicit Non-Goals
 
 The following are not the target architecture:

@@ -558,6 +558,26 @@ spec:
               value: {{ .Values.conductor.relay.codeDeploy.hook.listenPort | quote }}
             - name: CONDUCTOR_RELAY_CODE_DEPLOY_HOOK_PATH
               value: {{ .Values.conductor.relay.codeDeploy.hook.path | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_ENABLED
+              value: {{ ternary "true" "false" .Values.conductor.relay.classifierSync.enabled | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_SERVICE_HOST
+              value: {{ include "pe.identity" . | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_TARGET_ROLES
+              value: {{ join "," .Values.conductor.relay.classifierSync.targetRoles | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_USERNAME
+              value: {{ .Values.conductor.relay.classifierSync.auth.username | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_PASSWORD
+              value: {{ default .Values.peConfig.consoleAdminPassword .Values.conductor.relay.classifierSync.auth.password | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_TOKEN_LIFETIME
+              value: {{ .Values.conductor.relay.classifierSync.auth.tokenLifetime | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_TOKEN_LABEL
+              value: {{ .Values.conductor.relay.classifierSync.auth.tokenLabel | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_ROOT_GROUP_ID
+              value: {{ .Values.conductor.relay.classifierSync.rootGroup.id | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_ROOT_GROUP_NAME
+              value: {{ .Values.conductor.relay.classifierSync.rootGroup.name | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_ROOT_GROUP_DESCRIPTION
+              value: {{ .Values.conductor.relay.classifierSync.rootGroup.description | quote }}
           readinessProbe:
             exec:
               command: ["/usr/local/bin/conductor-relay", "probe", "ready"]

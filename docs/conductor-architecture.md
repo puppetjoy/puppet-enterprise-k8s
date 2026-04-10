@@ -144,6 +144,34 @@ The current flow is:
 - remote relays mark themselves pending, drain from readiness, replay the deploy locally through the Code Manager API, and suppress their local hook so the replay does not loop
 - relays only become ready again when their local deploy signature matches the desired signature
 
+## Shared Classification
+
+The first PE-owned control-plane state now carried through Fabric is shared
+classification.
+
+This repo does not try to mirror the entire PE classifier hierarchy between
+replicas. PE creates replica-local infrastructure groups with instance-specific
+identifiers and host data, so blindly cloning the whole hierarchy would corrupt
+those local groups instead of making the release safer.
+
+The current implementation therefore scopes replicated classifier state to a
+dedicated root group:
+
+- `Conductor Shared Classification`
+- group ID `f6b0f884-0fb8-4f5b-9cf8-0d430711f4d2`
+- parented directly under `All Nodes`
+
+Relay now ensures that root exists locally on each `pe` replica, publishes that
+subtree into Fabric, and applies create, update, and delete operations on peer
+replicas with stable classifier group IDs.
+
+That means:
+
+- shared user-managed classifier groups can converge across pooled `pe` replicas
+- PE-built infrastructure groups remain local to each control-plane replica
+- the mechanism stays Conductor-aligned because state moves through Fabric rather than through direct PE-to-PE API fanout
+- broader PE-owned state such as RBAC, sessions, and other console-backed writes is still ahead
+
 ## Non-Goals
 
 The repo should not treat these as the HA architecture:
@@ -164,6 +192,8 @@ The next credible sequence is now:
 2. Relay insertion on the Puppet Server/PuppetDB path
 3. Gateway insertion on the PCP/orchestrator path
 4. Code deployment convergence across Workers
-5. Worker/SPOG role modelling and health-driven routing
+5. Shared-classification convergence for PE-owned control-plane state
+6. Additional PE-owned state convergence and eventual reduction of tactical routing exceptions
+7. Worker/SPOG role modelling only if a pooled Kubernetes control plane still needs it
 
 That ordering matters because Relay and Gateway depend on Fabric and Warden for identity, trust, and transport, and code convergence needs both paths in place before control-plane traffic can fail over cleanly.

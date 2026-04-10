@@ -34,10 +34,20 @@ DEFAULT_TARGET_ROLES = [
 DEFAULT_CODE_DEPLOY_TARGET_ROLES = [
     "control-plane",
 ]
+DEFAULT_CLASSIFIER_TARGET_ROLES = [
+    "control-plane",
+]
 DEFAULT_COMMAND_PROXY_PATH = "/pdb/cmd/v1"
 DEFAULT_CA_SYNC_DIR = "/etc/puppetlabs/puppetserver/ca"
 DEFAULT_CODE_DEPLOY_HOOK_PATH = "/conductor/code-manager/v1/post-environment"
 DEFAULT_CODE_DEPLOY_STATE_FILENAME = "code-deploy-state.json"
+DEFAULT_CLASSIFIER_SYNC_STATE_FILENAME = "classifier-sync-state.json"
+ALL_NODES_GROUP_ID = "00000000-0000-4000-8000-000000000000"
+DEFAULT_CLASSIFIER_ROOT_GROUP_ID = "f6b0f884-0fb8-4f5b-9cf8-0d430711f4d2"
+DEFAULT_CLASSIFIER_ROOT_GROUP_NAME = "Conductor Shared Classification"
+DEFAULT_CLASSIFIER_ROOT_GROUP_DESCRIPTION = (
+    "Shared classification subtree replicated across PE control-plane replicas."
+)
 
 
 def log(message):
@@ -89,6 +99,10 @@ def sha256_text(value):
 
 def sha256_bytes(value):
     return hashlib.sha256(value).hexdigest()
+
+
+def stable_json(value):
+    return json.dumps(value, separators=(",", ":"), sort_keys=True)
 
 
 def participant_secret_name(prefix, segment_name, participant_name, suffix):
@@ -211,6 +225,82 @@ def render_hex_serial(value, width, trailing_newline):
         rendered += "\n"
     return rendered.encode("utf-8")
 
+
+def normalize_classifier_group(group):
+    normalized = {
+        "id": ((group or {}).get("id") or "").strip(),
+        "name": ((group or {}).get("name") or "").strip(),
+        "parent": ((group or {}).get("parent") or "").strip(),
+        "environment": ((group or {}).get("environment") or "production").strip() or "production",
+        "environment_trumps": bool((group or {}).get("environment_trumps", False)),
+        "description": (group or {}).get("description") or "",
+        "classes": dict((group or {}).get("classes") or {}),
+        "variables": dict((group or {}).get("variables") or {}),
+    }
+    if "rule" in (group or {}):
+        normalized["rule"] = (group or {}).get("rule")
+    else:
+        normalized["rule"] = None
+    config_data = dict((group or {}).get("config_data") or {})
+    if config_data:
+        normalized["config_data"] = config_data
+    return normalized
+
+
+def classifier_group_put_payload(group):
+    normalized = normalize_classifier_group(group)
+    payload = {
+        "name": normalized["name"],
+        "parent": normalized["parent"],
+        "environment": normalized["environment"],
+        "environment_trumps": normalized["environment_trumps"],
+        "description": normalized["description"],
+        "classes": normalized["classes"],
+    }
+    if normalized.get("rule", None) is not None:
+        payload["rule"] = normalized["rule"]
+    if normalized["variables"]:
+        payload["variables"] = normalized["variables"]
+    if normalized.get("config_data"):
+        payload["config_data"] = normalized["config_data"]
+    return payload
+
+
+def classifier_group_sort_key(group):
+    return (
+        (group.get("parent") or "").strip(),
+        (group.get("name") or "").strip(),
+        (group.get("id") or "").strip(),
+    )
+
+
+def classifier_state_hash(groups):
+    normalized = [normalize_classifier_group(group) for group in groups or []]
+    normalized.sort(key=classifier_group_sort_key)
+    return sha256_text(stable_json({"groups": normalized}))
+
+
+def classifier_group_depth(group_map, group_id, root_id, cache):
+    group_id = (group_id or "").strip()
+    if not group_id:
+        return 0
+    if group_id in cache:
+        return cache[group_id]
+    if group_id == root_id:
+        cache[group_id] = 0
+        return 0
+    group = group_map.get(group_id)
+    if group is None:
+        cache[group_id] = 0
+        return 0
+    parent_id = (group.get("parent") or "").strip()
+    if not parent_id or parent_id == group_id:
+        cache[group_id] = 1
+        return 1
+    depth = classifier_group_depth(group_map, parent_id, root_id, cache) + 1
+    cache[group_id] = depth
+    return depth
+
 def http_request_raw(method, url, headers=None, data=None, context=None, timeout=30):
     request = urllib.request.Request(url, method=method, data=data)
     for key, value in (headers or {}).items():
@@ -301,6 +391,8 @@ def probe(mode):
     if status.get("commandProxyEnabled", False) and not status.get("commandProxyReady", False):
         return 1
     if status.get("caSyncEnabled", False) and not status.get("caSyncReady", False):
+        return 1
+    if status.get("classifierSyncEnabled", False) and not status.get("classifierSyncReady", False):
         return 1
     if status.get("codeDeployEnabled", False) and not status.get("codeDeployReady", False):
         return 1
@@ -588,6 +680,47 @@ class RelayRuntime:
             60,
         )
         self.code_deploy_state_path = os.path.join(self.output_dir, DEFAULT_CODE_DEPLOY_STATE_FILENAME)
+        self.classifier_sync_enabled = env_bool("CONDUCTOR_RELAY_CLASSIFIER_SYNC_ENABLED", False)
+        self.classifier_sync_service_host = (
+            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_SERVICE_HOST", "").strip()
+            or self.code_deploy_service_host
+        )
+        self.classifier_sync_username = (
+            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_USERNAME", "").strip()
+            or self.code_deploy_username
+        )
+        self.classifier_sync_password = (
+            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_PASSWORD", "")
+            or self.code_deploy_password
+        )
+        self.classifier_sync_token_lifetime = (
+            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_TOKEN_LIFETIME", "").strip()
+            or self.code_deploy_token_lifetime
+        )
+        self.classifier_sync_token_label = (
+            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_TOKEN_LABEL", "").strip()
+            or "pe-k8s-conductor-classifier-sync"
+        )
+        self.classifier_sync_target_roles = env_csv(
+            "CONDUCTOR_RELAY_CLASSIFIER_SYNC_TARGET_ROLES",
+            default=DEFAULT_CLASSIFIER_TARGET_ROLES,
+        )
+        self.classifier_sync_root_group_id = (
+            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_ROOT_GROUP_ID", "").strip()
+            or DEFAULT_CLASSIFIER_ROOT_GROUP_ID
+        )
+        self.classifier_sync_root_group_name = (
+            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_ROOT_GROUP_NAME", "").strip()
+            or DEFAULT_CLASSIFIER_ROOT_GROUP_NAME
+        )
+        self.classifier_sync_root_group_description = (
+            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_ROOT_GROUP_DESCRIPTION", "")
+            or DEFAULT_CLASSIFIER_ROOT_GROUP_DESCRIPTION
+        )
+        self.classifier_sync_state_path = os.path.join(
+            self.output_dir,
+            DEFAULT_CLASSIFIER_SYNC_STATE_FILENAME,
+        )
         self.ca_sync_enabled = env_bool("CONDUCTOR_RELAY_CA_SYNC_ENABLED", False)
         self.ca_sync_dir = (
             os.environ.get("CONDUCTOR_RELAY_CA_SYNC_DIR", "").strip()
@@ -621,12 +754,16 @@ class RelayRuntime:
         self.command_proxy_start_error = ""
         self.code_deploy_hook_start_error = ""
         self.code_deploy_runtime_error = ""
+        self.classifier_sync_runtime_error = ""
         self.code_deploy_suppressions = {}
         self.code_deploy_queue = queue.Queue()
         self.code_deploy_queued = set()
         self.code_deploy_worker_thread = None
         self.code_deploy_states = {}
         self.last_code_deploy_status_poll = 0
+        self.classifier_sync_state = self.default_classifier_sync_state()
+        self.next_classifier_publish = 0
+        self.last_published_classifier_hash = ""
 
         self.connection = None
         self.channel = None
@@ -684,6 +821,21 @@ class RelayRuntime:
             "codeDeployLastConvergedAt": 0,
             "codeDeployLastError": "",
             "codeDeployEnvironments": {},
+            "classifierSyncEnabled": self.classifier_sync_enabled,
+            "classifierSyncReady": not self.classifier_sync_enabled,
+            "classifierSyncServiceHost": self.classifier_sync_service_host if self.classifier_sync_enabled else "",
+            "classifierSyncTargetRoles": list(self.classifier_sync_target_roles),
+            "classifierSyncRootGroupId": self.classifier_sync_root_group_id if self.classifier_sync_enabled else "",
+            "classifierSyncRootGroupName": self.classifier_sync_root_group_name if self.classifier_sync_enabled else "",
+            "classifierSyncState": "idle",
+            "classifierSyncDesiredHash": "",
+            "classifierSyncActualHash": "",
+            "classifierSyncDesiredGroupCount": 0,
+            "classifierSyncActualGroupCount": 0,
+            "classifierSyncLastPublishedAt": 0,
+            "classifierSyncLastAppliedAt": 0,
+            "classifierSyncLastConvergedAt": 0,
+            "classifierSyncLastError": "",
             "caSyncEnabled": self.ca_sync_enabled,
             "caSyncReady": not self.ca_sync_enabled,
             "caSyncDir": self.ca_sync_dir if self.ca_sync_enabled else "",
@@ -706,6 +858,7 @@ class RelayRuntime:
             "lastError": "",
             "lastUpdatedAt": 0,
         }
+        self.load_classifier_sync_state()
         self.load_code_deploy_state()
 
     @staticmethod
@@ -757,6 +910,537 @@ class RelayRuntime:
             "lastError": "",
             "lastErrorAt": 0,
         }
+
+    def default_classifier_sync_state(self):
+        return {
+            "state": "idle",
+            "rootGroupId": self.classifier_sync_root_group_id,
+            "rootGroupName": self.classifier_sync_root_group_name,
+            "desiredHash": "",
+            "actualHash": "",
+            "desiredGroupCount": 0,
+            "actualGroupCount": 0,
+            "originParticipant": "",
+            "desiredPublishedAt": 0,
+            "lastReceivedAt": 0,
+            "lastPublishedAt": 0,
+            "lastAppliedAt": 0,
+            "lastConvergedAt": 0,
+            "lastError": "",
+            "lastErrorAt": 0,
+        }
+
+    def refresh_classifier_summary_locked(self):
+        state = dict(self.classifier_sync_state)
+        ready = not self.classifier_sync_enabled
+        if self.classifier_sync_enabled:
+            desired_hash = (state.get("desiredHash") or "").strip()
+            actual_hash = (state.get("actualHash") or "").strip()
+            phase = (state.get("state") or "idle").strip() or "idle"
+            ready = bool(actual_hash) and phase not in {"pending", "in-progress", "failed"}
+            if desired_hash and actual_hash != desired_hash:
+                ready = False
+            if self.classifier_sync_runtime_error:
+                ready = False
+
+        last_error = self.classifier_sync_runtime_error or (state.get("lastError") or "").strip()
+        self.status.update(
+            {
+                "classifierSyncReady": ready,
+                "classifierSyncServiceHost": (
+                    self.classifier_sync_service_host if self.classifier_sync_enabled else ""
+                ),
+                "classifierSyncTargetRoles": list(self.classifier_sync_target_roles),
+                "classifierSyncRootGroupId": state.get("rootGroupId", ""),
+                "classifierSyncRootGroupName": state.get("rootGroupName", ""),
+                "classifierSyncState": state.get("state", "idle"),
+                "classifierSyncDesiredHash": state.get("desiredHash", ""),
+                "classifierSyncActualHash": state.get("actualHash", ""),
+                "classifierSyncDesiredGroupCount": int(state.get("desiredGroupCount") or 0),
+                "classifierSyncActualGroupCount": int(state.get("actualGroupCount") or 0),
+                "classifierSyncLastPublishedAt": int(state.get("lastPublishedAt") or 0),
+                "classifierSyncLastAppliedAt": int(state.get("lastAppliedAt") or 0),
+                "classifierSyncLastConvergedAt": int(state.get("lastConvergedAt") or 0),
+                "classifierSyncLastError": last_error,
+            }
+        )
+
+    def refresh_classifier_summary(self):
+        with self.lock:
+            self.refresh_classifier_summary_locked()
+
+    def persist_classifier_sync_state(self):
+        if not self.classifier_sync_enabled:
+            return
+        with self.lock:
+            payload = {
+                "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+                "kind": "ConductorRelayClassifierSyncState",
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "state": dict(self.classifier_sync_state),
+            }
+        write_text_file(self.classifier_sync_state_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    def load_classifier_sync_state(self):
+        state = self.default_classifier_sync_state()
+        if self.classifier_sync_enabled and os.path.isfile(self.classifier_sync_state_path):
+            try:
+                payload = read_json_file(self.classifier_sync_state_path)
+                raw_state = payload.get("state") or {}
+                if isinstance(raw_state, dict):
+                    state.update(raw_state)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
+                log(f"Failed to load classifier sync state: {error}")
+        with self.lock:
+            self.classifier_sync_state = state
+            self.refresh_classifier_summary_locked()
+
+    def classifier_sync_state_snapshot(self):
+        with self.lock:
+            return dict(self.classifier_sync_state)
+
+    def merge_classifier_sync_state(self, **updates):
+        with self.lock:
+            state = dict(self.classifier_sync_state)
+            state.update(updates)
+            if "lastError" in updates:
+                if (updates.get("lastError") or "").strip():
+                    state["lastErrorAt"] = int(updates.get("lastErrorAt") or time.time())
+                else:
+                    state["lastErrorAt"] = 0
+            self.classifier_sync_state = state
+            self.refresh_classifier_summary_locked()
+            snapshot = dict(state)
+        self.persist_classifier_sync_state()
+        return snapshot
+
+    def default_classifier_root_group(self):
+        return normalize_classifier_group(
+            {
+                "id": self.classifier_sync_root_group_id,
+                "name": self.classifier_sync_root_group_name,
+                "parent": ALL_NODES_GROUP_ID,
+                "environment": "production",
+                "environment_trumps": False,
+                "description": self.classifier_sync_root_group_description,
+                "classes": {},
+                "variables": {},
+            }
+        )
+
+    def issue_service_token(self, service_host, username, password, lifetime, label_prefix):
+        if not username or not password:
+            raise RuntimeError("service credentials are not configured")
+
+        context = self.build_local_service_context()
+        payload = {
+            "login": username,
+            "password": password,
+            "lifetime": lifetime,
+            "label": f"{label_prefix}-{uuid.uuid4().hex[:12]}",
+        }
+        status_code, body = http_request_json(
+            "POST",
+            f"https://{service_host}:4433/rbac-api/v1/auth/token",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            payload=payload,
+            context=context,
+            timeout=min(self.code_deploy_request_timeout_seconds, 60),
+        )
+        if status_code != 200:
+            raise RuntimeError(f"RBAC token request returned {status_code}: {body}")
+        decoded = json.loads(body)
+        if isinstance(decoded, str):
+            return decoded
+        if isinstance(decoded, dict) and (decoded.get("token") or "").strip():
+            return decoded["token"].strip()
+        raise RuntimeError("RBAC token request returned an unexpected payload")
+
+    def local_console_request(
+        self,
+        method,
+        path,
+        payload=None,
+        *,
+        service_host,
+        username,
+        password,
+        token_lifetime,
+        token_label,
+        expected_statuses,
+        timeout=60,
+    ):
+        token = self.issue_service_token(
+            service_host,
+            username,
+            password,
+            token_lifetime,
+            token_label,
+        )
+        context = self.build_local_service_context()
+        status_code, body = http_request_json(
+            method,
+            f"https://{service_host}:4433{path}",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "X-Authentication": token,
+            },
+            payload=payload,
+            context=context,
+            timeout=timeout,
+        )
+        if status_code not in expected_statuses:
+            raise RuntimeError(f"Console API {method} {path} returned {status_code}: {body}")
+        if not body:
+            return status_code, None
+        try:
+            return status_code, json.loads(body)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"Console API {method} {path} returned non-JSON response: {body}") from error
+
+    def classifier_request(self, method, path, payload=None, expected_statuses=None):
+        return self.local_console_request(
+            method,
+            f"/classifier-api/v1{path}",
+            payload=payload,
+            service_host=self.classifier_sync_service_host,
+            username=self.classifier_sync_username,
+            password=self.classifier_sync_password,
+            token_lifetime=self.classifier_sync_token_lifetime,
+            token_label=self.classifier_sync_token_label,
+            expected_statuses=expected_statuses or {200},
+            timeout=self.code_deploy_request_timeout_seconds,
+        )
+
+    def fetch_classifier_groups(self):
+        status_code, payload = self.classifier_request("GET", "/groups", expected_statuses={200})
+        if status_code != 200 or not isinstance(payload, list):
+            raise RuntimeError(f"classifier groups request returned {status_code}: {payload}")
+        groups = []
+        for item in payload:
+            normalized = normalize_classifier_group(item)
+            if normalized["id"]:
+                groups.append(normalized)
+        return groups
+
+    def classifier_subtree_groups(self, all_groups):
+        group_map = {
+            (group.get("id") or "").strip(): normalize_classifier_group(group)
+            for group in all_groups or []
+            if (group.get("id") or "").strip()
+        }
+        root_id = self.classifier_sync_root_group_id
+        root = group_map.get(root_id)
+        if root is None:
+            return []
+
+        children = {}
+        for group in group_map.values():
+            children.setdefault((group.get("parent") or "").strip(), []).append(group)
+        for entries in children.values():
+            entries.sort(key=classifier_group_sort_key)
+
+        ordered = []
+        queue_items = [root]
+        seen = set()
+        while queue_items:
+            group = queue_items.pop(0)
+            group_id = (group.get("id") or "").strip()
+            if not group_id or group_id in seen:
+                continue
+            seen.add(group_id)
+            ordered.append(normalize_classifier_group(group))
+            queue_items.extend(children.get(group_id, []))
+        return ordered
+
+    def ensure_classifier_root_group(self):
+        if not self.classifier_sync_enabled:
+            return self.default_classifier_root_group()
+
+        groups = self.fetch_classifier_groups()
+        for group in groups:
+            if (group.get("id") or "").strip() == self.classifier_sync_root_group_id:
+                return normalize_classifier_group(group)
+
+        root_group = self.default_classifier_root_group()
+        self.classifier_request(
+            "PUT",
+            f"/groups/{self.classifier_sync_root_group_id}",
+            payload=classifier_group_put_payload(root_group),
+            expected_statuses={200, 201},
+        )
+        log(
+            f"Created classifier sync root group "
+            f"{self.classifier_sync_root_group_name} ({self.classifier_sync_root_group_id})"
+        )
+        return root_group
+
+    def read_local_classifier_state(self):
+        self.ensure_classifier_root_group()
+        groups = self.classifier_subtree_groups(self.fetch_classifier_groups())
+        payload = {
+            "rootGroupId": self.classifier_sync_root_group_id,
+            "rootGroupName": self.classifier_sync_root_group_name,
+            "groups": groups,
+            "groupCount": len(groups),
+        }
+        payload["hash"] = classifier_state_hash(groups)
+        return payload
+
+    def refresh_local_classifier_sync_state(self):
+        if not self.classifier_sync_enabled:
+            return
+
+        observed_at = int(time.time())
+        local_state = self.read_local_classifier_state()
+        snapshot = self.classifier_sync_state_snapshot()
+        desired_hash = (snapshot.get("desiredHash") or "").strip()
+        actual_hash = (local_state.get("hash") or "").strip()
+        phase = (snapshot.get("state") or "idle").strip() or "idle"
+        origin_participant = (snapshot.get("originParticipant") or "").strip()
+
+        updates = {
+            "rootGroupId": self.classifier_sync_root_group_id,
+            "rootGroupName": self.classifier_sync_root_group_name,
+            "actualHash": actual_hash,
+            "actualGroupCount": int(local_state.get("groupCount") or 0),
+        }
+        if desired_hash and desired_hash == actual_hash:
+            updates.update(
+                {
+                    "state": "converged",
+                    "lastConvergedAt": observed_at,
+                    "lastError": "",
+                }
+            )
+        elif desired_hash and origin_participant and origin_participant != self.pod_name and phase in {
+            "pending",
+            "in-progress",
+            "failed",
+        }:
+            updates["state"] = phase
+        else:
+            updates.update(
+                {
+                    "state": "observed",
+                    "desiredHash": actual_hash,
+                    "desiredGroupCount": int(local_state.get("groupCount") or 0),
+                    "originParticipant": self.pod_name,
+                    "lastConvergedAt": observed_at,
+                    "lastError": "",
+                }
+            )
+        self.classifier_sync_runtime_error = ""
+        self.merge_classifier_sync_state(**updates)
+
+    def publish_classifier_state(self):
+        if (
+            not self.classifier_sync_enabled
+            or self.connection is None
+            or self.channel is None
+            or self.bundle is None
+        ):
+            return
+
+        state = self.read_local_classifier_state()
+        now = int(time.time())
+        state_hash = (state.get("hash") or "").strip()
+        should_publish = state_hash != self.last_published_classifier_hash or now >= self.next_classifier_publish
+        if not should_publish:
+            return
+
+        payload = {
+            "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+            "kind": "ConductorRelayClassifierState",
+            "publishedAt": now,
+            "origin": {
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "role": self.relay_role,
+                "segment": self.segment_name,
+            },
+            "targetRoles": list(self.classifier_sync_target_roles),
+            "state": state,
+        }
+        self.channel.basic_publish(
+            exchange=self.bundle["hub"]["exchanges"]["data"],
+            routing_key=f"relay.classifier-state.{sanitize_fragment(self.pod_name)}",
+            body=stable_json(payload).encode("utf-8"),
+            properties=pika.BasicProperties(content_type="application/json", delivery_mode=2),
+        )
+        self.last_published_classifier_hash = state_hash
+        self.next_classifier_publish = now + self.publish_interval
+        self.merge_classifier_sync_state(
+            state="converged",
+            desiredHash=state_hash,
+            actualHash=state_hash,
+            desiredGroupCount=int(state.get("groupCount") or 0),
+            actualGroupCount=int(state.get("groupCount") or 0),
+            originParticipant=self.pod_name,
+            desiredPublishedAt=now,
+            lastPublishedAt=now,
+            lastConvergedAt=now,
+            lastError="",
+        )
+
+    def reconcile_classifier_state(self, state_payload, published_at, origin_participant):
+        desired_groups = [
+            normalize_classifier_group(group)
+            for group in (state_payload.get("groups") or [])
+        ]
+        if not desired_groups:
+            desired_groups = [self.default_classifier_root_group()]
+
+        desired_map = {
+            (group.get("id") or "").strip(): group
+            for group in desired_groups
+            if (group.get("id") or "").strip()
+        }
+        if self.classifier_sync_root_group_id not in desired_map:
+            desired_groups.insert(0, self.default_classifier_root_group())
+            desired_map[self.classifier_sync_root_group_id] = desired_groups[0]
+
+        desired_depth_cache = {}
+        desired_groups.sort(
+            key=lambda group: (
+                classifier_group_depth(
+                    desired_map,
+                    group.get("id"),
+                    self.classifier_sync_root_group_id,
+                    desired_depth_cache,
+                ),
+                classifier_group_sort_key(group),
+            )
+        )
+
+        current_groups = self.fetch_classifier_groups()
+        current_shared = self.classifier_subtree_groups(current_groups)
+        current_map = {
+            (group.get("id") or "").strip(): normalize_classifier_group(group)
+            for group in current_shared
+            if (group.get("id") or "").strip()
+        }
+
+        for group in desired_groups:
+            group_id = (group.get("id") or "").strip()
+            if not group_id:
+                continue
+            self.classifier_request(
+                "PUT",
+                f"/groups/{group_id}",
+                payload=classifier_group_put_payload(group),
+                expected_statuses={200, 201},
+            )
+
+        extra_groups = [
+            group
+            for group_id, group in current_map.items()
+            if group_id not in desired_map and group_id != self.classifier_sync_root_group_id
+        ]
+        current_depth_cache = {}
+        extra_groups.sort(
+            key=lambda group: (
+                -classifier_group_depth(
+                    current_map,
+                    group.get("id"),
+                    self.classifier_sync_root_group_id,
+                    current_depth_cache,
+                ),
+                classifier_group_sort_key(group),
+            )
+        )
+        for group in extra_groups:
+            self.classifier_request(
+                "DELETE",
+                f"/groups/{group['id']}",
+                expected_statuses={204, 404},
+            )
+
+        local_state = self.read_local_classifier_state()
+        actual_hash = (local_state.get("hash") or "").strip()
+        desired_hash = (state_payload.get("hash") or "").strip()
+        updates = {
+            "desiredHash": desired_hash,
+            "actualHash": actual_hash,
+            "desiredGroupCount": len(desired_groups),
+            "actualGroupCount": int(local_state.get("groupCount") or 0),
+            "originParticipant": origin_participant,
+            "desiredPublishedAt": int(published_at or time.time()),
+            "lastAppliedAt": int(time.time()),
+        }
+        if actual_hash == desired_hash:
+            updates.update(
+                {
+                    "state": "converged",
+                    "lastConvergedAt": int(time.time()),
+                    "lastError": "",
+                }
+            )
+        else:
+            updates.update(
+                {
+                    "state": "failed",
+                    "lastError": (
+                        "classifier subtree hash mismatch after apply: "
+                        f"expected {desired_hash}, got {actual_hash or 'none'}"
+                    ),
+                }
+            )
+        self.classifier_sync_runtime_error = ""
+        self.merge_classifier_sync_state(**updates)
+
+    def handle_remote_classifier_state(self, payload):
+        if not self.classifier_sync_enabled:
+            return
+
+        origin = payload.get("origin") or {}
+        origin_participant = (origin.get("participant") or "").strip()
+        if not origin_participant or origin_participant == self.pod_name:
+            return
+
+        target_roles = payload.get("targetRoles") or []
+        if target_roles and self.relay_role not in target_roles:
+            return
+
+        state_payload = payload.get("state") or {}
+        desired_hash = (state_payload.get("hash") or "").strip()
+        if not desired_hash:
+            raise RuntimeError("classifier sync payload is missing a hash")
+
+        published_at = int(payload.get("publishedAt") or 0)
+        current_state = self.classifier_sync_state_snapshot()
+        current_desired_hash = (current_state.get("desiredHash") or "").strip()
+        current_actual_hash = (current_state.get("actualHash") or "").strip()
+        if desired_hash == current_actual_hash and desired_hash == current_desired_hash:
+            self.merge_classifier_sync_state(
+                state="converged",
+                lastReceivedAt=int(time.time()),
+                lastConvergedAt=int(time.time()),
+                lastError="",
+            )
+            return
+
+        self.merge_classifier_sync_state(
+            state="pending",
+            rootGroupId=self.classifier_sync_root_group_id,
+            rootGroupName=self.classifier_sync_root_group_name,
+            desiredHash=desired_hash,
+            desiredGroupCount=int(state_payload.get("groupCount") or len(state_payload.get("groups") or [])),
+            originParticipant=origin_participant,
+            desiredPublishedAt=published_at or int(time.time()),
+            lastReceivedAt=int(time.time()),
+            lastError="",
+        )
+        log(
+            "Received classifier sync intent at "
+            f"{desired_hash[:12]} from {origin_participant}"
+        )
+        self.reconcile_classifier_state(state_payload, published_at, origin_participant)
 
     def code_deploy_hook_url(self):
         return (
@@ -1586,35 +2270,13 @@ class RelayRuntime:
             self.refresh_code_deploy_summary()
 
     def issue_code_deploy_token(self):
-        if not self.code_deploy_username or not self.code_deploy_password:
-            raise RuntimeError("code deploy credentials are not configured")
-
-        context = self.build_local_service_context()
-        payload = {
-            "login": self.code_deploy_username,
-            "password": self.code_deploy_password,
-            "lifetime": self.code_deploy_token_lifetime,
-            "label": f"{self.code_deploy_token_label}-{uuid.uuid4().hex[:12]}",
-        }
-        status_code, body = http_request_json(
-            "POST",
-            f"https://{self.code_deploy_service_host}:4433/rbac-api/v1/auth/token",
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            },
-            payload=payload,
-            context=context,
-            timeout=min(self.code_deploy_request_timeout_seconds, 60),
+        return self.issue_service_token(
+            self.code_deploy_service_host,
+            self.code_deploy_username,
+            self.code_deploy_password,
+            self.code_deploy_token_lifetime,
+            self.code_deploy_token_label,
         )
-        if status_code != 200:
-            raise RuntimeError(f"RBAC token request returned {status_code}: {body}")
-        decoded = json.loads(body)
-        if isinstance(decoded, str):
-            return decoded
-        if isinstance(decoded, dict) and (decoded.get("token") or "").strip():
-            return decoded["token"].strip()
-        raise RuntimeError("RBAC token request returned an unexpected payload")
 
     def code_manager_request(self, method, path, payload=None):
         token = self.issue_code_deploy_token()
@@ -2397,6 +3059,19 @@ class RelayRuntime:
                 channel.basic_nack(method.delivery_tag, requeue=True)
             return
 
+        if kind == "ConductorRelayClassifierState":
+            try:
+                self.handle_remote_classifier_state(payload)
+                self.set_status(lastReceivedAt=int(time.time()))
+                channel.basic_ack(method.delivery_tag)
+            except Exception as error:
+                self.classifier_sync_runtime_error = str(error)
+                self.refresh_classifier_summary()
+                log(f"Remote classifier sync handling failed: {error}")
+                time.sleep(2)
+                channel.basic_nack(method.delivery_tag, requeue=True)
+            return
+
         channel.basic_ack(method.delivery_tag)
 
     def connect(self, bundle, username, password):
@@ -2429,6 +3104,7 @@ class RelayRuntime:
             self.publish_password = password
         self.next_publish = 0
         self.next_ca_publish = 0
+        self.next_classifier_publish = 0
         self.set_status(connected=True, lastConnectedAt=int(time.time()), lastError="")
         log(
             "Connected to Fabric as "
@@ -2476,6 +3152,7 @@ class RelayRuntime:
 
         self.refresh_peer_counts()
         self.refresh_ca_peer_counts()
+        self.refresh_classifier_summary()
         self.refresh_code_deploy_summary()
         self.set_status(lastPublishedAt=now)
         payload_status = self.snapshot_status()
@@ -2527,6 +3204,16 @@ class RelayRuntime:
                 log(f"PuppetDB status refresh failed: {error}")
 
             try:
+                self.refresh_local_classifier_sync_state()
+            except KeyboardInterrupt:
+                raise
+            except Exception as error:
+                last_error = str(error)
+                self.classifier_sync_runtime_error = str(error)
+                self.refresh_classifier_summary()
+                log(f"Classifier sync refresh failed: {error}")
+
+            try:
                 self.refresh_local_code_deploy_status()
             except KeyboardInterrupt:
                 raise
@@ -2541,6 +3228,7 @@ class RelayRuntime:
                 if self.connection is not None and self.connection.is_open:
                     self.publish_status()
                     self.publish_ca_state()
+                    self.publish_classifier_state()
                     self.connection.process_data_events(time_limit=1)
                 else:
                     time.sleep(1)
