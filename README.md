@@ -8,7 +8,7 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 - Builds a PE runtime image from the official installer tarball
 - Installs PE with Helm and preserves the install result on PVCs
 - Runs PostgreSQL, PuppetDB, the non-compiler Puppet Server, and PE edge/API services as Kubernetes workloads
-- Supports an optional compiler pool with per-replica non-shared PVCs and file-sync-based readiness
+- Supports an optional compiler pool with per-replica non-shared PVCs, file-sync/PuppetDB-based readiness, and compiler-side PCP brokers
 - Supports optional ingress exposure, Code Manager configuration, and a validation `puppet-agent` chart
 - Still evolving around storage boundaries, multi-replica safety, upgrade orchestration, and hardening
 
@@ -55,6 +55,7 @@ Typical overrides include:
 - storage classes
 - affinity and tolerations
 - ingress class, host, and TLS annotations
+- PE and compiler technical hostnames
 - Code Manager settings and secret references
 
 The helper target below validates the repo-local artifact layout used by the Makefile workflow:

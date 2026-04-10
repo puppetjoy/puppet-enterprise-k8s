@@ -38,6 +38,7 @@ probes:
 
 network:
   technicalHostname: ""
+  compilerHostname: ""
   additionalDnsAltNames: []
   podLoopbackAliases:
     - puppet
@@ -96,11 +97,14 @@ compilers:
   enabled: false
   replicaCount: 0
   dnsAltNames: []
+  pcpBrokerHost: ""
+  classifierWaitTimeoutSeconds: 900
   puppetdbSyncIntervalMinutes: 5
   puppetdbMaxSyncAgeSeconds: 900
   certWaitTimeoutSeconds: 900
   signerWaitTimeoutSeconds: 900
   resources:
+    classifier: {}
     install: {}
     bootstrap: {}
     signer: {}
@@ -141,6 +145,7 @@ services:
   compilers:
     type: ClusterIP
     port: 8140
+    pcpPort: 8142
     loadBalancerIP: ""
   consoleServices:
     type: ClusterIP

@@ -67,6 +67,8 @@ spec:
               value: {{ include "pe.certname" . | quote }}
             - name: PE_COMPILER_PUPPETDB_HOST
               value: {{ include "pe.identity" . | quote }}
+            - name: PE_COMPILER_PCP_BROKER_HOST
+              value: {{ include "pe.compilerPcpBrokerHost" . | quote }}
             - name: PE_COMPILER_DNS_ALT_NAMES
               value: {{ include "pe.compilerPoolDnsNamesCsv" . | quote }}
             - name: PE_COMPILER_PUPPETDB_SYNC_INTERVAL_MINUTES
@@ -178,9 +180,13 @@ spec:
               value: {{ include "pe.identity" . | quote }}
             - name: PE_K8S_COMPILER_PUPPETDB_SYNC_MAX_AGE_SECONDS
               value: {{ .Values.compilers.puppetdbMaxSyncAgeSeconds | quote }}
+            - name: PE_K8S_COMPILER_PCP_BROKER_PORT
+              value: {{ .Values.services.compilers.pcpPort | quote }}
           ports:
             - name: puppetserver
               containerPort: 8140
+            - name: pcp-broker
+              containerPort: {{ .Values.services.compilers.pcpPort }}
           startupProbe:
             exec:
               command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "puppetserver"]

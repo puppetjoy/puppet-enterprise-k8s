@@ -10,6 +10,7 @@ PE_COMPILER_HEADLESS_SERVICE="${PE_COMPILER_HEADLESS_SERVICE:-}"
 PE_COMPILER_PE_SERVICE="${PE_COMPILER_PE_SERVICE:-pe}"
 PE_COMPILER_PE_CERTNAME="${PE_COMPILER_PE_CERTNAME:-${PE_COMPILER_PE_SERVICE}}"
 PE_COMPILER_PUPPETDB_HOST="${PE_COMPILER_PUPPETDB_HOST:-${PE_COMPILER_PE_SERVICE}}"
+PE_COMPILER_PCP_BROKER_HOST="${PE_COMPILER_PCP_BROKER_HOST:-}"
 PE_COMPILER_POSTGRESQL_HOST="${PE_COMPILER_POSTGRESQL_HOST:-}"
 PE_COMPILER_DNS_ALT_NAMES="${PE_COMPILER_DNS_ALT_NAMES:-}"
 PE_COMPILER_PUPPETDB_SYNC_INTERVAL_MINUTES="${PE_COMPILER_PUPPETDB_SYNC_INTERVAL_MINUTES:-5}"
@@ -137,7 +138,7 @@ class { 'puppet_enterprise':
   certificate_authority_host => '${PE_COMPILER_PE_SERVICE}',
   console_host               => '${PE_COMPILER_PE_SERVICE}',
   puppetdb_host              => ['${certname}', '${PE_COMPILER_PUPPETDB_HOST}'],
-  pcp_broker_host            => '${PE_COMPILER_PE_SERVICE}',
+  pcp_broker_host            => '${PE_COMPILER_PCP_BROKER_HOST}',
 }
 
 class { 'puppet_enterprise::profile::master':
@@ -183,6 +184,10 @@ class { 'puppet_enterprise::profile::puppetdb':
   ],
   sync_allowlist  => ['${PE_COMPILER_PE_CERTNAME}'],
   require         => Class['puppet_enterprise::profile::database'],
+}
+
+class { 'puppet_enterprise::master::pcp_broker':
+  orchestrator_hosts => ['${PE_COMPILER_PE_SERVICE}'],
 }
 EOF
 }

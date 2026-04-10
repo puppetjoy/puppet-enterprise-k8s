@@ -16,6 +16,9 @@ spec:
     - name: puppetserver
       port: {{ .Values.services.compilers.port }}
       targetPort: puppetserver
+    - name: pcp-broker
+      port: {{ .Values.services.compilers.pcpPort }}
+      targetPort: pcp-broker
 ---
 apiVersion: v1
 kind: Service
@@ -36,4 +39,7 @@ spec:
     - name: puppetserver
       port: {{ .Values.services.compilers.port }}
       targetPort: puppetserver
+    - name: pcp-broker
+      port: {{ .Values.services.compilers.pcpPort }}
+      targetPort: pcp-broker
 {{- end }}

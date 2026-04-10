@@ -183,8 +183,12 @@ pe
     (printf "%s.%s.svc" $service .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $service .Release.Namespace)
 -}}
+{{- $external := list -}}
+{{- if .Values.network.compilerHostname -}}
+{{- $external = append $external .Values.network.compilerHostname -}}
+{{- end -}}
 {{- $additional := default (list) .Values.compilers.dnsAltNames -}}
-{{- $dnsAltNames := concat $internal $additional | uniq -}}
+{{- $dnsAltNames := concat $internal $external $additional | uniq -}}
 {{- range $dnsAltNames }}
 - {{ . | quote }}
 {{- end -}}
@@ -198,9 +202,41 @@ pe
     (printf "%s.%s.svc" $service .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $service .Release.Namespace)
 -}}
+{{- $external := list -}}
+{{- if .Values.network.compilerHostname -}}
+{{- $external = append $external .Values.network.compilerHostname -}}
+{{- end -}}
 {{- $additional := default (list) .Values.compilers.dnsAltNames -}}
-{{- $dnsAltNames := concat $internal $additional | uniq -}}
+{{- $dnsAltNames := concat $internal $external $additional | uniq -}}
 {{ join "," $dnsAltNames }}
+{{- end -}}
+
+{{- define "pe.compilerPcpBrokerHost" -}}
+{{- default (include "pe.compilerPoolServiceName" .) .Values.compilers.pcpBrokerHost -}}
+{{- end -}}
+
+{{- define "pe.compilerAgentHost" -}}
+{{- default (include "pe.compilerPoolServiceName" .) .Values.network.compilerHostname -}}
+{{- end -}}
+
+{{- define "pe.compilerAgentServerListEntry" -}}
+{{- printf "%s:%d" (include "pe.compilerAgentHost" .) (int .Values.services.compilers.port) -}}
+{{- end -}}
+
+{{- define "pe.compilerAgentPrimaryUri" -}}
+{{- printf "https://%s:%d" (include "pe.compilerAgentHost" .) (int .Values.services.compilers.port) -}}
+{{- end -}}
+
+{{- define "pe.compilerAgentPcpBrokerEntry" -}}
+{{- printf "%s:%d" (include "pe.compilerAgentHost" .) (int .Values.services.compilers.pcpPort) -}}
+{{- end -}}
+
+{{- define "pe.orchestratorPcpBrokerCertnamesCsv" -}}
+{{- $certnames := list (include "pe.identity" .) -}}
+{{- range $index, $_ := until (int .Values.compilers.replicaCount) -}}
+{{- $certnames = append $certnames (include "pe.compilerCertnameForIndex" (dict "root" $ "index" $index)) -}}
+{{- end -}}
+{{ join "," ($certnames | uniq) }}
 {{- end -}}
 
 {{- define "pe.compilerCertnamesHocon" -}}

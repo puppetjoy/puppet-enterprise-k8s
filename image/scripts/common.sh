@@ -300,6 +300,78 @@ patch_local_pcp_controller_uri() {
     log "Patched PCP controller URI to ${desired_uri}"
 }
 
+patch_orchestrator_pcp_broker_allowlist() {
+    local config_path=/etc/puppetlabs/orchestration-services/conf.d/auth.conf
+    local desired_csv="${PE_K8S_ORCHESTRATOR_PCP_BROKERS_CSV:-}"
+
+    [ -n "${desired_csv}" ] || return 0
+    [ -f "${config_path}" ] || return 0
+
+    python3 - "${config_path}" "${desired_csv}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+desired = []
+for entry in sys.argv[2].split(","):
+    entry = entry.strip()
+    if entry and entry not in desired:
+        desired.append(entry)
+
+if not desired:
+    raise SystemExit(0)
+
+lines = config_path.read_text(encoding="utf-8").splitlines()
+name_line = '          "name": "dispatch: allow pcp-brokers",'
+
+try:
+    name_index = next(index for index, line in enumerate(lines) if line == name_line)
+except StopIteration as exc:
+    raise SystemExit("dispatch: allow pcp-brokers rule not found") from exc
+
+match_request_index = None
+for index in range(name_index - 1, -1, -1):
+    if lines[index] == '          "match-request": {':
+        match_request_index = index
+        break
+
+if match_request_index is None:
+    raise SystemExit("dispatch: allow pcp-brokers match-request not found")
+
+allow_start = None
+for index in range(match_request_index - 1, -1, -1):
+    if lines[index] == '          "allow": [':
+        allow_start = index
+        break
+
+if allow_start is None:
+    raise SystemExit("dispatch: allow pcp-brokers allow list not found")
+
+allow_end = None
+for index in range(allow_start + 1, match_request_index):
+    if lines[index] == '          ],':
+        allow_end = index
+        break
+
+if allow_end is None:
+    raise SystemExit("dispatch: allow pcp-brokers allow list terminator not found")
+
+new_allow_lines = ['          "allow": [']
+for index, entry in enumerate(desired):
+    suffix = "," if index < len(desired) - 1 else ""
+    new_allow_lines.append(f'              {json.dumps(entry)}{suffix}')
+new_allow_lines.append('          ],')
+
+updated_lines = lines[:allow_start] + new_allow_lines + lines[allow_end + 1:]
+
+if updated_lines != lines:
+    config_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+PY
+
+    log "Patched orchestrator PCP broker allowlist to ${desired_csv}"
+}
+
 install_service_control_wrappers() {
     local wrapper=/usr/local/bin/pe-k8s-servicectl
     local path

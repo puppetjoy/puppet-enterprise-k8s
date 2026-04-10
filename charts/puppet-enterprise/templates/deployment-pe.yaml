@@ -322,6 +322,9 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "orchestration-services"]
+          env:
+            - name: PE_K8S_ORCHESTRATOR_PCP_BROKERS_CSV
+              value: {{ include "pe.orchestratorPcpBrokerCertnamesCsv" . | quote }}
           ports:
             - name: orch-pcp
               containerPort: 8142

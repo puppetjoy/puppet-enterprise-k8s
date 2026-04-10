@@ -19,6 +19,9 @@ case "${command}" in
     sign-certs)
         exec /usr/local/bin/sign-certs.sh "$@"
         ;;
+    configure-classifier)
+        exec /usr/local/bin/configure-classifier.sh "$@"
+        ;;
     regenerate-cert)
         exec /usr/local/bin/regenerate-cert.sh "$@"
         ;;
@@ -41,6 +44,7 @@ Usage:
   pe-k8s-entrypoint install-compiler-runtime
   pe-k8s-entrypoint bootstrap-compiler
   pe-k8s-entrypoint sign-certs
+  pe-k8s-entrypoint configure-classifier
   pe-k8s-entrypoint regenerate-cert
   pe-k8s-entrypoint recover-cert
   pe-k8s-entrypoint run-role <role>

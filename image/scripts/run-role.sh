@@ -151,6 +151,7 @@ case "${role}" in
             foreground
         ;;
     orchestration-services)
+        patch_orchestrator_pcp_broker_allowlist
         patch_local_pcp_controller_uri
         exec_as_user pe-orchestration-services \
             /opt/puppetlabs/server/apps/orchestration-services/bin/orchestration-services \

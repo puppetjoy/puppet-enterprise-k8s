@@ -32,6 +32,7 @@ Compiler replicas follow the same pattern on per-replica persistent volumes:
 - `install-compiler-runtime` init installs the PE compiler-local packages
 - `bootstrap-compiler` init enrolls the compiler, configures local PuppetDB/PostgreSQL, and applies the compiler catalog
 - runtime containers then run local `postgresql`, `puppetdb`, and `puppetserver`
+- compiler `puppetserver` also exposes the PCP broker on `8142`
 - compiler readiness is held until local PuppetDB has completed a successful sync and remains within the configured max sync age
 
 ## Workload Shape
@@ -41,6 +42,7 @@ The current chart is split into:
 - `pe` `Deployment`
 - optional `compiler` `StatefulSet`
 - `compiler-signer` Job
+- `classifier-config` Job
 
 The `pe` deployment uses multiple containers from the same image:
 
@@ -68,6 +70,7 @@ The chart generates these `pe.conf` values automatically from the Helm release a
 Generated SANs always include the in-cluster service names for the release, and can add:
 
 - one external technical hostname via `network.technicalHostname`
+- one external compiler hostname via `network.compilerHostname`
 - extra SANs via `network.additionalDnsAltNames`
 
 By default, the chart keeps `puppet_enterprise::puppet_master_host` on the in-cluster `service/pe` name even when you set `network.technicalHostname`. If you need a different runtime host value, override `peConfig.puppetMasterHost`. You can also override `peConfig.certname` explicitly, but the default is the Helm-generated `pe` or `pe-<release>` identity.
@@ -86,8 +89,9 @@ The intended access pattern is:
 - `service/pe` is the technical front door for PE APIs and the non-compiler Puppet Server on `8140`
 - `service/pe` also fronts the colocated PuppetDB and PostgreSQL listeners on `8081` and `5432`
 - ingress points at `service/pe` for the console hostname, with TLS terminated by the ingress controller
-- `service/pe-compiler` is the optional compiler-pool endpoint for compile traffic
+- `service/pe-compiler` is the optional compiler-pool endpoint for catalog traffic on `8140` and PCP broker traffic on `8142`
 - there are no standalone `service/pe-puppetdb` or `service/pe-postgresql` objects in the current model
+- when compilers are enabled, the `classifier-config` Job updates PE's built-in `PE Agent` node group so agent catalogs use the compiler endpoint for `server_list`, `primary_uris`, and `pcp_broker_list`
 
 ## Code Manager
 
@@ -131,10 +135,17 @@ Default behavior:
 - the default PE server is `pe` and the default CA is also `pe`
 - when `signer.enabled=true`, the chart also runs a signer Job that watches for the expected pending test-node certificate requests and signs them through the PE CA API
 
+With compilers enabled, the expected steady-state split is:
+
+- `ca_server` remains on `pe`
+- catalog traffic can target the compiler endpoint
+- PCP broker traffic targets the compiler endpoint on `8142`
+
 This helper path is useful for validating:
 
 - certificate issuance and explicit signing behavior
-- catalog compilation through `service/pe` and `service/pe-compiler`
+- catalog compilation through `service/pe-compiler`
+- PCP broker connectivity through `service/pe-compiler`
 - facts, catalogs, and reports landing in PuppetDB
 - Code Manager and control-repo changes from a real agent run
 

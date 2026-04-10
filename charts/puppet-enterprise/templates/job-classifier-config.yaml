@@ -1,0 +1,60 @@
+{{- if and .Values.compilers.enabled (gt (int .Values.compilers.replicaCount) 0) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "pe.fullname" . }}-classifier-config-r{{ .Release.Revision }}
+  labels:
+    {{- include "pe.labels" . | nindent 4 }}
+    app.kubernetes.io/component: classifier-config
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "pe.labels" . | nindent 8 }}
+        app.kubernetes.io/component: classifier-config
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "pe.serviceAccountName" . }}
+      affinity:
+{{ toYaml .Values.affinity | indent 8 }}
+      tolerations:
+{{ toYaml .Values.tolerations | indent 8 }}
+      containers:
+        - name: classifier
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/pe-k8s-entrypoint", "configure-classifier"]
+          env:
+            - name: PE_CLASSIFIER_WAIT_TIMEOUT_SECONDS
+              value: {{ .Values.compilers.classifierWaitTimeoutSeconds | quote }}
+            - name: PE_CLASSIFIER_PE_SERVICE
+              value: {{ include "pe.identity" . | quote }}
+            - name: PE_CLASSIFIER_COMPILER_HOST
+              value: {{ include "pe.compilerAgentHost" . | quote }}
+            - name: PE_CLASSIFIER_SERVER_LIST
+              value: {{ include "pe.compilerAgentServerListEntry" . | quote }}
+            - name: PE_CLASSIFIER_PRIMARY_URIS
+              value: {{ include "pe.compilerAgentPrimaryUri" . | quote }}
+            - name: PE_CLASSIFIER_PCP_BROKER_LIST
+              value: {{ include "pe.compilerAgentPcpBrokerEntry" . | quote }}
+            - name: PE_CLASSIFIER_COMPILE_MASTER_POOL_ADDRESS
+              value: {{ include "pe.compilerAgentHost" . | quote }}
+            - name: PE_CLASSIFIER_PE_CONF_PATH
+              value: /config/pe.conf
+          resources:
+{{ toYaml .Values.compilers.resources.classifier | indent 12 }}
+          volumeMounts:
+            - name: pe-conf
+              mountPath: /config
+              readOnly: true
+            - name: logs
+              mountPath: /var/log/puppetlabs
+      volumes:
+        - name: pe-conf
+          configMap:
+            name: {{ include "pe.fullname" . }}-conf
+        - name: logs
+          emptyDir: {}
+{{- end }}
