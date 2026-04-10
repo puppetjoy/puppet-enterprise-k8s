@@ -546,6 +546,92 @@ spec:
             - name: conductor-relay
               mountPath: {{ .Values.conductor.relay.outputDir | quote }}
         {{- end }}
+        {{- if .Values.conductor.gateway.enabled }}
+        - name: conductor-gateway
+          image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
+          imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
+          command: ["/usr/local/bin/conductor-gateway"]
+          env:
+            - name: CONDUCTOR_GATEWAY_ROLE
+              value: control-plane
+            - name: CONDUCTOR_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: CONDUCTOR_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CONDUCTOR_NAMESPACE
+              value: {{ include "pe.conductorNamespace" . | quote }}
+            - name: CONDUCTOR_RESOURCE_PREFIX
+              value: {{ .Values.conductor.resourcePrefix | quote }}
+            - name: CONDUCTOR_SEGMENT_NAME
+              value: {{ .Values.conductor.segmentName | quote }}
+            - name: CONDUCTOR_GATEWAY_SECRET_POLL_INTERVAL_SECONDS
+              value: {{ .Values.conductor.gateway.secretPollIntervalSeconds | quote }}
+            - name: CONDUCTOR_GATEWAY_PUBLISH_INTERVAL_SECONDS
+              value: {{ .Values.conductor.gateway.publishIntervalSeconds | quote }}
+            - name: CONDUCTOR_GATEWAY_STATUS_MAX_AGE_SECONDS
+              value: {{ .Values.conductor.gateway.statusMaxAgeSeconds | quote }}
+            - name: CONDUCTOR_GATEWAY_PEER_STATUS_MAX_AGE_SECONDS
+              value: {{ .Values.conductor.gateway.peerStatusMaxAgeSeconds | quote }}
+            - name: CONDUCTOR_GATEWAY_OUTPUT_DIR
+              value: {{ .Values.conductor.gateway.outputDir | quote }}
+            - name: CONDUCTOR_GATEWAY_PARTICIPANT_STATUS_PATH
+              value: {{ printf "%s/participant-status.json" .Values.conductor.participant.trustOutputDir | quote }}
+            - name: CONDUCTOR_GATEWAY_PARTICIPANT_STATUS_MAX_AGE_SECONDS
+              value: {{ .Values.conductor.participant.statusMaxAgeSeconds | quote }}
+            - name: CONDUCTOR_GATEWAY_PCP_PROXY_ENABLED
+              value: {{ ternary "true" "false" .Values.conductor.gateway.pcp.enabled | quote }}
+            - name: CONDUCTOR_GATEWAY_PCP_LISTEN_HOST
+              value: {{ .Values.conductor.gateway.pcp.listenHost | quote }}
+            - name: CONDUCTOR_GATEWAY_PCP_LISTEN_PORT
+              value: {{ .Values.conductor.gateway.pcp.listenPort | quote }}
+            - name: CONDUCTOR_GATEWAY_PCP_TARGET_HOST
+              value: {{ .Values.conductor.gateway.pcp.targetHost | quote }}
+            - name: CONDUCTOR_GATEWAY_PCP_TARGET_PORT
+              value: {{ .Values.conductor.gateway.pcp.targetPort | quote }}
+            - name: CONDUCTOR_GATEWAY_PCP_CONNECT_TIMEOUT_SECONDS
+              value: {{ .Values.conductor.gateway.pcp.connectTimeoutSeconds | quote }}
+            - name: CONDUCTOR_GATEWAY_PCP_HEALTHCHECK_TIMEOUT_SECONDS
+              value: {{ .Values.conductor.gateway.pcp.healthcheckTimeoutSeconds | quote }}
+            - name: CONDUCTOR_GATEWAY_ORCHESTRATION_PROXY_ENABLED
+              value: {{ ternary "true" "false" .Values.conductor.gateway.orchestration.enabled | quote }}
+            - name: CONDUCTOR_GATEWAY_ORCHESTRATION_LISTEN_HOST
+              value: {{ .Values.conductor.gateway.orchestration.listenHost | quote }}
+            - name: CONDUCTOR_GATEWAY_ORCHESTRATION_LISTEN_PORT
+              value: {{ .Values.conductor.gateway.orchestration.listenPort | quote }}
+            - name: CONDUCTOR_GATEWAY_ORCHESTRATION_TARGET_HOST
+              value: {{ .Values.conductor.gateway.orchestration.targetHost | quote }}
+            - name: CONDUCTOR_GATEWAY_ORCHESTRATION_TARGET_PORT
+              value: {{ .Values.conductor.gateway.orchestration.targetPort | quote }}
+            - name: CONDUCTOR_GATEWAY_ORCHESTRATION_STATUS_URL
+              value: {{ .Values.conductor.gateway.orchestration.statusUrl | quote }}
+            - name: CONDUCTOR_GATEWAY_ORCHESTRATION_CONNECT_TIMEOUT_SECONDS
+              value: {{ .Values.conductor.gateway.orchestration.connectTimeoutSeconds | quote }}
+            - name: CONDUCTOR_GATEWAY_ORCHESTRATION_STATUS_TIMEOUT_SECONDS
+              value: {{ .Values.conductor.gateway.orchestration.statusTimeoutSeconds | quote }}
+          ports:
+            - name: gw-pcp
+              containerPort: {{ .Values.conductor.gateway.pcp.listenPort }}
+            - name: gw-orch
+              containerPort: {{ .Values.conductor.gateway.orchestration.listenPort }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/conductor-gateway", "probe", "ready"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          resources:
+{{ toYaml .Values.conductor.gateway.resources | indent 12 }}
+          volumeMounts:
+            - name: conductor-trust
+              mountPath: {{ .Values.conductor.participant.trustOutputDir | quote }}
+              readOnly: true
+            - name: conductor-gateway
+              mountPath: {{ .Values.conductor.gateway.outputDir | quote }}
+        {{- end }}
         {{- end }}
       volumes:
         - name: pe-conf
@@ -558,6 +644,10 @@ spec:
           emptyDir: {}
         {{- if .Values.conductor.relay.enabled }}
         - name: conductor-relay
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.conductor.gateway.enabled }}
+        - name: conductor-gateway
           emptyDir: {}
         {{- end }}
         {{- end }}

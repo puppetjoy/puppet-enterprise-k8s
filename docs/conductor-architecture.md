@@ -78,13 +78,23 @@ The current repo now has the first Relay slice wired into the runtime model:
 - facts, reports, and deactivate-node commands can now traverse Fabric; full catalogs still remain local-only by default
 - Relay readiness is tied to participant trust readiness plus local PuppetDB health
 
-This is intentionally not the whole Relay design yet. The current implementation now has a working write path for selected PuppetDB commands, but broader Gateway/PCP work, authoritative control-plane convergence, and any optional catalog-resource replication are still ahead.
+This is intentionally not the whole Relay design yet. The current implementation now has a working write path for selected PuppetDB commands, but authoritative control-plane convergence and any optional catalog-resource replication are still ahead.
 
 ## Gateway
 
 Gateway fronts orchestrator and PCP2 traffic.
 
 That keeps PCP and orchestration in the Conductor path instead of inventing an unrelated Kubernetes-only synchronization mechanism. In this repo, Gateway placement should follow where PCP broker traffic actually terminates.
+
+The current repo now has the first Gateway slice wired into the control-plane runtime:
+
+- an optional `conductor-gateway` sidecar can run beside the `pe` control-plane service containers
+- `service/pe` and `pe-headless` can route `8142` and `8143` to Gateway listener ports instead of targeting `orchestration-services` directly
+- Gateway proxies raw TCP traffic to the pod-local orchestration service, so PCP broker TLS and orchestration HTTPS stay intact without a second TLS termination layer
+- Gateway reuses the pod's Warden-issued onboarding bundle to join Fabric on its own queue, publishes local Gateway health into Fabric, and stores fresh peer Gateway snapshots locally
+- Gateway readiness is tied to participant trust readiness plus local PCP broker and orchestration health, which makes `service/pe` drain stale or isolated control-plane replicas
+
+This is also intentionally not the whole Gateway design yet. The current implementation establishes service ownership, trust-aware readiness, and Fabric status exchange on the PCP/orchestration ingress path. It does not yet synchronize orchestration inventory or mediate broader PCP semantics through Fabric.
 
 ## Code Deployment
 
@@ -115,11 +125,12 @@ Conductor is the control-plane story. Code deployment should stay rooted in supp
 
 ## Immediate Implementation Order
 
-The next credible sequence is:
+The next credible sequence is now:
 
 1. Fabric and Warden foundation
 2. Relay insertion on the Puppet Server/PuppetDB path
 3. Gateway insertion on the PCP/orchestrator path
-4. Worker/SPOG role modelling and health-driven routing
+4. Code deployment convergence across Workers
+5. Worker/SPOG role modelling and health-driven routing
 
-That ordering matters because Relay and Gateway depend on Fabric and Warden for identity, trust, and transport.
+That ordering matters because Relay and Gateway depend on Fabric and Warden for identity, trust, and transport, and code convergence needs both paths in place before control-plane traffic can fail over cleanly.

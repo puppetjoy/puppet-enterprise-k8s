@@ -70,6 +70,14 @@ This phase should prove:
 - control-plane failure or isolation is reflected in broker readiness and routing
 - the compiler and PE service layout still tracks traditional PE responsibilities
 
+Current status:
+
+- an optional `conductor-gateway` sidecar now runs inside the PE control-plane workload shape
+- `service/pe` and `pe-headless` can target Gateway listener ports for `8142` PCP broker traffic and `8143` orchestration traffic instead of targeting the orchestration container directly
+- Gateway proxies those TCP flows to the pod-local orchestration service, publishes Gateway status into Fabric, and stores fresh peer Gateway snapshots locally
+- Gateway readiness is tied to participant trust readiness plus local PCP broker and orchestration health, so stale or disconnected control-plane replicas fall out of service routing
+- orchestration inventory replication and broader PCP message mediation are still outstanding
+
 ## Phase 4: Code Deployment Convergence
 
 The current POC already showed that one PE instance can accept a Code Manager deploy and fan code out to its attached compilers. The active-active extension is to preserve that local PE behaviour while moving inter-Worker coordination onto Fabric.

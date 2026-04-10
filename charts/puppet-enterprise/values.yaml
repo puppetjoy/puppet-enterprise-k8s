@@ -154,6 +154,31 @@ conductor:
         - store report
         - deactivate node
     resources: {}
+  gateway:
+    enabled: false
+    publishIntervalSeconds: 15
+    secretPollIntervalSeconds: 15
+    statusMaxAgeSeconds: 60
+    peerStatusMaxAgeSeconds: 60
+    outputDir: /var/lib/conductor/gateway
+    pcp:
+      enabled: true
+      listenHost: 0.0.0.0
+      listenPort: 18142
+      targetHost: 127.0.0.1
+      targetPort: 8142
+      connectTimeoutSeconds: 5
+      healthcheckTimeoutSeconds: 5
+    orchestration:
+      enabled: true
+      listenHost: 0.0.0.0
+      listenPort: 18143
+      targetHost: 127.0.0.1
+      targetPort: 8143
+      statusUrl: https://127.0.0.1:8143/status/v1/services/status-service
+      connectTimeoutSeconds: 5
+      statusTimeoutSeconds: 5
+    resources: {}
   controlPlaneTrust:
     caPath: /etc/puppetlabs/puppet/ssl/certs/ca.pem
     crlPath: /etc/puppetlabs/puppet/ssl/crl.pem
