@@ -9,6 +9,7 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 - Installs PE with Helm and preserves the install result on single-owner PVCs
 - Runs PostgreSQL, PuppetDB, the non-compiler Puppet Server, and PE edge/API services in a single-owner `pe` pod
 - Supports an optional compiler pool with per-replica non-shared PVCs, local PostgreSQL/PuppetDB, file-sync/PuppetDB-based readiness, and compiler-side PCP brokers
+- Supports multiple release-scoped PE instances in one cluster, each with its own local state and optional compiler pool
 - Supports optional ingress exposure, Code Manager configuration, and a validation `puppet-agent` chart with explicit certificate signing
 - Still evolving around PE-instance replication, upgrade orchestration, and hardening
 

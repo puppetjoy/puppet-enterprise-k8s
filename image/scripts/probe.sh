@@ -10,11 +10,22 @@ wait_for_install_marker
 
 curl_with_local_role_cert() {
     local cert_dir="$1"
+    local cert_path
+    local key_path
     shift
 
+    cert_path="${cert_dir}/pe.cert.pem"
+    key_path="${cert_dir}/pe.private_key.pem"
+
+    if [ ! -f "${cert_path}" ] || [ ! -f "${key_path}" ]; then
+        cert_path="$(find "${cert_dir}" -maxdepth 1 -type f -name '*.cert.pem' ! -name 'pe.cert.pem' | sort | head -n 1)"
+        [ -n "${cert_path}" ] || return 1
+        key_path="${cert_path%.cert.pem}.private_key.pem"
+    fi
+
     exec curl -skf \
-        --cert "${cert_dir}/pe.cert.pem" \
-        --key "${cert_dir}/pe.private_key.pem" \
+        --cert "${cert_path}" \
+        --key "${key_path}" \
         --cacert /etc/puppetlabs/puppet/ssl/certs/ca.pem \
         "$@"
 }

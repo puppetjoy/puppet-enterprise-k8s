@@ -57,11 +57,19 @@ Move CA handling to an HA-friendly trust model:
 
 This is intentionally later work. Independent PE instances and explicit PE-state replication come first.
 
-## Current Acceptance Focus
+## Validated Baseline
 
-The next implementation slices should prove:
+The current chart now proves:
 
 - two independent PE instances can exist without shared storage
 - each PE instance can own its own compiler pool and local state cleanly
 - compiler dependencies on PE-local management APIs are explicit and attachable to a chosen PE instance
-- centralized `puppet-code deploy` still remains the operator entrypoint for code rollout
+- centralized `puppet-code deploy` and PCP-backed `puppet job run` remain instance-local operator entrypoints
+
+## Next Acceptance Focus
+
+The next implementation slices should prove:
+
+- PE-local PuppetDB and PostgreSQL can stay single-owner and non-shared inside each PE instance
+- worker-local PuppetDB replication can be separated cleanly from PE-local management data
+- PE-local management-state replication can be layered on top of independent PE instances rather than pushed down into compilers
