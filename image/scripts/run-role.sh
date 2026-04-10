@@ -96,6 +96,7 @@ if [ "${role}" = "puppetserver" ]; then
     sync_puppetdb_integration_settings
     sync_relay_puppetdb_command_submission_settings
     sync_relay_code_manager_post_environment_hooks
+    sync_compiler_file_sync_service_urls
 fi
 ensure_role_runtime_dirs
 

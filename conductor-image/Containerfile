@@ -6,11 +6,12 @@ RUN python -m pip install --no-cache-dir cryptography pika
 
 COPY conductor-image/scripts/participant.py /usr/local/bin/conductor-participant
 COPY conductor-image/scripts/console_selector.py /usr/local/bin/conductor-console-selector
+COPY conductor-image/scripts/service_selector.py /usr/local/bin/conductor-service-selector
 COPY conductor-image/scripts/gateway.py /usr/local/bin/conductor-gateway
 COPY conductor-image/scripts/relay.py /usr/local/bin/conductor-relay
 COPY conductor-image/scripts/warden.py /usr/local/bin/conductor-warden
 
-RUN chmod 0755 /usr/local/bin/conductor-participant /usr/local/bin/conductor-console-selector /usr/local/bin/conductor-gateway /usr/local/bin/conductor-relay /usr/local/bin/conductor-warden
+RUN chmod 0755 /usr/local/bin/conductor-participant /usr/local/bin/conductor-console-selector /usr/local/bin/conductor-service-selector /usr/local/bin/conductor-gateway /usr/local/bin/conductor-relay /usr/local/bin/conductor-warden
 
 USER conductor
 

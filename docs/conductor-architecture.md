@@ -131,6 +131,12 @@ same deployment, while the local file-sync commit identifiers observed on each
 Worker are not. Relay therefore records the origin Worker file-sync metadata
 for operator context, but it gates readiness on deploy-signature convergence.
 
+The current runtime also keeps compiler file-sync fetches off pooled
+`service/pe` by routing them through an internal `pe-filesync` service that
+selects one healthy control-plane replica at a time. That is a tactical
+compiler-facing safeguard while PE file-sync object ownership is still
+instance-local. It is not a permanent topology goal or a SPOG requirement.
+
 The current flow is:
 
 - Puppet Server writes a Code Manager post-environment hook at startup when relay code deployment is enabled

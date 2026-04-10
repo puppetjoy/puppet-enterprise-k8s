@@ -104,6 +104,7 @@ Current POC status:
 - verified live in Kubernetes with a deploy triggered on `pe-0` and replayed on `pe-1`
 - relay readiness now drains a Worker until its local deploy signature matches the desired deploy signature
 - origin file-sync commit metadata is preserved for visibility, but cross-Worker equality is based on deploy signature because PE file-sync commit IDs are instance-local
+- compiler runtime now patches PE file-sync client URLs to an internal `pe-filesync` service that selects one healthy control-plane replica at a time, which avoids pooled `service/pe` file-sync/object mismatches during control-plane convergence
 
 ## Phase 5: Worker And SPOG Topologies
 

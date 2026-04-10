@@ -663,30 +663,64 @@ spec:
               mountPath: {{ .Values.conductor.gateway.outputDir | quote }}
         {{- end }}
         {{- end }}
+        {{- if and .Values.compilers.enabled (gt (int .Values.compilers.replicaCount) 0) (gt (int .Values.controlPlane.replicaCount) 1) }}
+        - name: conductor-filesync-selector
+          image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
+          imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
+          command: ["/usr/local/bin/conductor-service-selector"]
+          env:
+            - name: SERVICE_SELECTOR_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: SERVICE_SELECTOR_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SERVICE_SELECTOR_STATEFULSET_NAME
+              value: {{ include "pe.controlPlaneStatefulSetName" . | quote }}
+            - name: SERVICE_SELECTOR_LABEL_SELECTOR
+              value: {{ printf "app.kubernetes.io/instance=%s,app.kubernetes.io/component=pe-services" .Release.Name | quote }}
+            - name: SERVICE_SELECTOR_ACTIVE_LABEL_KEY
+              value: pe-k8s.puppet.com/filesync-active
+            - name: SERVICE_SELECTOR_ACTIVE_LABEL_VALUE
+              value: "true"
+            - name: SERVICE_SELECTOR_POLL_INTERVAL_SECONDS
+              value: {{ .Values.controlPlane.fileSync.selectorPollIntervalSeconds | quote }}
+            - name: SERVICE_SELECTOR_SERVICE_NAME
+              value: {{ include "pe.controlPlaneFileSyncServiceName" . | quote }}
+            - name: SERVICE_SELECTOR_TARGET_DESCRIPTION
+              value: compiler file-sync traffic
+          resources: {}
+        {{- end }}
         {{- if .Values.controlPlane.console.enabled }}
         - name: conductor-console-selector
           image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
           imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
-          command: ["/usr/local/bin/conductor-console-selector"]
+          command: ["/usr/local/bin/conductor-service-selector"]
           env:
-            - name: CONSOLE_SELECTOR_POD_NAME
+            - name: SERVICE_SELECTOR_POD_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            - name: CONSOLE_SELECTOR_POD_NAMESPACE
+            - name: SERVICE_SELECTOR_POD_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: CONSOLE_SELECTOR_STATEFULSET_NAME
+            - name: SERVICE_SELECTOR_STATEFULSET_NAME
               value: {{ include "pe.controlPlaneStatefulSetName" . | quote }}
-            - name: CONSOLE_SELECTOR_LABEL_SELECTOR
+            - name: SERVICE_SELECTOR_LABEL_SELECTOR
               value: {{ printf "app.kubernetes.io/instance=%s,app.kubernetes.io/component=pe-services" .Release.Name | quote }}
-            - name: CONSOLE_SELECTOR_ACTIVE_LABEL_KEY
+            - name: SERVICE_SELECTOR_ACTIVE_LABEL_KEY
               value: pe-k8s.puppet.com/console-active
-            - name: CONSOLE_SELECTOR_ACTIVE_LABEL_VALUE
+            - name: SERVICE_SELECTOR_ACTIVE_LABEL_VALUE
               value: "true"
-            - name: CONSOLE_SELECTOR_POLL_INTERVAL_SECONDS
+            - name: SERVICE_SELECTOR_POLL_INTERVAL_SECONDS
               value: {{ .Values.controlPlane.console.selectorPollIntervalSeconds | quote }}
+            - name: SERVICE_SELECTOR_SERVICE_NAME
+              value: {{ include "pe.consoleServiceName" . | quote }}
+            - name: SERVICE_SELECTOR_TARGET_DESCRIPTION
+              value: console traffic
           resources: {}
         {{- end }}
       volumes:

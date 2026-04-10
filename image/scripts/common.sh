@@ -508,6 +508,44 @@ PY
     log "Configured Code Manager post-environment hooks in ${hook_conf_path}"
 }
 
+sync_compiler_file_sync_service_urls() {
+    local file_sync_conf_path=/etc/puppetlabs/puppetserver/conf.d/file-sync.conf
+    local file_sync_service="${PE_K8S_COMPILER_FILE_SYNC_SERVICE:-}"
+
+    [ -n "${file_sync_service}" ] || return 0
+
+    if [ ! -f "${file_sync_conf_path}" ]; then
+        log "file-sync.conf missing; skipping compiler file sync service sync"
+        return 0
+    fi
+
+    python3 - "${file_sync_conf_path}" "${file_sync_service}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+file_sync_conf_path = Path(sys.argv[1])
+file_sync_service = sys.argv[2].strip()
+content = file_sync_conf_path.read_text(encoding="utf-8")
+
+patterns = {
+    r'(server-api-url:\s*")[^"]+(")': rf'\1https://{file_sync_service}:8140/file-sync/v1\2',
+    r'(server-repo-url:\s*")[^"]+(")': rf'\1https://{file_sync_service}:8140/file-sync-git\2',
+}
+
+updated = content
+for pattern, replacement in patterns.items():
+    updated, count = re.subn(pattern, replacement, updated, count=1)
+    if count != 1:
+        raise SystemExit(f"unable to update {pattern} in {file_sync_conf_path}")
+
+if updated != content:
+    file_sync_conf_path.write_text(updated, encoding="utf-8")
+PY
+
+    log "Configured compiler file sync service through ${file_sync_conf_path}"
+}
+
 copy_exported_sysconfig_into_rootfs() {
     local path
     local target

@@ -31,9 +31,11 @@ curl_with_local_role_cert() {
 }
 
 compiler_filesync_ready() {
-    local local_status pe_status puppetdb_status pcp_broker_port
+    local local_status pe_status puppetdb_status pcp_broker_port file_sync_service
 
     [ -n "${PE_K8S_COMPILER_PE_SERVICE:-}" ] || return 1
+    file_sync_service="${PE_K8S_COMPILER_FILE_SYNC_SERVICE:-${PE_K8S_COMPILER_PE_SERVICE:-}}"
+    [ -n "${file_sync_service}" ] || return 1
     pcp_broker_port="${PE_K8S_COMPILER_PCP_BROKER_PORT:-8142}"
 
     /opt/puppetlabs/server/apps/postgresql/14/bin/pg_isready \
@@ -50,7 +52,7 @@ PY
     puppetdb_status="$(curl -skf https://127.0.0.1:8081/status/v1/services?level=debug)"
 
     local_status="$(curl -sk https://127.0.0.1:8140/status/v1/services?level=debug)"
-    pe_status="$(curl -skf "https://${PE_K8S_COMPILER_PE_SERVICE}:8140/status/v1/services?level=debug")"
+    pe_status="$(curl -skf "https://${file_sync_service}:8140/status/v1/services?level=debug")"
 
     python3 - "${local_status}" "${pe_status}" "${puppetdb_status}" "${PE_K8S_COMPILER_PUPPETDB_SYNC_MAX_AGE_SECONDS:-}" <<'PY'
 import json

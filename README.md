@@ -8,7 +8,7 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 - Builds a PE runtime image from the official installer tarball
 - Installs PE with Helm and preserves the install result on non-shared per-replica PVCs
 - Runs PostgreSQL, PuppetDB, the non-compiler Puppet Server, and PE edge/API services in a stateful `pe` control-plane pod set
-- Supports an optional compiler pool with per-replica non-shared PVCs, local PostgreSQL/PuppetDB, file-sync/PuppetDB-based readiness, and compiler-side PCP brokers
+- Supports an optional compiler pool with per-replica non-shared PVCs, local PostgreSQL/PuppetDB, file-sync/PuppetDB-based readiness, compiler-side PCP brokers, and an internal file-sync service selector for multi-replica control planes
 - Supports optional Conductor participants on the control-plane and compiler pods via Warden-issued onboarding bundles, release trust bundles, participant readiness, and a separate Fabric hub
 - Supports an optional Conductor Relay sidecar that publishes local PuppetDB health into Fabric, records peer Relay status snapshots, and captures selected PuppetDB submit-only commands for replay to control-plane peers
 - Supports multiple release-scoped PE instances in one cluster for isolated development and validation
@@ -22,6 +22,14 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 This is not a systemd container port. Each `pe` control-plane replica installs PE onto its own PVC set, then runs the PE services as foreground containers inside a StatefulSet pod. `service/pe` acts as the technical front door for agent-facing and API traffic, while an optional `service/pe-compiler` can expose the compiler pool separately.
 
 Internally, each control-plane replica installs PE against its own stable pod certname on the headless service. The shared `service/pe` address is preserved as a front door and certificate SAN, not as the replica's install identity.
+
+When the control plane has more than one replica, compiler pods use an internal
+`pe-filesync` ClusterIP service for PE file-sync fetches. That service selects
+one healthy control-plane replica at a time so compiler file-sync traffic does
+not cross instance-local PE file-sync object boundaries during convergence.
+This is a tactical safeguard for the current implementation, not a change to
+the long-term goal of keeping `service/pe` as the pooled control-plane front
+door.
 
 For the deeper runtime and operator model, see:
 

@@ -182,6 +182,8 @@ spec:
               value: "true"
             - name: PE_K8S_COMPILER_PE_SERVICE
               value: {{ include "pe.identity" . | quote }}
+            - name: PE_K8S_COMPILER_FILE_SYNC_SERVICE
+              value: {{ ternary (include "pe.controlPlaneFileSyncServiceName" .) (include "pe.identity" .) (gt (int .Values.controlPlane.replicaCount) 1) | quote }}
             - name: PE_K8S_COMPILER_PUPPETDB_SYNC_MAX_AGE_SECONDS
               value: {{ .Values.compilers.puppetdbMaxSyncAgeSeconds | quote }}
             - name: PE_K8S_COMPILER_PCP_BROKER_PORT

@@ -79,6 +79,8 @@ controlPlane:
   console:
     enabled: false
     selectorPollIntervalSeconds: 5
+  fileSync:
+    selectorPollIntervalSeconds: 5
   ca:
     provider: selfSigned
     importTimeoutSeconds: 300
