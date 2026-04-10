@@ -118,7 +118,9 @@ The intended access pattern is:
 - `service/pe-compiler` is the optional compiler-pool endpoint for catalog traffic on `8140` and PCP broker traffic on `8142`
 - there are no standalone `service/pe-puppetdb` or `service/pe-postgresql` objects in the current model
 - when compilers are enabled, the `classifier-config` Job updates PE's built-in `PE Agent` node group so agent catalogs use the compiler endpoint for `server_list`, `primary_uris`, and `pcp_broker_list`
-- compilers are intentionally attached to one PE instance; this chart does not model compiler-to-compiler coordination as a replication mechanism
+- compiler-to-compiler coordination is not a replication mechanism in this chart
+- the long-term goal is that any healthy control-plane replica behind `service/pe` can satisfy compiler-facing control-plane traffic
+- if a specific surface temporarily requires routing constraints while convergence work is incomplete, that is a tactical safeguard rather than the target model
 
 ## Conductor Direction
 
@@ -139,6 +141,13 @@ The Conductor components map onto this runtime model as follows:
 - Gateway fronts orchestrator and PCP traffic
 
 The current repo baseline is therefore a prerequisite for Conductor, not the finished HA design. The point of the chart today is to preserve local ownership cleanly enough that Fabric, Relay, Gateway, and Warden can be introduced without shared storage.
+
+That does not mean the repo is committed to a permanent Worker/SPOG split in
+Kubernetes. In this project, those Conductor terms are best understood as
+logical traffic roles. The preferred end state is still a pooled `service/pe`
+front door backed by equivalent `pe` replicas. A SPOG-only topology is only
+worth introducing later if it solves an actual operational problem that the
+pooled release model cannot solve cleanly.
 
 The current Conductor foundation slice is release-topology-driven. Warden expands stable workload sets inside a release, including the `pe` control-plane `StatefulSet` and the compiler `StatefulSet`, into participant identities and onboarding bundles. That is intentionally different from treating separate Helm releases as static peers.
 

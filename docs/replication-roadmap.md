@@ -13,6 +13,13 @@ The current chart already proves the foundation we need:
 
 Those separate releases are useful as isolated sandboxes, but they are not the HA domain. The HA target is release-internal replication: multiple control-plane replicas and multiple compiler replicas inside one release. The baseline is still important because Conductor assumes local ownership first and cross-participant coordination second.
 
+Kubernetes interpretation matters here. For this repo, the target is not to
+recreate a VM-era split literally inside the cluster. The target is to make the
+replicas inside one release equivalent enough that `service/pe` can stay the
+pooled control-plane front door. Worker and SPOG should be treated as logical
+traffic roles. A SPOG-only topology is optional future work, not a prerequisite
+for proving active-active HA in Kubernetes.
+
 ## Phase 1: Fabric And Warden
 
 Before any PE state can replicate credibly, the mesh needs a transport and a trust authority.
@@ -89,7 +96,7 @@ This phase should prove:
 - peer Workers can consume that intent and run their own local Code Manager deploy
 - each Worker can publish convergence or failure state for Warden to aggregate
 - stale or failed Workers can be marked unhealthy for catalog service until they converge
-- attached compilers still receive code from their owning Worker-local PE services rather than through any compiler mesh
+- attached compilers still receive code from release-local PE services rather than through any compiler mesh
 
 Current POC status:
 
@@ -104,10 +111,16 @@ Once Fabric, Warden, Relay, and Gateway exist, we can model real Conductor roles
 
 This phase should prove:
 
-- Worker PE instances can serve node traffic behind health-driven load balancing
-- SPOG PE instances can consume replicated state without serving catalogs
+- Worker-eligible `pe` replicas can serve node traffic behind health-driven load balancing through `service/pe`
+- a future SPOG topology, if we decide we need one, can consume replicated state without serving catalogs
 - trust material and routing decisions stay correct during failure and recovery
 - operators can add and remove mesh members through Warden-managed workflows
+
+Current decision:
+
+- do not treat permanent worker pinning as the target architecture
+- do not introduce SPOG-only replicas unless they solve a real Kubernetes problem that pooled `service/pe` cannot solve cleanly
+- prefer making pooled control-plane replicas equivalent over introducing topology splits inherited from bare metal or VM deployments
 
 ## Explicit Non-Goals
 

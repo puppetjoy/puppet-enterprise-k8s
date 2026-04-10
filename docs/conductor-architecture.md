@@ -18,7 +18,21 @@ The Conductor spec defines two PE roles:
 - Worker: a PE instance that actively serves nodes
 - SPOG: a PE instance used for management visibility, not for catalog service
 
-For this repo, the near-term path is to treat a single release as one Worker-shaped stack under construction. Compiler replicas already exist as a stable in-release set. Control-plane pods now have stable per-pod identity and can participate in Fabric, but active-active control-plane service is still blocked on replicated CA and PE-owned state.
+In this repo those are logical traffic roles, not Kubernetes deployment shapes
+that we must force into the chart. The current Kubernetes-first goal is still a
+single release with multiple equivalent `pe` control-plane replicas behind
+`service/pe`, plus a compiler pool behind `service/pe-compiler`.
+
+That means:
+
+- `service/pe` remains the target pooled front door for control-plane traffic
+- permanent pinning of compilers or clients to one specific `pe` replica is not the design goal
+- temporary routing constraints are acceptable only as tactical safety measures while a specific surface is not yet replica-safe
+- SPOG-only replicas are optional future topology, not a required milestone for this repo
+
+Control-plane pods now have stable per-pod identity and can participate in
+Fabric, but active-active control-plane service is still blocked on replicated
+CA and PE-owned state.
 
 ## Component Mapping
 
@@ -107,7 +121,7 @@ The mesh-friendly extension is:
 - peer Workers consume that intent and execute their own local Code Manager deployment
 - each Worker publishes convergence or failure state back into Fabric
 - Warden surfaces drift and can feed readiness or routing decisions for catalog-serving Workers
-- attached compilers continue to receive code from their owning PE instance through normal PE file-sync
+- attached compilers continue to receive code through normal PE file-sync from the release-local control-plane service path
 
 This keeps the supported PE deployment path intact while extending it across the active-active mesh.
 
