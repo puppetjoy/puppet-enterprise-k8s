@@ -259,6 +259,61 @@ spec:
           volumeMounts:
             - name: conductor-trust
               mountPath: {{ .Values.conductor.participant.trustOutputDir | quote }}
+        {{- if .Values.conductor.relay.enabled }}
+        - name: conductor-relay
+          image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
+          imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
+          command: ["/usr/local/bin/conductor-relay"]
+          env:
+            - name: CONDUCTOR_RELAY_ROLE
+              value: compiler
+            - name: CONDUCTOR_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: CONDUCTOR_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CONDUCTOR_NAMESPACE
+              value: {{ include "pe.conductorNamespace" . | quote }}
+            - name: CONDUCTOR_RESOURCE_PREFIX
+              value: {{ .Values.conductor.resourcePrefix | quote }}
+            - name: CONDUCTOR_SEGMENT_NAME
+              value: {{ .Values.conductor.segmentName | quote }}
+            - name: CONDUCTOR_RELAY_SECRET_POLL_INTERVAL_SECONDS
+              value: {{ .Values.conductor.relay.secretPollIntervalSeconds | quote }}
+            - name: CONDUCTOR_RELAY_PUBLISH_INTERVAL_SECONDS
+              value: {{ .Values.conductor.relay.publishIntervalSeconds | quote }}
+            - name: CONDUCTOR_RELAY_STATUS_MAX_AGE_SECONDS
+              value: {{ .Values.conductor.relay.statusMaxAgeSeconds | quote }}
+            - name: CONDUCTOR_RELAY_PEER_STATUS_MAX_AGE_SECONDS
+              value: {{ .Values.conductor.relay.peerStatusMaxAgeSeconds | quote }}
+            - name: CONDUCTOR_RELAY_PUPPETDB_SYNC_MAX_AGE_SECONDS
+              value: {{ .Values.conductor.relay.puppetdbSyncMaxAgeSeconds | quote }}
+            - name: CONDUCTOR_RELAY_PUPPETDB_STATUS_URL
+              value: {{ .Values.conductor.relay.puppetdbStatusUrl | quote }}
+            - name: CONDUCTOR_RELAY_OUTPUT_DIR
+              value: {{ .Values.conductor.relay.outputDir | quote }}
+            - name: CONDUCTOR_RELAY_PARTICIPANT_STATUS_PATH
+              value: {{ printf "%s/participant-status.json" .Values.conductor.participant.trustOutputDir | quote }}
+            - name: CONDUCTOR_RELAY_PARTICIPANT_STATUS_MAX_AGE_SECONDS
+              value: {{ .Values.conductor.participant.statusMaxAgeSeconds | quote }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/conductor-relay", "probe", "ready"]
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          resources:
+{{ toYaml .Values.conductor.relay.resources | indent 12 }}
+          volumeMounts:
+            - name: conductor-trust
+              mountPath: {{ .Values.conductor.participant.trustOutputDir | quote }}
+              readOnly: true
+            - name: conductor-relay
+              mountPath: {{ .Values.conductor.relay.outputDir | quote }}
+        {{- end }}
         {{- end }}
       volumes:
         - name: logs
@@ -266,6 +321,10 @@ spec:
         {{- if .Values.conductor.enabled }}
         - name: conductor-trust
           emptyDir: {}
+        {{- if .Values.conductor.relay.enabled }}
+        - name: conductor-relay
+          emptyDir: {}
+        {{- end }}
         {{- end }}
   volumeClaimTemplates:
     - metadata:

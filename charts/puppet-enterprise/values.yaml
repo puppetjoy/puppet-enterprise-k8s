@@ -103,6 +103,16 @@ conductor:
     trustPollIntervalSeconds: 15
     trustOutputDir: /var/lib/conductor/trust
     resources: {}
+  relay:
+    enabled: false
+    publishIntervalSeconds: 15
+    secretPollIntervalSeconds: 15
+    statusMaxAgeSeconds: 60
+    peerStatusMaxAgeSeconds: 60
+    puppetdbSyncMaxAgeSeconds: 900
+    puppetdbStatusUrl: https://127.0.0.1:8081/status/v1/services?level=debug
+    outputDir: /var/lib/conductor/relay
+    resources: {}
   controlPlaneTrust:
     caPath: /etc/puppetlabs/puppet/ssl/certs/ca.pem
     crlPath: /etc/puppetlabs/puppet/ssl/crl.pem

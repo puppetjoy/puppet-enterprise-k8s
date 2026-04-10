@@ -153,6 +153,16 @@ When `conductor.enabled=true` on the PE chart:
 - participant sidecars install the current trust bundle into a pod-local directory for later Relay and Gateway consumption
 - participant readiness can remove a pod from `service/pe` or `service/pe-compiler` when onboarding, Fabric connectivity, or trust-bundle currency falls out of policy
 
+When `conductor.relay.enabled=true` as well:
+
+- each `pe` and compiler pod also gets a `conductor-relay` sidecar from the same Conductor image
+- Relay reuses the pod's onboarding Secret, but consumes Fabric on its own durable `relay.<pod>` queue
+- Relay polls local PuppetDB status over the pod-local listener and publishes that health view into Fabric
+- Relay stores fresh peer Relay snapshots in a pod-local directory so later routing and replay logic can reason about peer state without shared storage
+- Relay readiness can remove a pod from service when participant trust is stale or the local PuppetDB state is not healthy enough for that pod role
+
+The current Relay implementation is deliberately narrow. It distributes status and health, but it does not yet proxy PuppetDB writes into Fabric or replay them on peer workers.
+
 That gives the release a real Fabric membership model without shared storage or hard-coded peer lists.
 It does not yet mean the release is safe to run with multiple active control-plane replicas behind `service/pe`.
 The remaining gap is authoritative CA behaviour and PE-owned state convergence across those replicas.

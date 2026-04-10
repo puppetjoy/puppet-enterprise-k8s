@@ -68,6 +68,15 @@ That implies:
 - catalog resource replication is optional and driven by cross-node PQL requirements
 - catalog-serving readiness can be tied to Relay health and trust/currency checks
 
+The current repo now has the first Relay slice wired into the runtime model:
+
+- an optional `conductor-relay` sidecar can run beside the control-plane and compiler service containers
+- Relay reuses the pod's Warden-issued onboarding bundle to join Fabric on its own queue
+- Relay polls local PuppetDB status, publishes that health view into Fabric, and stores fresh peer Relay snapshots locally
+- Relay readiness is tied to participant trust readiness plus local PuppetDB health
+
+This is intentionally not the whole Relay design yet. The current implementation distributes status and health, but it does not yet proxy PuppetDB writes into Fabric or replay them on peers.
+
 ## Gateway
 
 Gateway fronts orchestrator and PCP2 traffic.

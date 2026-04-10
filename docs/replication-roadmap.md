@@ -50,6 +50,13 @@ This phase should prove:
 
 This is where we start earning real Worker semantics instead of just running multiple isolated PE stacks.
 
+Current status:
+
+- an optional `conductor-relay` sidecar now runs inside the PE and compiler workload shapes
+- Relay reuses the per-pod onboarding bundle, publishes local PuppetDB health into Fabric, and stores fresh peer Relay status snapshots
+- Relay readiness can now gate a pod on participant trust plus role-aware local PuppetDB health
+- PuppetDB write capture, Fabric transport of those writes, and peer replay are still outstanding
+
 ## Phase 3: Gateway
 
 Gateway brings orchestrator and PCP traffic into the same HA model.
