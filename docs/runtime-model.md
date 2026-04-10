@@ -154,8 +154,8 @@ This scaffold is intentionally Kubernetes-first, but not yet production-ready.
 
 Open design work remains around:
 
-- storage partitioning of `/opt/puppetlabs/server/data/*`
-- safe multi-replica scaling of PE services
+- replication of PE-local management state between independent PE instances
+- service boundaries inside `/opt/puppetlabs/server/data/*`
 - upgrade orchestration
 - ownership and security hardening
 - secrets and certificate rotation

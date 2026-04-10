@@ -66,14 +66,13 @@ The current scaffold keeps storage single-owner and explicit:
 
 That model is intentionally conservative. It preserves the official PE install flow while avoiding shared storage between workloads.
 
-## Future Partitioning
+## Remaining Decomposition Work
 
-The likely next partitioning target is `/opt/puppetlabs/server/data`:
+The remaining decomposition questions under `/opt/puppetlabs/server/data` are now about ownership and replication boundaries, not about reintroducing shared storage:
 
-- `postgresql` should eventually have its own PVC
-- `packages` may remain shared and possibly read-only after install/update
-- `environments` and `code-manager` should line up with file-sync distribution to the compiler pool rather than shared compiler storage
-- `puppetserver` and `puppetdb` service-local data should be reviewed for per-pod vs shared semantics
+- `environments` and `code-manager` should continue to follow file-sync distribution to the compiler pool
+- `puppetserver` and `puppetdb` service-local data should be reviewed for clearer PE-instance ownership boundaries
+- future multi-PE work should replicate PE-owned data explicitly between instances rather than sharing PVCs
 
 ## Why This Is Not A systemd Port
 

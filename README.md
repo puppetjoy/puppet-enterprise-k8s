@@ -6,11 +6,11 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 
 - Development and validation project, not production-ready
 - Builds a PE runtime image from the official installer tarball
-- Installs PE with Helm and preserves the install result on PVCs
-- Runs PostgreSQL, PuppetDB, the non-compiler Puppet Server, and PE edge/API services as Kubernetes workloads
-- Supports an optional compiler pool with per-replica non-shared PVCs, file-sync/PuppetDB-based readiness, and compiler-side PCP brokers
-- Supports optional ingress exposure, Code Manager configuration, and a validation `puppet-agent` chart
-- Still evolving around storage boundaries, multi-replica safety, upgrade orchestration, and hardening
+- Installs PE with Helm and preserves the install result on single-owner PVCs
+- Runs PostgreSQL, PuppetDB, the non-compiler Puppet Server, and PE edge/API services in a single-owner `pe` pod
+- Supports an optional compiler pool with per-replica non-shared PVCs, local PostgreSQL/PuppetDB, file-sync/PuppetDB-based readiness, and compiler-side PCP brokers
+- Supports optional ingress exposure, Code Manager configuration, and a validation `puppet-agent` chart with explicit certificate signing
+- Still evolving around PE-instance replication, upgrade orchestration, and hardening
 
 ## How It Relates To Traditional PE
 
@@ -129,8 +129,10 @@ By default it can also render a signer Job that signs the test-node certificate 
 
 This project is intentionally conservative right now:
 
-- the install result is kept on shared PVCs
-- the initial workload layout is single-replica oriented
+- each PE instance and compiler replica owns its own non-shared PVCs
+- the current `pe` workload is single-owner and single-replica oriented
+- compiler capacity can scale horizontally behind `service/pe-compiler`
+- centralized `puppet-code deploy` remains the code rollout entrypoint
 - charts provide generic defaults, not a ready-made cluster profile
 - operators are expected to supply environment-specific values locally
 
