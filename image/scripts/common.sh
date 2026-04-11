@@ -546,6 +546,91 @@ PY
     log "Configured compiler file sync service through ${file_sync_conf_path}"
 }
 
+sync_conductor_console_auth_shared_state() {
+    local enabled="${PE_K8S_CONDUCTOR_RBAC_SYNC_ENABLED:-false}"
+    local rbac_conf_path=/etc/puppetlabs/console-services/conf.d/rbac.conf
+    local shared_secret_dir=/etc/puppetlabs/console-services/conf.d/secrets/conductor
+
+    [ "${enabled}" = "true" ] || return 0
+
+    if [ ! -f "${rbac_conf_path}" ]; then
+        log "RBAC config missing; skipping Conductor console auth shared-state sync"
+        return 0
+    fi
+
+    python3 - "${rbac_conf_path}" "${shared_secret_dir}" <<'PY'
+from pathlib import Path
+import json
+import re
+import shutil
+import sys
+
+rbac_conf_path = Path(sys.argv[1])
+shared_secret_dir = Path(sys.argv[2])
+text = rbac_conf_path.read_text(encoding="utf-8")
+
+patterns = {
+    "tokenPrivateKey": r'^\s*token-private-key\s*:\s*"([^"]+)"',
+    "tokenPublicKey": r'^\s*token-public-key\s*:\s*"([^"]+)"',
+    "samlKey": r'^\s*saml-key\s*:\s*"([^"]+)"',
+    "samlCert": r'^\s*saml-cert\s*:\s*"([^"]+)"',
+}
+
+current = {}
+for name, pattern in patterns.items():
+    match = re.search(pattern, text, re.MULTILINE)
+    current[name] = Path(match.group(1)) if match else None
+
+target = {
+    "tokenPrivateKey": shared_secret_dir / "token-signing.private_key.pem",
+    "tokenPublicKey": shared_secret_dir / "token-signing.cert.pem",
+    "samlKey": shared_secret_dir / "saml.private_key.pem",
+    "samlCert": shared_secret_dir / "saml.cert.pem",
+}
+
+shared_secret_dir.mkdir(parents=True, exist_ok=True)
+
+for name in ("tokenPrivateKey", "tokenPublicKey"):
+    source = current.get(name)
+    if source is None or not source.is_file():
+        raise SystemExit(f"required RBAC auth file is missing: {source or name}")
+    destination = target[name]
+    if not destination.exists():
+        shutil.copyfile(source, destination)
+        shutil.copystat(source, destination, follow_symlinks=True)
+
+for name in ("samlKey", "samlCert"):
+    source = current.get(name)
+    if source is None or not source.is_file():
+        continue
+    destination = target[name]
+    if not destination.exists():
+        shutil.copyfile(source, destination)
+        shutil.copystat(source, destination, follow_symlinks=True)
+
+replacements = {
+    "token-private-key": str(target["tokenPrivateKey"]),
+    "token-public-key": str(target["tokenPublicKey"]),
+}
+if current.get("samlKey") and current["samlKey"].is_file():
+    replacements["saml-key"] = str(target["samlKey"])
+if current.get("samlCert") and current["samlCert"].is_file():
+    replacements["saml-cert"] = str(target["samlCert"])
+
+updated = text
+for key, value in replacements.items():
+    pattern = rf'^(\s*{re.escape(key)}\s*:\s*)"([^"]+)"'
+    updated, count = re.subn(pattern, '\\1' + json.dumps(value), updated, count=1, flags=re.MULTILINE)
+    if count != 1:
+        raise SystemExit(f"unable to update {key} in {rbac_conf_path}")
+
+if updated != text:
+    rbac_conf_path.write_text(updated, encoding="utf-8")
+PY
+
+    log "Configured shared RBAC auth material through ${rbac_conf_path}"
+}
+
 copy_exported_sysconfig_into_rootfs() {
     local path
     local target

@@ -283,6 +283,9 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "console-services"]
+          env:
+            - name: PE_K8S_CONDUCTOR_RBAC_SYNC_ENABLED
+              value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled .Values.conductor.relay.rbacSync.enabled) | quote }}
           ports:
             - name: console-svc
               containerPort: 4433
@@ -572,6 +575,12 @@ spec:
               value: {{ .Values.conductor.relay.classifierSync.auth.tokenLifetime | quote }}
             - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_TOKEN_LABEL
               value: {{ .Values.conductor.relay.classifierSync.auth.tokenLabel | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_SYNC_ENABLED
+              value: {{ ternary "true" "false" .Values.conductor.relay.rbacSync.enabled | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_SYNC_TARGET_ROLES
+              value: {{ join "," .Values.conductor.relay.rbacSync.targetRoles | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES
+              value: {{ join "," .Values.conductor.relay.rbacSync.excludedTokenLabelPrefixes | quote }}
           readinessProbe:
             exec:
               command: ["/usr/local/bin/conductor-relay", "probe", "ready"]
@@ -583,7 +592,10 @@ spec:
           volumeMounts:
             - name: etc
               mountPath: /etc/puppetlabs
-              readOnly: {{ not .Values.conductor.relay.caSync.enabled }}
+              readOnly: {{ not (or .Values.conductor.relay.caSync.enabled .Values.conductor.relay.rbacSync.enabled) }}
+            - name: opt
+              mountPath: /opt/puppetlabs
+              readOnly: true
             - name: conductor-trust
               mountPath: {{ .Values.conductor.participant.trustOutputDir | quote }}
               readOnly: true

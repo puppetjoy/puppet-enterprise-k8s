@@ -142,7 +142,8 @@ Current status:
 - `All Environments` and `PE Patch Management` are synchronized by semantic anchor, so their local installer-created IDs can differ while their contents still converge
 - PE-owned local infrastructure roots such as `PE Infrastructure` remain outside the managed sync domain
 - live validation in Kubernetes confirmed create and delete convergence for managed groups between `pe-0` and `pe-1`
-- remaining PE-owned state, including RBAC-adjacent writes and session behaviour, is still outstanding
+- RBAC and local-auth managed state now converge across `pe` replicas, including cross-replica token validation for normal user tokens
+- console session behaviour and other remaining console-backed writes are still outstanding
 
 ## Explicit Non-Goals
 

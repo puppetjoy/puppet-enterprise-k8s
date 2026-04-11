@@ -175,11 +175,12 @@ This project is intentionally conservative right now:
 - when `conductor.relay.enabled=true`, control-plane and compiler pods also publish Relay status into Fabric, can gate readiness on participant trust plus local PuppetDB health, and can replay selected PuppetDB command traffic through Fabric
 - when `conductor.relay.classifierSync.enabled=true`, control-plane relays replicate the managed user-visible classifier domain under `All Nodes`, including the `All Environments` subtree and `PE Patch Management`, while leaving PE-owned local infrastructure groups like `PE Infrastructure` out of the sync domain
 - when `conductor.gateway.enabled=true`, control-plane pods front `service/pe` PCP and orchestration traffic through a Gateway sidecar that proxies local `8142/8143` listeners, publishes Gateway status into Fabric, and removes disconnected or unhealthy control-plane replicas from service routing
+- when `conductor.relay.rbacSync.enabled=true`, control-plane relays replicate PE RBAC and local-auth managed state through Fabric, share console token-signing and SAML material, and intentionally treat per-replica login activity such as `last_login` as non-authoritative
 - compiler capacity can scale horizontally behind `service/pe-compiler`
 - centralized `puppet-code deploy` remains the code rollout entrypoint
 - separate Helm releases are independent sandboxes, not synchronization peers
 - active-active HA work is Conductor-aligned: Fabric, Relay, Gateway, and Warden
-- increasing `controlPlane.replicaCount` alone does not produce safe active-active PE service yet; trust-aware routing is now present, but CA authority and PE-owned state still need replicated convergence
+- increasing `controlPlane.replicaCount` alone still does not deliver a fully pooled PE console UX; CA, classification, code-deploy intent, and RBAC/local-auth state now converge, but console sessions still rely on `pe-console` stickiness and compiler file-sync still uses the tactical `pe-filesync` selector
 - the repo does not yet deliver full active-active PE replication
 - the current Relay implementation now captures selected PuppetDB submit-only commands, replays facts and reports to the control-plane role, and intentionally keeps full catalogs local-only
 - classifier HA currently covers that filtered managed domain rather than a dedicated user subtree; PE-owned local classifier groups still remain locally owned on each control-plane replica

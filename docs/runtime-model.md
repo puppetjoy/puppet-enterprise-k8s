@@ -183,11 +183,19 @@ When `conductor.relay.classifierSync.enabled=true`:
 - PE-owned local infrastructure groups such as `PE Infrastructure` stay outside the replicated domain
 - relay readiness can fail if that managed classifier domain is stale or not converged for the local replica
 
+When `conductor.relay.rbacSync.enabled=true`:
+
+- control-plane relays share console auth material so locally issued RBAC tokens can validate on peer `pe` replicas
+- relay projects the managed RBAC database domain through Fabric and replays it onto peer control-plane replicas
+- reserved operator token prefixes such as `pe-k8s-conductor-` stay excluded from the replicated domain so local maintenance tokens are not revoked by convergence
+- ephemeral per-replica activity fields such as `last_login` and token `last_active` are intentionally normalized out of the authoritative convergence token
+- relay readiness can fail if the RBAC managed domain is stale or not converged for the local replica
+
 The current Relay implementation is still deliberately narrow. It now has a working selected-command write path, but it is not yet the full Conductor data plane for PCP, orchestration, or broader control-plane state convergence.
 
 That gives the release a real Fabric membership model without shared storage or hard-coded peer lists.
-It does not yet mean the release is safe to run with multiple active control-plane replicas behind `service/pe`.
-The remaining gap is authoritative CA behaviour and PE-owned state convergence across those replicas.
+It does not yet mean the release is finished as a fully pooled active-active PE control plane.
+CA, classification, code-deploy intent, and RBAC/local-auth convergence are now in place, but console session behaviour and some tactical routing exceptions still remain.
 
 ## Code Manager
 

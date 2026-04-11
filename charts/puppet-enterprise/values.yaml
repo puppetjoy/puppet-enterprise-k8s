@@ -183,6 +183,14 @@ conductor:
         password: ""
         tokenLifetime: 15m
         tokenLabel: pe-k8s-conductor-classifier-sync
+    rbacSync:
+      enabled: false
+      targetRoles:
+        - control-plane
+      excludedTokenLabelPrefixes:
+        - pe-k8s-conductor-
+        - pe-k8s-classifier
+        - pe-k8s-compiler certificate
     resources: {}
   gateway:
     enabled: false

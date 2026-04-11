@@ -170,7 +170,27 @@ That means:
 - installer-created but user-managed containers like `PE Patch Management` remain inside the replicated domain
 - PE-owned infrastructure groups remain local to each control-plane replica
 - the mechanism stays Conductor-aligned because state moves through Fabric rather than through direct PE-to-PE API fanout
-- broader PE-owned state such as RBAC, sessions, and other console-backed writes is still ahead
+- RBAC and local-auth managed state now converge through Fabric as part of the same PE-owned control-plane domain
+- console sessions and other remaining console-backed writes are still ahead
+
+## Shared RBAC and Local Auth
+
+The next PE-owned control-plane slice now carried through Fabric is RBAC and
+local-auth state.
+
+The current implementation:
+
+- shares console token-signing and optional SAML material across `pe` replicas so locally issued auth tokens can validate on peers
+- projects the managed RBAC database domain through Fabric and replays it onto peer control-plane replicas
+- excludes operator and automation token labels with reserved prefixes such as `pe-k8s-conductor-` so local maintenance tokens are not treated as replicated user state
+- intentionally normalizes ephemeral per-replica activity fields such as `subjects.last_login` and token `last_active` so ordinary authentication traffic does not create readiness churn
+
+That means:
+
+- local-auth users, roles, role bindings, and normal user tokens can converge between `pe` replicas
+- a token issued on one control-plane replica can become valid on its peer without shared storage
+- the replicated RBAC domain remains authoritative enough for readiness while leaving replica-local operator diagnostics outside the convergence token
+- web console sessions are still local to the selected `pe-console` replica and are not yet part of the replicated domain
 
 ## Non-Goals
 

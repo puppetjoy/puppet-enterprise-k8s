@@ -15,6 +15,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+
+import pg8000.dbapi
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -56,6 +58,151 @@ CLASSIFIER_LOGICAL_PE_PATCH_MANAGEMENT_ID = "builtin://pe-patch-management"
 CLASSIFIER_LOCAL_EXCLUDE_ROOT_NAMES = {
     "PE Infrastructure",
     LEGACY_CLASSIFIER_ROOT_GROUP_NAME,
+}
+DEFAULT_RBAC_TARGET_ROLES = [
+    "control-plane",
+]
+DEFAULT_RBAC_SYNC_STATE_FILENAME = "rbac-sync-state.json"
+DEFAULT_RBAC_SYNC_SCOPE = "pe-rbac-managed-domain"
+DEFAULT_RBAC_SYNC_RBAC_CONF_PATH = "/etc/puppetlabs/console-services/conf.d/rbac.conf"
+DEFAULT_RBAC_SYNC_RBAC_DATABASE_CONF_PATH = "/etc/puppetlabs/console-services/conf.d/rbac-database.conf"
+DEFAULT_RBAC_SYNC_KEYS_PATH = "/etc/puppetlabs/console-services/conf.d/secrets/keys.json"
+DEFAULT_RBAC_SYNC_SHARED_SECRET_DIR = "/etc/puppetlabs/console-services/conf.d/secrets/conductor"
+DEFAULT_RBAC_SYNC_SHARED_TOKEN_PRIVATE_KEY_PATH = (
+    f"{DEFAULT_RBAC_SYNC_SHARED_SECRET_DIR}/token-signing.private_key.pem"
+)
+DEFAULT_RBAC_SYNC_SHARED_TOKEN_PUBLIC_KEY_PATH = (
+    f"{DEFAULT_RBAC_SYNC_SHARED_SECRET_DIR}/token-signing.cert.pem"
+)
+DEFAULT_RBAC_SYNC_SHARED_SAML_KEY_PATH = (
+    f"{DEFAULT_RBAC_SYNC_SHARED_SECRET_DIR}/saml.private_key.pem"
+)
+DEFAULT_RBAC_SYNC_SHARED_SAML_CERT_PATH = (
+    f"{DEFAULT_RBAC_SYNC_SHARED_SECRET_DIR}/saml.cert.pem"
+)
+DEFAULT_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES = [
+    "pe-k8s-conductor-",
+    "pe-k8s-classifier",
+    "pe-k8s-compiler certificate",
+]
+RBAC_SYNC_TABLE_NAMES = [
+    "configuration",
+    "external_access_config",
+    "permissions",
+    "roles",
+    "roles_permissions",
+    "salt",
+    "subjects",
+    "subject_roles",
+    "groupings",
+    "password_history",
+    "password_reset_tokens",
+    "tokens",
+]
+RBAC_SYNC_SELECT_QUERIES = {
+    "configuration": """
+        select id, kind, data, created_at, modified_at
+        from configuration
+        order by kind, id
+    """,
+    "external_access_config": """
+        select
+            id,
+            config_type,
+            display_name,
+            creation_date,
+            last_updated,
+            data_element,
+            coalesce(encode(secrets, 'base64'), '') as secrets_base64,
+            encryption_key_id
+        from external_access_config
+        order by config_type, display_name, id
+    """,
+    "permissions": """
+        select id, object_type, action, instance
+        from permissions
+        order by object_type, action, instance, id
+    """,
+    "roles": """
+        select id, display_name, description
+        from roles
+        order by id
+    """,
+    "roles_permissions": """
+        select rid, pid
+        from roles_permissions
+        order by rid, pid
+    """,
+    "salt": """
+        select id, salt
+        from salt
+        order by id
+    """,
+    "subjects": """
+        select
+            id,
+            login,
+            is_group,
+            is_remote,
+            is_superuser,
+            display_name,
+            email,
+            is_revoked,
+            null::timestamp without time zone as last_login,
+            password,
+            reset_password_uuid,
+            failed_login_attempts,
+            created_at,
+            external_access_id,
+            is_immutable
+        from subjects
+        order by login, id
+    """,
+    "subject_roles": """
+        select sid, rid
+        from subject_roles
+        order by sid, rid
+    """,
+    "groupings": """
+        select gid, ruid
+        from groupings
+        order by gid, ruid
+    """,
+    "password_history": """
+        select id, sid, replacement_date, password
+        from password_history
+        order by sid, replacement_date, id
+    """,
+    "password_reset_tokens": """
+        select token, sid, requestor, expiration_date, creation_date
+        from password_reset_tokens
+        order by sid, token
+    """,
+    "tokens": """
+        select
+            id,
+            expiration,
+            user_id,
+            token,
+            label,
+            creation,
+            client,
+            description,
+            timeout,
+            null::timestamp with time zone as last_active,
+            token_hash
+        from tokens
+        order by id
+    """,
+}
+RBAC_SYNC_REQUIRED_AUTH_FILES = {
+    "keysJson": DEFAULT_RBAC_SYNC_KEYS_PATH,
+    "tokenPrivateKey": DEFAULT_RBAC_SYNC_SHARED_TOKEN_PRIVATE_KEY_PATH,
+    "tokenPublicKey": DEFAULT_RBAC_SYNC_SHARED_TOKEN_PUBLIC_KEY_PATH,
+}
+RBAC_SYNC_OPTIONAL_AUTH_FILES = {
+    "samlKey": DEFAULT_RBAC_SYNC_SHARED_SAML_KEY_PATH,
+    "samlCert": DEFAULT_RBAC_SYNC_SHARED_SAML_CERT_PATH,
 }
 
 
@@ -408,6 +555,8 @@ def probe(mode):
         return 1
     if status.get("classifierSyncEnabled", False) and not status.get("classifierSyncReady", False):
         return 1
+    if status.get("rbacSyncEnabled", False) and not status.get("rbacSyncReady", False):
+        return 1
     if status.get("codeDeployEnabled", False) and not status.get("codeDeployReady", False):
         return 1
 
@@ -724,6 +873,52 @@ class RelayRuntime:
             self.output_dir,
             DEFAULT_CLASSIFIER_SYNC_STATE_FILENAME,
         )
+        self.rbac_sync_enabled = env_bool("CONDUCTOR_RELAY_RBAC_SYNC_ENABLED", False)
+        self.rbac_sync_target_roles = env_csv(
+            "CONDUCTOR_RELAY_RBAC_SYNC_TARGET_ROLES",
+            default=DEFAULT_RBAC_TARGET_ROLES,
+        )
+        self.rbac_sync_scope = DEFAULT_RBAC_SYNC_SCOPE
+        self.rbac_sync_state_path = os.path.join(
+            self.output_dir,
+            DEFAULT_RBAC_SYNC_STATE_FILENAME,
+        )
+        self.rbac_sync_rbac_conf_path = (
+            os.environ.get("CONDUCTOR_RELAY_RBAC_SYNC_RBAC_CONF_PATH", "").strip()
+            or DEFAULT_RBAC_SYNC_RBAC_CONF_PATH
+        )
+        self.rbac_sync_rbac_database_conf_path = (
+            os.environ.get("CONDUCTOR_RELAY_RBAC_SYNC_RBAC_DATABASE_CONF_PATH", "").strip()
+            or DEFAULT_RBAC_SYNC_RBAC_DATABASE_CONF_PATH
+        )
+        self.rbac_sync_keys_path = (
+            os.environ.get("CONDUCTOR_RELAY_RBAC_SYNC_KEYS_PATH", "").strip()
+            or DEFAULT_RBAC_SYNC_KEYS_PATH
+        )
+        self.rbac_sync_shared_secret_dir = (
+            os.environ.get("CONDUCTOR_RELAY_RBAC_SYNC_SHARED_SECRET_DIR", "").strip()
+            or DEFAULT_RBAC_SYNC_SHARED_SECRET_DIR
+        )
+        self.rbac_sync_shared_token_private_key_path = (
+            os.environ.get("CONDUCTOR_RELAY_RBAC_SYNC_SHARED_TOKEN_PRIVATE_KEY_PATH", "").strip()
+            or DEFAULT_RBAC_SYNC_SHARED_TOKEN_PRIVATE_KEY_PATH
+        )
+        self.rbac_sync_shared_token_public_key_path = (
+            os.environ.get("CONDUCTOR_RELAY_RBAC_SYNC_SHARED_TOKEN_PUBLIC_KEY_PATH", "").strip()
+            or DEFAULT_RBAC_SYNC_SHARED_TOKEN_PUBLIC_KEY_PATH
+        )
+        self.rbac_sync_shared_saml_key_path = (
+            os.environ.get("CONDUCTOR_RELAY_RBAC_SYNC_SHARED_SAML_KEY_PATH", "").strip()
+            or DEFAULT_RBAC_SYNC_SHARED_SAML_KEY_PATH
+        )
+        self.rbac_sync_shared_saml_cert_path = (
+            os.environ.get("CONDUCTOR_RELAY_RBAC_SYNC_SHARED_SAML_CERT_PATH", "").strip()
+            or DEFAULT_RBAC_SYNC_SHARED_SAML_CERT_PATH
+        )
+        self.rbac_sync_excluded_token_label_prefixes = env_csv(
+            "CONDUCTOR_RELAY_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES",
+            default=DEFAULT_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES,
+        )
         self.ca_sync_enabled = env_bool("CONDUCTOR_RELAY_CA_SYNC_ENABLED", False)
         self.ca_sync_dir = (
             os.environ.get("CONDUCTOR_RELAY_CA_SYNC_DIR", "").strip()
@@ -758,6 +953,7 @@ class RelayRuntime:
         self.code_deploy_hook_start_error = ""
         self.code_deploy_runtime_error = ""
         self.classifier_sync_runtime_error = ""
+        self.rbac_sync_runtime_error = ""
         self.code_deploy_suppressions = {}
         self.code_deploy_queue = queue.Queue()
         self.code_deploy_queued = set()
@@ -767,6 +963,9 @@ class RelayRuntime:
         self.classifier_sync_state = self.default_classifier_sync_state()
         self.next_classifier_publish = 0
         self.last_published_classifier_hash = ""
+        self.rbac_sync_state = self.default_rbac_sync_state()
+        self.next_rbac_publish = 0
+        self.last_published_rbac_hash = ""
 
         self.connection = None
         self.channel = None
@@ -839,6 +1038,23 @@ class RelayRuntime:
             "classifierSyncLastAppliedAt": 0,
             "classifierSyncLastConvergedAt": 0,
             "classifierSyncLastError": "",
+            "rbacSyncEnabled": self.rbac_sync_enabled,
+            "rbacSyncReady": not self.rbac_sync_enabled,
+            "rbacSyncTargetRoles": list(self.rbac_sync_target_roles),
+            "rbacSyncScope": self.rbac_sync_scope if self.rbac_sync_enabled else "",
+            "rbacSyncExcludedTokenLabelPrefixes": list(self.rbac_sync_excluded_token_label_prefixes),
+            "rbacSyncState": "idle",
+            "rbacSyncDesiredHash": "",
+            "rbacSyncActualHash": "",
+            "rbacSyncDesiredTableCount": 0,
+            "rbacSyncActualTableCount": 0,
+            "rbacSyncDesiredRowCount": 0,
+            "rbacSyncActualRowCount": 0,
+            "rbacSyncAuthFileCount": 0,
+            "rbacSyncLastPublishedAt": 0,
+            "rbacSyncLastAppliedAt": 0,
+            "rbacSyncLastConvergedAt": 0,
+            "rbacSyncLastError": "",
             "caSyncEnabled": self.ca_sync_enabled,
             "caSyncReady": not self.ca_sync_enabled,
             "caSyncDir": self.ca_sync_dir if self.ca_sync_enabled else "",
@@ -862,6 +1078,7 @@ class RelayRuntime:
             "lastUpdatedAt": 0,
         }
         self.load_classifier_sync_state()
+        self.load_rbac_sync_state()
         self.load_code_deploy_state()
 
     @staticmethod
@@ -1300,6 +1517,7 @@ class RelayRuntime:
                     "desiredHash": actual_hash,
                     "desiredGroupCount": int(local_state.get("groupCount") or 0),
                     "originParticipant": self.pod_name,
+                    "desiredPublishedAt": observed_at,
                     "lastConvergedAt": observed_at,
                     "lastError": "",
                 }
@@ -1323,10 +1541,15 @@ class RelayRuntime:
         if not should_publish:
             return
 
+        snapshot = self.classifier_sync_state_snapshot()
+        version_at = int(snapshot.get("desiredPublishedAt") or 0)
+        if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
+            version_at = now
+
         payload = {
             "apiVersion": "pe-k8s.puppet.com/v1alpha1",
             "kind": "ConductorRelayClassifierState",
-            "publishedAt": now,
+            "publishedAt": version_at,
             "origin": {
                 "participant": self.pod_name,
                 "namespace": self.pod_namespace,
@@ -1353,7 +1576,7 @@ class RelayRuntime:
             desiredGroupCount=int(state.get("groupCount") or 0),
             actualGroupCount=int(state.get("groupCount") or 0),
             originParticipant=self.pod_name,
-            desiredPublishedAt=now,
+            desiredPublishedAt=version_at,
             lastPublishedAt=now,
             lastConvergedAt=now,
             lastError="",
@@ -1522,6 +1745,16 @@ class RelayRuntime:
         current_state = self.classifier_sync_state_snapshot()
         current_desired_hash = (current_state.get("desiredHash") or "").strip()
         current_actual_hash = (current_state.get("actualHash") or "").strip()
+        current_published_at = int(current_state.get("desiredPublishedAt") or 0)
+        if current_published_at and published_at and published_at < current_published_at:
+            return
+        if (
+            current_published_at
+            and published_at
+            and published_at == current_published_at
+            and desired_hash == current_desired_hash
+        ):
+            return
         if desired_hash == current_actual_hash and desired_hash == current_desired_hash:
             self.merge_classifier_sync_state(
                 state="converged",
@@ -1549,6 +1782,931 @@ class RelayRuntime:
             f"{desired_hash[:12]} from {origin_participant}"
         )
         self.reconcile_classifier_state(state_payload, published_at, origin_participant)
+
+    def default_rbac_sync_state(self):
+        return {
+            "state": "idle",
+            "scope": self.rbac_sync_scope,
+            "excludedTokenLabelPrefixes": list(self.rbac_sync_excluded_token_label_prefixes),
+            "desiredHash": "",
+            "actualHash": "",
+            "desiredTableCount": 0,
+            "actualTableCount": 0,
+            "desiredRowCount": 0,
+            "actualRowCount": 0,
+            "authFileCount": 0,
+            "originParticipant": "",
+            "desiredPublishedAt": 0,
+            "lastReceivedAt": 0,
+            "lastPublishedAt": 0,
+            "lastAppliedAt": 0,
+            "lastConvergedAt": 0,
+            "lastError": "",
+            "lastErrorAt": 0,
+        }
+
+    def refresh_rbac_summary_locked(self):
+        state = dict(self.rbac_sync_state)
+        ready = not self.rbac_sync_enabled
+        if self.rbac_sync_enabled:
+            desired_hash = (state.get("desiredHash") or "").strip()
+            actual_hash = (state.get("actualHash") or "").strip()
+            phase = (state.get("state") or "idle").strip() or "idle"
+            ready = bool(actual_hash) and phase not in {"pending", "in-progress", "failed"}
+            if desired_hash and actual_hash != desired_hash:
+                ready = False
+            if self.rbac_sync_runtime_error:
+                ready = False
+
+        last_error = self.rbac_sync_runtime_error or (state.get("lastError") or "").strip()
+        self.status.update(
+            {
+                "rbacSyncReady": ready,
+                "rbacSyncTargetRoles": list(self.rbac_sync_target_roles),
+                "rbacSyncScope": state.get("scope", ""),
+                "rbacSyncExcludedTokenLabelPrefixes": list(
+                    state.get("excludedTokenLabelPrefixes") or self.rbac_sync_excluded_token_label_prefixes
+                ),
+                "rbacSyncState": state.get("state", "idle"),
+                "rbacSyncDesiredHash": state.get("desiredHash", ""),
+                "rbacSyncActualHash": state.get("actualHash", ""),
+                "rbacSyncDesiredTableCount": int(state.get("desiredTableCount") or 0),
+                "rbacSyncActualTableCount": int(state.get("actualTableCount") or 0),
+                "rbacSyncDesiredRowCount": int(state.get("desiredRowCount") or 0),
+                "rbacSyncActualRowCount": int(state.get("actualRowCount") or 0),
+                "rbacSyncAuthFileCount": int(state.get("authFileCount") or 0),
+                "rbacSyncLastPublishedAt": int(state.get("lastPublishedAt") or 0),
+                "rbacSyncLastAppliedAt": int(state.get("lastAppliedAt") or 0),
+                "rbacSyncLastConvergedAt": int(state.get("lastConvergedAt") or 0),
+                "rbacSyncLastError": last_error,
+            }
+        )
+
+    def refresh_rbac_summary(self):
+        with self.lock:
+            self.refresh_rbac_summary_locked()
+
+    def persist_rbac_sync_state(self):
+        if not self.rbac_sync_enabled:
+            return
+        with self.lock:
+            payload = {
+                "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+                "kind": "ConductorRelayRbacSyncState",
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "state": dict(self.rbac_sync_state),
+            }
+        write_text_file(self.rbac_sync_state_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    def load_rbac_sync_state(self):
+        state = self.default_rbac_sync_state()
+        if self.rbac_sync_enabled and os.path.isfile(self.rbac_sync_state_path):
+            try:
+                payload = read_json_file(self.rbac_sync_state_path)
+                raw_state = payload.get("state") or {}
+                if isinstance(raw_state, dict):
+                    state.update(raw_state)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
+                log(f"Failed to load RBAC sync state: {error}")
+        with self.lock:
+            self.rbac_sync_state = state
+            self.refresh_rbac_summary_locked()
+
+    def rbac_sync_state_snapshot(self):
+        with self.lock:
+            return dict(self.rbac_sync_state)
+
+    def merge_rbac_sync_state(self, **updates):
+        with self.lock:
+            state = dict(self.rbac_sync_state)
+            state.update(updates)
+            if "lastError" in updates:
+                if (updates.get("lastError") or "").strip():
+                    state["lastErrorAt"] = int(updates.get("lastErrorAt") or time.time())
+                else:
+                    state["lastErrorAt"] = 0
+            self.rbac_sync_state = state
+            self.refresh_rbac_summary_locked()
+            snapshot = dict(state)
+        self.persist_rbac_sync_state()
+        return snapshot
+
+    def rbac_sync_conf_text(self):
+        if not os.path.isfile(self.rbac_sync_rbac_conf_path):
+            raise RuntimeError(f"RBAC config not found: {self.rbac_sync_rbac_conf_path}")
+        with open(self.rbac_sync_rbac_conf_path, "r", encoding="utf-8") as handle:
+            return handle.read()
+
+    @staticmethod
+    def rbac_sync_hocon_string(content, key):
+        match = re.search(rf'^\s*{re.escape(key)}\s*:\s*"([^"]+)"', content, re.MULTILINE)
+        return match.group(1).strip() if match else ""
+
+    def rbac_sync_auth_file_paths(self):
+        conf_text = self.rbac_sync_conf_text()
+        current = {
+            "keysJson": self.rbac_sync_keys_path,
+            "tokenPrivateKey": self.rbac_sync_hocon_string(conf_text, "token-private-key"),
+            "tokenPublicKey": self.rbac_sync_hocon_string(conf_text, "token-public-key"),
+            "samlKey": self.rbac_sync_hocon_string(conf_text, "saml-key"),
+            "samlCert": self.rbac_sync_hocon_string(conf_text, "saml-cert"),
+        }
+        target = {
+            "keysJson": self.rbac_sync_keys_path,
+            "tokenPrivateKey": self.rbac_sync_shared_token_private_key_path,
+            "tokenPublicKey": self.rbac_sync_shared_token_public_key_path,
+            "samlKey": self.rbac_sync_shared_saml_key_path,
+            "samlCert": self.rbac_sync_shared_saml_cert_path,
+        }
+        return current, target
+
+    def rbac_sync_db_config(self):
+        if not os.path.isfile(self.rbac_sync_rbac_database_conf_path):
+            raise RuntimeError(
+                f"RBAC database config not found: {self.rbac_sync_rbac_database_conf_path}"
+            )
+        with open(self.rbac_sync_rbac_database_conf_path, "r", encoding="utf-8") as handle:
+            content = handle.read()
+        subname = self.rbac_sync_hocon_string(content, "subname")
+        user = self.rbac_sync_hocon_string(content, "user")
+        if not subname or not user:
+            raise RuntimeError("RBAC database configuration is incomplete")
+        parsed = urllib.parse.urlsplit(f"postgresql:{subname}")
+        params = {key: values[-1] for key, values in urllib.parse.parse_qs(parsed.query).items() if values}
+        database = parsed.path.lstrip("/")
+        sslkey = params.get("sslkey", "")
+        if sslkey.endswith(".pk8"):
+            pem_key = re.sub(r"\.pk8$", ".pem", sslkey)
+            if os.path.isfile(pem_key):
+                sslkey = pem_key
+        return {
+            "host": parsed.hostname or "",
+            "port": int(parsed.port or 5432),
+            "database": database,
+            "user": user,
+            "sslrootcert": params.get("sslrootcert", ""),
+            "sslkey": sslkey,
+            "sslcert": params.get("sslcert", ""),
+        }
+
+    def rbac_db_connection(self):
+        config = self.rbac_sync_db_config()
+        context = ssl.create_default_context(cafile=config["sslrootcert"])
+        context.check_hostname = True
+        context.load_cert_chain(
+            certfile=config["sslcert"],
+            keyfile=config["sslkey"],
+        )
+        return pg8000.dbapi.connect(
+            user=config["user"],
+            host=config["host"],
+            port=config["port"],
+            database=config["database"],
+            ssl_context=context,
+            timeout=15,
+        )
+
+    @staticmethod
+    def rbac_rows_hash(table_rows, auth_files, excluded_token_label_prefixes):
+        payload = {
+            "tables": {name: list(table_rows.get(name) or []) for name in RBAC_SYNC_TABLE_NAMES},
+            "authFiles": dict(sorted((auth_files or {}).items())),
+            "excludedTokenLabelPrefixes": list(excluded_token_label_prefixes or []),
+        }
+        return sha256_text(stable_json(payload))
+
+    def rbac_token_is_excluded(self, row):
+        label = ((row or {}).get("label") or "").strip()
+        return any(label.startswith(prefix) for prefix in self.rbac_sync_excluded_token_label_prefixes)
+
+    def rbac_query_rows(self, cursor, query):
+        wrapped = f"select coalesce(json_agg(row_to_json(t)), '[]'::json)::text from ({query}) t"
+        cursor.execute(wrapped)
+        value = cursor.fetchone()[0]
+        if not value:
+            return []
+        return json.loads(value)
+
+    def read_local_rbac_state(self):
+        current_paths, target_paths = self.rbac_sync_auth_file_paths()
+        auth_files = {}
+        for logical_name, source_path in {**RBAC_SYNC_REQUIRED_AUTH_FILES, **RBAC_SYNC_OPTIONAL_AUTH_FILES}.items():
+            actual_path = target_paths.get(logical_name)
+            if logical_name != "keysJson" and actual_path and os.path.isfile(actual_path):
+                source_path = actual_path
+            else:
+                source_path = current_paths.get(logical_name) or source_path
+            if not source_path or not os.path.isfile(source_path):
+                if logical_name in RBAC_SYNC_OPTIONAL_AUTH_FILES:
+                    continue
+                raise RuntimeError(f"RBAC auth file is missing: {source_path or logical_name}")
+            with open(source_path, "rb") as handle:
+                auth_files[logical_name] = base64.b64encode(handle.read()).decode("ascii")
+
+        table_rows = {}
+        connection = self.rbac_db_connection()
+        try:
+            cursor = connection.cursor()
+            repaired = self.ensure_local_rbac_protected_rows(cursor)
+            if repaired:
+                connection.commit()
+            for table_name in RBAC_SYNC_TABLE_NAMES:
+                rows = self.rbac_query_rows(cursor, RBAC_SYNC_SELECT_QUERIES[table_name])
+                if table_name == "tokens":
+                    rows = [row for row in rows if not self.rbac_token_is_excluded(row)]
+                table_rows[table_name] = rows
+            cursor.close()
+        finally:
+            connection.close()
+
+        row_count = sum(len(rows) for rows in table_rows.values())
+        payload = {
+            "scope": self.rbac_sync_scope,
+            "excludedTokenLabelPrefixes": list(self.rbac_sync_excluded_token_label_prefixes),
+            "tableNames": list(RBAC_SYNC_TABLE_NAMES),
+            "tables": table_rows,
+            "tableCount": len(RBAC_SYNC_TABLE_NAMES),
+            "rowCount": row_count,
+            "authFiles": auth_files,
+            "authFileCount": len(auth_files),
+        }
+        payload["hash"] = self.rbac_rows_hash(
+            table_rows,
+            auth_files,
+            self.rbac_sync_excluded_token_label_prefixes,
+        )
+        return payload
+
+    def refresh_local_rbac_sync_state(self):
+        if not self.rbac_sync_enabled:
+            return
+
+        observed_at = int(time.time())
+        local_state = self.read_local_rbac_state()
+        snapshot = self.rbac_sync_state_snapshot()
+        desired_hash = (snapshot.get("desiredHash") or "").strip()
+        actual_hash = (local_state.get("hash") or "").strip()
+        phase = (snapshot.get("state") or "idle").strip() or "idle"
+        origin_participant = (snapshot.get("originParticipant") or "").strip()
+
+        updates = {
+            "scope": self.rbac_sync_scope,
+            "excludedTokenLabelPrefixes": list(self.rbac_sync_excluded_token_label_prefixes),
+            "actualHash": actual_hash,
+            "actualTableCount": int(local_state.get("tableCount") or 0),
+            "actualRowCount": int(local_state.get("rowCount") or 0),
+            "authFileCount": int(local_state.get("authFileCount") or 0),
+        }
+        if desired_hash and desired_hash == actual_hash:
+            updates.update(
+                {
+                    "state": "converged",
+                    "lastConvergedAt": observed_at,
+                    "lastError": "",
+                }
+            )
+        elif desired_hash and origin_participant and origin_participant != self.pod_name and phase in {
+            "pending",
+            "in-progress",
+            "failed",
+        }:
+            updates["state"] = phase
+        else:
+            updates.update(
+                {
+                    "state": "observed",
+                    "desiredHash": actual_hash,
+                    "desiredTableCount": int(local_state.get("tableCount") or 0),
+                    "desiredRowCount": int(local_state.get("rowCount") or 0),
+                    "originParticipant": self.pod_name,
+                    "desiredPublishedAt": observed_at,
+                    "lastConvergedAt": observed_at,
+                    "lastError": "",
+                }
+            )
+        self.rbac_sync_runtime_error = ""
+        self.merge_rbac_sync_state(**updates)
+
+    def publish_rbac_state(self):
+        if (
+            not self.rbac_sync_enabled
+            or self.connection is None
+            or self.channel is None
+            or self.bundle is None
+        ):
+            return
+
+        state = self.read_local_rbac_state()
+        now = int(time.time())
+        state_hash = (state.get("hash") or "").strip()
+        should_publish = state_hash != self.last_published_rbac_hash or now >= self.next_rbac_publish
+        if not should_publish:
+            return
+
+        snapshot = self.rbac_sync_state_snapshot()
+        version_at = int(snapshot.get("desiredPublishedAt") or 0)
+        if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
+            version_at = now
+
+        payload = {
+            "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+            "kind": "ConductorRelayRbacState",
+            "publishedAt": version_at,
+            "origin": {
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "role": self.relay_role,
+                "segment": self.segment_name,
+            },
+            "targetRoles": list(self.rbac_sync_target_roles),
+            "state": state,
+        }
+        self.channel.basic_publish(
+            exchange=self.bundle["hub"]["exchanges"]["data"],
+            routing_key=f"relay.rbac-state.{sanitize_fragment(self.pod_name)}",
+            body=stable_json(payload).encode("utf-8"),
+            properties=pika.BasicProperties(content_type="application/json", delivery_mode=2),
+        )
+        self.last_published_rbac_hash = state_hash
+        self.next_rbac_publish = now + self.publish_interval
+        self.merge_rbac_sync_state(
+            state="converged",
+            scope=self.rbac_sync_scope,
+            excludedTokenLabelPrefixes=list(self.rbac_sync_excluded_token_label_prefixes),
+            desiredHash=state_hash,
+            actualHash=state_hash,
+            desiredTableCount=int(state.get("tableCount") or 0),
+            actualTableCount=int(state.get("tableCount") or 0),
+            desiredRowCount=int(state.get("rowCount") or 0),
+            actualRowCount=int(state.get("rowCount") or 0),
+            authFileCount=int(state.get("authFileCount") or 0),
+            originParticipant=self.pod_name,
+            desiredPublishedAt=version_at,
+            lastPublishedAt=now,
+            lastConvergedAt=now,
+            lastError="",
+        )
+
+    def rbac_managed_tokens_delete_sql(self):
+        if not self.rbac_sync_excluded_token_label_prefixes:
+            return "delete from tokens"
+        conditions = [
+            "coalesce(label, '') like '" + prefix.replace("'", "''") + "%'"
+            for prefix in self.rbac_sync_excluded_token_label_prefixes
+        ]
+        return "delete from tokens where not (" + " or ".join(conditions) + ")"
+
+    def write_rbac_managed_file(self, path, content, reference_path, default_mode):
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        reference = None
+        for candidate in [path, reference_path]:
+            if candidate and os.path.exists(candidate):
+                reference = candidate
+                break
+        if reference is not None:
+            ref_stat = os.stat(reference)
+            uid = ref_stat.st_uid
+            gid = ref_stat.st_gid
+            mode = stat.S_IMODE(ref_stat.st_mode)
+        else:
+            uid = os.getuid()
+            gid = os.getgid()
+            mode = default_mode
+        temp_path = f"{path}.tmp-{uuid.uuid4().hex}"
+        try:
+            with open(temp_path, "wb") as handle:
+                handle.write(content)
+            os.chown(temp_path, uid, gid)
+            os.chmod(temp_path, mode)
+            os.replace(temp_path, path)
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+
+    def apply_rbac_auth_files(self, auth_files):
+        current_paths, target_paths = self.rbac_sync_auth_file_paths()
+        changed = False
+        for logical_name, encoded in (auth_files or {}).items():
+            target_path = target_paths.get(logical_name)
+            if not target_path:
+                continue
+            content = base64.b64decode(encoded.encode("ascii"))
+            current_content = b""
+            if os.path.isfile(target_path):
+                with open(target_path, "rb") as handle:
+                    current_content = handle.read()
+            if current_content == content:
+                continue
+            default_mode = 0o400 if logical_name.endswith("Key") else 0o644
+            self.write_rbac_managed_file(
+                target_path,
+                content,
+                current_paths.get(logical_name),
+                default_mode,
+            )
+            changed = True
+        return changed
+
+    def upsert_rbac_subjects(self, cursor, rows):
+        payload = json.dumps(rows, separators=(",", ":"), sort_keys=True)
+        cursor.execute(
+            """
+            delete from subjects
+            where id not in (
+                select id
+                from json_to_recordset(%s::json) as x(id uuid)
+            )
+            """,
+            (payload,),
+        )
+        if not rows:
+            return
+        cursor.execute(
+            """
+            insert into subjects (
+                id,
+                login,
+                is_group,
+                is_remote,
+                is_superuser,
+                display_name,
+                email,
+                is_revoked,
+                password,
+                reset_password_uuid,
+                failed_login_attempts,
+                created_at,
+                external_access_id,
+                is_immutable
+            )
+            select
+                id,
+                login,
+                is_group,
+                is_remote,
+                is_superuser,
+                display_name,
+                email,
+                is_revoked,
+                password,
+                reset_password_uuid,
+                failed_login_attempts,
+                created_at,
+                external_access_id,
+                is_immutable
+            from json_to_recordset(%s::json) as x(
+                id uuid,
+                login text,
+                is_group boolean,
+                is_remote boolean,
+                is_superuser boolean,
+                display_name text,
+                email text,
+                is_revoked boolean,
+                last_login timestamp without time zone,
+                password text,
+                reset_password_uuid uuid,
+                failed_login_attempts integer,
+                created_at timestamp without time zone,
+                external_access_id uuid,
+                is_immutable boolean
+            )
+            on conflict (id) do update
+            set
+                login = excluded.login,
+                is_group = excluded.is_group,
+                is_remote = excluded.is_remote,
+                is_superuser = excluded.is_superuser,
+                display_name = excluded.display_name,
+                email = excluded.email,
+                is_revoked = excluded.is_revoked,
+                password = excluded.password,
+                reset_password_uuid = excluded.reset_password_uuid,
+                failed_login_attempts = excluded.failed_login_attempts,
+                created_at = excluded.created_at,
+                external_access_id = excluded.external_access_id,
+                is_immutable = excluded.is_immutable
+            """,
+            (payload,),
+        )
+
+    def rbac_protected_subject_role_rows(self, cursor):
+        cursor.execute(
+            """
+            select id, 1 as rid
+            from subjects
+            where coalesce(is_superuser, false)
+              and coalesce(is_immutable, false)
+              and login in ('admin', 'api_user')
+            order by login, id
+            """
+        )
+        return [{"sid": str(row[0]), "rid": int(row[1])} for row in cursor.fetchall()]
+
+    def ensure_local_rbac_protected_rows(self, cursor):
+        protected_rows = self.rbac_protected_subject_role_rows(cursor)
+        if not protected_rows:
+            return False
+        payload = json.dumps(protected_rows, separators=(",", ":"), sort_keys=True)
+        cursor.execute(
+            """
+            insert into subject_roles (sid, rid)
+            select sid, rid
+            from json_to_recordset(%s::json) as x(
+                sid uuid,
+                rid integer
+            )
+            on conflict do nothing
+            """,
+            (payload,),
+        )
+        return True
+
+    def replace_rbac_table(self, cursor, table_name, rows):
+        payload = json.dumps(rows, separators=(",", ":"), sort_keys=True)
+        if table_name == "configuration":
+            cursor.execute("delete from configuration")
+            if rows:
+                cursor.execute(
+                    """
+                    insert into configuration (id, kind, data, created_at, modified_at)
+                    select id, kind, data, created_at, modified_at
+                    from json_to_recordset(%s::json) as x(
+                        id uuid,
+                        kind text,
+                        data jsonb,
+                        created_at timestamp with time zone,
+                        modified_at timestamp with time zone
+                    )
+                    """,
+                    (payload,),
+                )
+            return
+        if table_name == "external_access_config":
+            cursor.execute("delete from external_access_config")
+            if rows:
+                cursor.execute(
+                    """
+                    insert into external_access_config (
+                        id, config_type, display_name, creation_date, last_updated,
+                        data_element, secrets, encryption_key_id
+                    )
+                    select
+                        id,
+                        config_type,
+                        display_name,
+                        creation_date,
+                        last_updated,
+                        data_element,
+                        decode(nullif(secrets_base64, ''), 'base64'),
+                        encryption_key_id
+                    from json_to_recordset(%s::json) as x(
+                        id uuid,
+                        config_type text,
+                        display_name text,
+                        creation_date timestamp without time zone,
+                        last_updated timestamp without time zone,
+                        data_element jsonb,
+                        secrets_base64 text,
+                        encryption_key_id text
+                    )
+                    """,
+                    (payload,),
+                )
+            return
+        if table_name == "permissions":
+            cursor.execute("delete from permissions")
+            if rows:
+                cursor.execute(
+                    """
+                    insert into permissions (id, object_type, action, instance)
+                    select id, object_type, action, instance
+                    from json_to_recordset(%s::json) as x(
+                        id uuid,
+                        object_type text,
+                        action text,
+                        instance text
+                    )
+                    """,
+                    (payload,),
+                )
+            return
+        if table_name == "roles":
+            cursor.execute("delete from roles")
+            if rows:
+                cursor.execute(
+                    """
+                    insert into roles (id, display_name, description)
+                    select id, display_name, description
+                    from json_to_recordset(%s::json) as x(
+                        id integer,
+                        display_name text,
+                        description text
+                    )
+                    """,
+                    (payload,),
+                )
+            return
+        if table_name == "roles_permissions":
+            cursor.execute("delete from roles_permissions")
+            if rows:
+                cursor.execute(
+                    """
+                    insert into roles_permissions (rid, pid)
+                    select rid, pid
+                    from json_to_recordset(%s::json) as x(
+                        rid integer,
+                        pid uuid
+                    )
+                    """,
+                    (payload,),
+                )
+            return
+        if table_name == "salt":
+            cursor.execute("delete from salt")
+            if rows:
+                cursor.execute(
+                    """
+                    insert into salt (id, salt)
+                    select id, salt
+                    from json_to_recordset(%s::json) as x(
+                        id integer,
+                        salt text
+                    )
+                    """,
+                    (payload,),
+                )
+            return
+        if table_name == "subject_roles":
+            protected_rows = self.rbac_protected_subject_role_rows(cursor)
+            protected_keys = {
+                (str(row.get("sid") or ""), int(row.get("rid") or 0))
+                for row in protected_rows
+            }
+            combined_rows = list(rows)
+            existing_keys = {
+                (str(row.get("sid") or ""), int(row.get("rid") or 0))
+                for row in combined_rows
+            }
+            for row in protected_rows:
+                key = (str(row.get("sid") or ""), int(row.get("rid") or 0))
+                if key not in existing_keys:
+                    combined_rows.append(row)
+                    existing_keys.add(key)
+            payload = json.dumps(combined_rows, separators=(",", ":"), sort_keys=True)
+            cursor.execute(
+                """
+                delete from subject_roles
+                where sid not in (
+                    select id
+                    from subjects
+                    where coalesce(is_superuser, false) or coalesce(is_immutable, false)
+                )
+                """
+            )
+            if combined_rows:
+                cursor.execute(
+                    """
+                    insert into subject_roles (sid, rid)
+                    select sid, rid
+                    from json_to_recordset(%s::json) as x(
+                        sid uuid,
+                        rid integer
+                    )
+                    on conflict do nothing
+                    """,
+                    (payload,),
+                )
+            return
+        if table_name == "groupings":
+            cursor.execute("delete from groupings")
+            if rows:
+                cursor.execute(
+                    """
+                    insert into groupings (gid, ruid)
+                    select gid, ruid
+                    from json_to_recordset(%s::json) as x(
+                        gid uuid,
+                        ruid uuid
+                    )
+                    """,
+                    (payload,),
+                )
+            return
+        if table_name == "password_history":
+            cursor.execute("delete from password_history")
+            if rows:
+                cursor.execute(
+                    """
+                    insert into password_history (id, sid, replacement_date, password)
+                    select id, sid, replacement_date, password
+                    from json_to_recordset(%s::json) as x(
+                        id uuid,
+                        sid uuid,
+                        replacement_date timestamp without time zone,
+                        password text
+                    )
+                    """,
+                    (payload,),
+                )
+            return
+        if table_name == "password_reset_tokens":
+            cursor.execute("delete from password_reset_tokens")
+            if rows:
+                cursor.execute(
+                    """
+                    insert into password_reset_tokens (token, sid, requestor, expiration_date, creation_date)
+                    select token, sid, requestor, expiration_date, creation_date
+                    from json_to_recordset(%s::json) as x(
+                        token text,
+                        sid uuid,
+                        requestor uuid,
+                        expiration_date timestamp without time zone,
+                        creation_date timestamp without time zone
+                    )
+                    """,
+                    (payload,),
+                )
+            return
+        if table_name == "tokens":
+            cursor.execute(self.rbac_managed_tokens_delete_sql())
+            if rows:
+                cursor.execute(
+                    """
+                    insert into tokens (
+                        id, expiration, user_id, token, label, creation, client,
+                        description, timeout, last_active, token_hash
+                    )
+                    select
+                        id, expiration, user_id, token, label, creation, client,
+                        description, timeout, last_active, token_hash
+                    from json_to_recordset(%s::json) as x(
+                        id uuid,
+                        expiration timestamp with time zone,
+                        user_id uuid,
+                        token text,
+                        label text,
+                        creation timestamp with time zone,
+                        client text,
+                        description text,
+                        timeout text,
+                        last_active timestamp with time zone,
+                        token_hash text
+                    )
+                    """,
+                    (payload,),
+                )
+            return
+        raise RuntimeError(f"unsupported RBAC sync table {table_name}")
+
+    def reconcile_rbac_state(self, state_payload, published_at, origin_participant):
+        desired_tables = {}
+        for table_name in RBAC_SYNC_TABLE_NAMES:
+            rows = state_payload.get("tables", {}).get(table_name) or []
+            if not isinstance(rows, list):
+                raise RuntimeError(f"RBAC sync payload table {table_name} is not a list")
+            desired_tables[table_name] = rows
+
+        auth_files = dict(state_payload.get("authFiles") or {})
+        self.apply_rbac_auth_files(auth_files)
+
+        connection = self.rbac_db_connection()
+        try:
+            cursor = connection.cursor()
+            self.replace_rbac_table(cursor, "roles_permissions", [])
+            self.replace_rbac_table(cursor, "groupings", [])
+            self.replace_rbac_table(cursor, "subject_roles", [])
+            self.replace_rbac_table(cursor, "password_reset_tokens", [])
+            self.replace_rbac_table(cursor, "password_history", [])
+            self.replace_rbac_table(cursor, "tokens", [])
+            self.replace_rbac_table(cursor, "configuration", [])
+            self.replace_rbac_table(cursor, "external_access_config", [])
+            self.replace_rbac_table(cursor, "roles", [])
+            self.replace_rbac_table(cursor, "permissions", [])
+            self.upsert_rbac_subjects(cursor, desired_tables["subjects"])
+            self.replace_rbac_table(cursor, "salt", desired_tables["salt"])
+            self.replace_rbac_table(cursor, "permissions", desired_tables["permissions"])
+            self.replace_rbac_table(cursor, "roles", desired_tables["roles"])
+            self.replace_rbac_table(cursor, "configuration", desired_tables["configuration"])
+            self.replace_rbac_table(cursor, "external_access_config", desired_tables["external_access_config"])
+            self.replace_rbac_table(cursor, "roles_permissions", desired_tables["roles_permissions"])
+            self.replace_rbac_table(cursor, "subject_roles", desired_tables["subject_roles"])
+            self.replace_rbac_table(cursor, "groupings", desired_tables["groupings"])
+            self.replace_rbac_table(cursor, "password_history", desired_tables["password_history"])
+            self.replace_rbac_table(cursor, "password_reset_tokens", desired_tables["password_reset_tokens"])
+            self.replace_rbac_table(cursor, "tokens", desired_tables["tokens"])
+            connection.commit()
+            cursor.close()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+        local_state = self.read_local_rbac_state()
+        actual_hash = (local_state.get("hash") or "").strip()
+        desired_hash = (state_payload.get("hash") or "").strip()
+        updates = {
+            "scope": state_payload.get("scope") or self.rbac_sync_scope,
+            "excludedTokenLabelPrefixes": list(
+                state_payload.get("excludedTokenLabelPrefixes") or self.rbac_sync_excluded_token_label_prefixes
+            ),
+            "desiredHash": desired_hash,
+            "actualHash": actual_hash,
+            "desiredTableCount": int(state_payload.get("tableCount") or len(RBAC_SYNC_TABLE_NAMES)),
+            "actualTableCount": int(local_state.get("tableCount") or 0),
+            "desiredRowCount": int(state_payload.get("rowCount") or 0),
+            "actualRowCount": int(local_state.get("rowCount") or 0),
+            "authFileCount": int(local_state.get("authFileCount") or 0),
+            "originParticipant": origin_participant,
+            "desiredPublishedAt": int(published_at or time.time()),
+            "lastAppliedAt": int(time.time()),
+        }
+        if actual_hash == desired_hash:
+            updates.update(
+                {
+                    "state": "converged",
+                    "lastConvergedAt": int(time.time()),
+                    "lastError": "",
+                }
+            )
+        else:
+            updates.update(
+                {
+                    "state": "failed",
+                    "lastError": (
+                        "RBAC managed-domain hash mismatch after apply: "
+                        f"expected {desired_hash}, got {actual_hash or 'none'}"
+                    ),
+                }
+            )
+        self.rbac_sync_runtime_error = ""
+        self.merge_rbac_sync_state(**updates)
+
+    def handle_remote_rbac_state(self, payload):
+        if not self.rbac_sync_enabled:
+            return
+
+        origin = payload.get("origin") or {}
+        origin_participant = (origin.get("participant") or "").strip()
+        if not origin_participant or origin_participant == self.pod_name:
+            return
+
+        target_roles = payload.get("targetRoles") or []
+        if target_roles and self.relay_role not in target_roles:
+            return
+
+        state_payload = payload.get("state") or {}
+        desired_hash = (state_payload.get("hash") or "").strip()
+        if not desired_hash:
+            raise RuntimeError("RBAC sync payload is missing a hash")
+
+        published_at = int(payload.get("publishedAt") or 0)
+        current_state = self.rbac_sync_state_snapshot()
+        current_desired_hash = (current_state.get("desiredHash") or "").strip()
+        current_actual_hash = (current_state.get("actualHash") or "").strip()
+        current_published_at = int(current_state.get("desiredPublishedAt") or 0)
+        if current_published_at and published_at and published_at < current_published_at:
+            return
+        if (
+            current_published_at
+            and published_at
+            and published_at == current_published_at
+            and desired_hash == current_desired_hash
+        ):
+            return
+        if desired_hash == current_actual_hash and desired_hash == current_desired_hash:
+            self.merge_rbac_sync_state(
+                state="converged",
+                lastReceivedAt=int(time.time()),
+                lastConvergedAt=int(time.time()),
+                lastError="",
+            )
+            return
+
+        self.merge_rbac_sync_state(
+            state="pending",
+            scope=state_payload.get("scope") or self.rbac_sync_scope,
+            excludedTokenLabelPrefixes=list(
+                state_payload.get("excludedTokenLabelPrefixes") or self.rbac_sync_excluded_token_label_prefixes
+            ),
+            desiredHash=desired_hash,
+            desiredTableCount=int(state_payload.get("tableCount") or len(RBAC_SYNC_TABLE_NAMES)),
+            desiredRowCount=int(state_payload.get("rowCount") or 0),
+            authFileCount=int(state_payload.get("authFileCount") or 0),
+            originParticipant=origin_participant,
+            desiredPublishedAt=published_at or int(time.time()),
+            lastReceivedAt=int(time.time()),
+            lastError="",
+        )
+        log(
+            "Received RBAC sync intent at "
+            f"{desired_hash[:12]} from {origin_participant}"
+        )
+        self.reconcile_rbac_state(state_payload, published_at, origin_participant)
 
     def code_deploy_hook_url(self):
         return (
@@ -3180,6 +4338,19 @@ class RelayRuntime:
                 channel.basic_nack(method.delivery_tag, requeue=True)
             return
 
+        if kind == "ConductorRelayRbacState":
+            try:
+                self.handle_remote_rbac_state(payload)
+                self.set_status(lastReceivedAt=int(time.time()))
+                channel.basic_ack(method.delivery_tag)
+            except Exception as error:
+                self.rbac_sync_runtime_error = str(error)
+                self.refresh_rbac_summary()
+                log(f"Remote RBAC sync handling failed: {error}")
+                time.sleep(2)
+                channel.basic_nack(method.delivery_tag, requeue=True)
+            return
+
         channel.basic_ack(method.delivery_tag)
 
     def connect(self, bundle, username, password):
@@ -3213,6 +4384,7 @@ class RelayRuntime:
         self.next_publish = 0
         self.next_ca_publish = 0
         self.next_classifier_publish = 0
+        self.next_rbac_publish = 0
         self.set_status(connected=True, lastConnectedAt=int(time.time()), lastError="")
         log(
             "Connected to Fabric as "
@@ -3261,6 +4433,7 @@ class RelayRuntime:
         self.refresh_peer_counts()
         self.refresh_ca_peer_counts()
         self.refresh_classifier_summary()
+        self.refresh_rbac_summary()
         self.refresh_code_deploy_summary()
         self.set_status(lastPublishedAt=now)
         payload_status = self.snapshot_status()
@@ -3322,6 +4495,16 @@ class RelayRuntime:
                 log(f"Classifier sync refresh failed: {error}")
 
             try:
+                self.refresh_local_rbac_sync_state()
+            except KeyboardInterrupt:
+                raise
+            except Exception as error:
+                last_error = str(error)
+                self.rbac_sync_runtime_error = str(error)
+                self.refresh_rbac_summary()
+                log(f"RBAC sync refresh failed: {error}")
+
+            try:
                 self.refresh_local_code_deploy_status()
             except KeyboardInterrupt:
                 raise
@@ -3337,6 +4520,7 @@ class RelayRuntime:
                     self.publish_status()
                     self.publish_ca_state()
                     self.publish_classifier_state()
+                    self.publish_rbac_state()
                     self.connection.process_data_events(time_limit=1)
                 else:
                     time.sleep(1)
