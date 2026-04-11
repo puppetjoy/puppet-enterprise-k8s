@@ -138,10 +138,10 @@ This phase should prove:
 
 Current status:
 
-- relay now owns a shared-classification slice under the fixed `Conductor Shared Classification` root group
-- that subtree is created locally as needed, published through Fabric, and replayed on peer control-plane replicas with stable classifier group IDs
-- PE's built-in classifier groups remain replica-local because their IDs and host payloads are instance-specific
-- live validation in Kubernetes confirmed create and delete convergence for a child group between `pe-0` and `pe-1`
+- relay now projects a filtered managed classifier domain rooted at `All Nodes` instead of exposing a Conductor-specific user subtree
+- `All Environments` and `PE Patch Management` are synchronized by semantic anchor, so their local installer-created IDs can differ while their contents still converge
+- PE-owned local infrastructure roots such as `PE Infrastructure` remain outside the managed sync domain
+- live validation in Kubernetes confirmed create and delete convergence for managed groups between `pe-0` and `pe-1`
 - remaining PE-owned state, including RBAC-adjacent writes and session behaviour, is still outstanding
 
 ## Explicit Non-Goals

@@ -572,12 +572,6 @@ spec:
               value: {{ .Values.conductor.relay.classifierSync.auth.tokenLifetime | quote }}
             - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_TOKEN_LABEL
               value: {{ .Values.conductor.relay.classifierSync.auth.tokenLabel | quote }}
-            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_ROOT_GROUP_ID
-              value: {{ .Values.conductor.relay.classifierSync.rootGroup.id | quote }}
-            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_ROOT_GROUP_NAME
-              value: {{ .Values.conductor.relay.classifierSync.rootGroup.name | quote }}
-            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_ROOT_GROUP_DESCRIPTION
-              value: {{ .Values.conductor.relay.classifierSync.rootGroup.description | quote }}
           readinessProbe:
             exec:
               command: ["/usr/local/bin/conductor-relay", "probe", "ready"]

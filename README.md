@@ -173,7 +173,7 @@ This project is intentionally conservative right now:
 - the current Conductor foundation slice can onboard the `pe` control-plane pods and attached compiler pods into Fabric, then assemble and distribute a release trust bundle
 - when Conductor is enabled, pod readiness can follow onboarding, Fabric connectivity, and trust-bundle installation so `service/pe` and `service/pe-compiler` stop routing to stale or disconnected participants
 - when `conductor.relay.enabled=true`, control-plane and compiler pods also publish Relay status into Fabric, can gate readiness on participant trust plus local PuppetDB health, and can replay selected PuppetDB command traffic through Fabric
-- when `conductor.relay.classifierSync.enabled=true`, control-plane relays replicate a dedicated `Conductor Shared Classification` subtree through Fabric so user-managed shared groups converge across `pe` replicas without trying to clone PE's built-in infrastructure groups
+- when `conductor.relay.classifierSync.enabled=true`, control-plane relays replicate the managed user-visible classifier domain under `All Nodes`, including the `All Environments` subtree and `PE Patch Management`, while leaving PE-owned local infrastructure groups like `PE Infrastructure` out of the sync domain
 - when `conductor.gateway.enabled=true`, control-plane pods front `service/pe` PCP and orchestration traffic through a Gateway sidecar that proxies local `8142/8143` listeners, publishes Gateway status into Fabric, and removes disconnected or unhealthy control-plane replicas from service routing
 - compiler capacity can scale horizontally behind `service/pe-compiler`
 - centralized `puppet-code deploy` remains the code rollout entrypoint
@@ -182,7 +182,7 @@ This project is intentionally conservative right now:
 - increasing `controlPlane.replicaCount` alone does not produce safe active-active PE service yet; trust-aware routing is now present, but CA authority and PE-owned state still need replicated convergence
 - the repo does not yet deliver full active-active PE replication
 - the current Relay implementation now captures selected PuppetDB submit-only commands, replays facts and reports to the control-plane role, and intentionally keeps full catalogs local-only
-- classifier HA currently covers that dedicated shared subtree only; PE's built-in node groups and other replica-local classifier content remain locally owned on each control-plane replica
+- classifier HA currently covers that filtered managed domain rather than a dedicated user subtree; PE-owned local classifier groups still remain locally owned on each control-plane replica
 - the current Gateway implementation is a Fabric-aware ingress and health boundary for PCP/orchestration traffic; orchestration inventory replication and broader control-plane state convergence are still ahead
 - code rollout across Workers remains operator-initiated through Code Manager; later Fabric work may propagate deploy intent and convergence state between Workers
 - charts provide generic defaults, not a ready-made cluster profile

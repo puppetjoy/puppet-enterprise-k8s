@@ -177,11 +177,11 @@ When `conductor.relay.enabled=true` as well:
 
 When `conductor.relay.classifierSync.enabled=true`:
 
-- each control-plane relay also manages a fixed shared classifier root named `Conductor Shared Classification`
-- that root is created under `All Nodes` with the stable group ID `f6b0f884-0fb8-4f5b-9cf8-0d430711f4d2`
-- only that subtree is published into Fabric and replayed on peer control-plane replicas
-- replica-local PE infrastructure groups stay local because their classifier IDs and host-specific content are not stable across `pe` replicas
-- relay readiness can fail if the shared-classification subtree is stale or not converged for the local replica
+- each control-plane relay projects a filtered managed classifier domain from the live tree rooted at `All Nodes`
+- `All Environments` and `PE Patch Management` are treated as semantic anchors, so their local installer-created IDs can differ while their contents still converge across replicas
+- ordinary user-created node groups under `All Nodes` stay in the replicated domain with stable group IDs
+- PE-owned local infrastructure groups such as `PE Infrastructure` stay outside the replicated domain
+- relay readiness can fail if that managed classifier domain is stale or not converged for the local replica
 
 The current Relay implementation is still deliberately narrow. It now has a working selected-command write path, but it is not yet the full Conductor data plane for PCP, orchestration, or broader control-plane state convergence.
 

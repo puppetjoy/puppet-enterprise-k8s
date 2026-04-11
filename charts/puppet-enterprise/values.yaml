@@ -183,10 +183,6 @@ conductor:
         password: ""
         tokenLifetime: 15m
         tokenLabel: pe-k8s-conductor-classifier-sync
-      rootGroup:
-        id: f6b0f884-0fb8-4f5b-9cf8-0d430711f4d2
-        name: Conductor Shared Classification
-        description: Shared classification subtree replicated across PE control-plane replicas.
     resources: {}
   gateway:
     enabled: false

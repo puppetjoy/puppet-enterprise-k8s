@@ -149,26 +149,26 @@ The current flow is:
 The first PE-owned control-plane state now carried through Fabric is shared
 classification.
 
-This repo does not try to mirror the entire PE classifier hierarchy between
-replicas. PE creates replica-local infrastructure groups with instance-specific
-identifiers and host data, so blindly cloning the whole hierarchy would corrupt
-those local groups instead of making the release safer.
+The current implementation no longer exposes a Conductor-specific classifier
+root to users. Instead, Relay projects a filtered managed domain from the live
+classifier tree rooted at `All Nodes`.
 
-The current implementation therefore scopes replicated classifier state to a
-dedicated root group:
+That managed domain currently:
 
-- `Conductor Shared Classification`
-- group ID `f6b0f884-0fb8-4f5b-9cf8-0d430711f4d2`
-- parented directly under `All Nodes`
+- keeps `All Nodes` as the stable top-level anchor
+- treats `All Environments` and installer-created user-facing containers such as `PE Patch Management` as semantic anchors whose local IDs may differ per replica
+- preserves the local IDs of those semantic anchors while synchronizing their contents and descendants
+- excludes PE-owned local infrastructure roots such as `PE Infrastructure`
+- ignores and retires the legacy `Conductor Shared Classification` root when it is still present and empty
 
-Relay now ensures that root exists locally on each `pe` replica, publishes that
-subtree into Fabric, and applies create, update, and delete operations on peer
-replicas with stable classifier group IDs.
-
+Relay publishes that translated managed domain into Fabric and replays create,
+update, and delete operations on peer replicas against their local anchor IDs.
 That means:
 
-- shared user-managed classifier groups can converge across pooled `pe` replicas
-- PE-built infrastructure groups remain local to each control-plane replica
+- users can create ordinary node-group hierarchies directly under `All Nodes`
+- the `All Environments` subtree can converge even when installer-created group IDs differ between `pe` replicas
+- installer-created but user-managed containers like `PE Patch Management` remain inside the replicated domain
+- PE-owned infrastructure groups remain local to each control-plane replica
 - the mechanism stays Conductor-aligned because state moves through Fabric rather than through direct PE-to-PE API fanout
 - broader PE-owned state such as RBAC, sessions, and other console-backed writes is still ahead
 

@@ -42,12 +42,21 @@ DEFAULT_CA_SYNC_DIR = "/etc/puppetlabs/puppetserver/ca"
 DEFAULT_CODE_DEPLOY_HOOK_PATH = "/conductor/code-manager/v1/post-environment"
 DEFAULT_CODE_DEPLOY_STATE_FILENAME = "code-deploy-state.json"
 DEFAULT_CLASSIFIER_SYNC_STATE_FILENAME = "classifier-sync-state.json"
+DEFAULT_CLASSIFIER_SYNC_SCOPE = "filtered-all-nodes"
 ALL_NODES_GROUP_ID = "00000000-0000-4000-8000-000000000000"
-DEFAULT_CLASSIFIER_ROOT_GROUP_ID = "f6b0f884-0fb8-4f5b-9cf8-0d430711f4d2"
-DEFAULT_CLASSIFIER_ROOT_GROUP_NAME = "Conductor Shared Classification"
-DEFAULT_CLASSIFIER_ROOT_GROUP_DESCRIPTION = (
-    "Shared classification subtree replicated across PE control-plane replicas."
+LEGACY_CLASSIFIER_ROOT_GROUP_ID = "f6b0f884-0fb8-4f5b-9cf8-0d430711f4d2"
+LEGACY_CLASSIFIER_ROOT_GROUP_NAME = "Conductor Shared Classification"
+CLASSIFIER_LOGICAL_ALL_ENVIRONMENTS_ID = "builtin://all-environments"
+CLASSIFIER_LOGICAL_PRODUCTION_ENVIRONMENT_ID = "builtin://production-environment"
+CLASSIFIER_LOGICAL_DEVELOPMENT_ENVIRONMENT_ID = "builtin://development-environment"
+CLASSIFIER_LOGICAL_DEVELOPMENT_ONE_TIME_RUN_EXCEPTION_ID = (
+    "builtin://development-one-time-run-exception"
 )
+CLASSIFIER_LOGICAL_PE_PATCH_MANAGEMENT_ID = "builtin://pe-patch-management"
+CLASSIFIER_LOCAL_EXCLUDE_ROOT_NAMES = {
+    "PE Infrastructure",
+    LEGACY_CLASSIFIER_ROOT_GROUP_NAME,
+}
 
 
 def log(message):
@@ -275,7 +284,12 @@ def classifier_group_sort_key(group):
 
 
 def classifier_state_hash(groups):
-    normalized = [normalize_classifier_group(group) for group in groups or []]
+    normalized = []
+    for group in groups or []:
+        entry = normalize_classifier_group(group)
+        entry["id"] = ((group or {}).get("id") or entry["id"] or "").strip()
+        entry["parent"] = ((group or {}).get("parent") or entry["parent"] or "").strip()
+        normalized.append(entry)
     normalized.sort(key=classifier_group_sort_key)
     return sha256_text(stable_json({"groups": normalized}))
 
@@ -705,18 +719,7 @@ class RelayRuntime:
             "CONDUCTOR_RELAY_CLASSIFIER_SYNC_TARGET_ROLES",
             default=DEFAULT_CLASSIFIER_TARGET_ROLES,
         )
-        self.classifier_sync_root_group_id = (
-            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_ROOT_GROUP_ID", "").strip()
-            or DEFAULT_CLASSIFIER_ROOT_GROUP_ID
-        )
-        self.classifier_sync_root_group_name = (
-            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_ROOT_GROUP_NAME", "").strip()
-            or DEFAULT_CLASSIFIER_ROOT_GROUP_NAME
-        )
-        self.classifier_sync_root_group_description = (
-            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_ROOT_GROUP_DESCRIPTION", "")
-            or DEFAULT_CLASSIFIER_ROOT_GROUP_DESCRIPTION
-        )
+        self.classifier_sync_scope = DEFAULT_CLASSIFIER_SYNC_SCOPE
         self.classifier_sync_state_path = os.path.join(
             self.output_dir,
             DEFAULT_CLASSIFIER_SYNC_STATE_FILENAME,
@@ -825,8 +828,8 @@ class RelayRuntime:
             "classifierSyncReady": not self.classifier_sync_enabled,
             "classifierSyncServiceHost": self.classifier_sync_service_host if self.classifier_sync_enabled else "",
             "classifierSyncTargetRoles": list(self.classifier_sync_target_roles),
-            "classifierSyncRootGroupId": self.classifier_sync_root_group_id if self.classifier_sync_enabled else "",
-            "classifierSyncRootGroupName": self.classifier_sync_root_group_name if self.classifier_sync_enabled else "",
+            "classifierSyncScope": self.classifier_sync_scope if self.classifier_sync_enabled else "",
+            "classifierSyncExcludedRoots": sorted(CLASSIFIER_LOCAL_EXCLUDE_ROOT_NAMES),
             "classifierSyncState": "idle",
             "classifierSyncDesiredHash": "",
             "classifierSyncActualHash": "",
@@ -914,8 +917,8 @@ class RelayRuntime:
     def default_classifier_sync_state(self):
         return {
             "state": "idle",
-            "rootGroupId": self.classifier_sync_root_group_id,
-            "rootGroupName": self.classifier_sync_root_group_name,
+            "scope": self.classifier_sync_scope,
+            "excludedRoots": sorted(CLASSIFIER_LOCAL_EXCLUDE_ROOT_NAMES),
             "desiredHash": "",
             "actualHash": "",
             "desiredGroupCount": 0,
@@ -951,8 +954,10 @@ class RelayRuntime:
                     self.classifier_sync_service_host if self.classifier_sync_enabled else ""
                 ),
                 "classifierSyncTargetRoles": list(self.classifier_sync_target_roles),
-                "classifierSyncRootGroupId": state.get("rootGroupId", ""),
-                "classifierSyncRootGroupName": state.get("rootGroupName", ""),
+                "classifierSyncScope": state.get("scope", ""),
+                "classifierSyncExcludedRoots": list(
+                    state.get("excludedRoots") or sorted(CLASSIFIER_LOCAL_EXCLUDE_ROOT_NAMES)
+                ),
                 "classifierSyncState": state.get("state", "idle"),
                 "classifierSyncDesiredHash": state.get("desiredHash", ""),
                 "classifierSyncActualHash": state.get("actualHash", ""),
@@ -1015,19 +1020,134 @@ class RelayRuntime:
         self.persist_classifier_sync_state()
         return snapshot
 
-    def default_classifier_root_group(self):
-        return normalize_classifier_group(
-            {
-                "id": self.classifier_sync_root_group_id,
-                "name": self.classifier_sync_root_group_name,
-                "parent": ALL_NODES_GROUP_ID,
-                "environment": "production",
-                "environment_trumps": False,
-                "description": self.classifier_sync_root_group_description,
-                "classes": {},
-                "variables": {},
-            }
+    @staticmethod
+    def classifier_sync_preserved_logical_ids():
+        return {
+            ALL_NODES_GROUP_ID,
+            CLASSIFIER_LOGICAL_ALL_ENVIRONMENTS_ID,
+            CLASSIFIER_LOGICAL_PRODUCTION_ENVIRONMENT_ID,
+            CLASSIFIER_LOGICAL_DEVELOPMENT_ENVIRONMENT_ID,
+            CLASSIFIER_LOGICAL_DEVELOPMENT_ONE_TIME_RUN_EXCEPTION_ID,
+            CLASSIFIER_LOGICAL_PE_PATCH_MANAGEMENT_ID,
+        }
+
+    def classifier_builtin_logical_id(self, group, parent_logical_id):
+        group_id = (group.get("id") or "").strip()
+        name = (group.get("name") or "").strip()
+        if group_id == ALL_NODES_GROUP_ID and name == "All Nodes":
+            return ALL_NODES_GROUP_ID
+        if parent_logical_id == ALL_NODES_GROUP_ID:
+            if name == "All Environments":
+                return CLASSIFIER_LOGICAL_ALL_ENVIRONMENTS_ID
+            if name == "PE Patch Management":
+                return CLASSIFIER_LOGICAL_PE_PATCH_MANAGEMENT_ID
+        if parent_logical_id == CLASSIFIER_LOGICAL_ALL_ENVIRONMENTS_ID:
+            if name == "Production environment":
+                return CLASSIFIER_LOGICAL_PRODUCTION_ENVIRONMENT_ID
+            if name == "Development environment":
+                return CLASSIFIER_LOGICAL_DEVELOPMENT_ENVIRONMENT_ID
+        if (
+            parent_logical_id == CLASSIFIER_LOGICAL_DEVELOPMENT_ENVIRONMENT_ID
+            and name == "Development one-time run exception"
+        ):
+            return CLASSIFIER_LOGICAL_DEVELOPMENT_ONE_TIME_RUN_EXCEPTION_ID
+        return ""
+
+    def classifier_group_is_local_exclusion_root(self, group, parent_logical_id):
+        if parent_logical_id != ALL_NODES_GROUP_ID:
+            return False
+        group_id = (group.get("id") or "").strip()
+        name = (group.get("name") or "").strip()
+        return (
+            group_id == LEGACY_CLASSIFIER_ROOT_GROUP_ID
+            or name in CLASSIFIER_LOCAL_EXCLUDE_ROOT_NAMES
         )
+
+    def classifier_project_sync_groups(self, all_groups):
+        group_map = {
+            (group.get("id") or "").strip(): normalize_classifier_group(group)
+            for group in all_groups or []
+            if (group.get("id") or "").strip()
+        }
+        root = group_map.get(ALL_NODES_GROUP_ID)
+        if root is None:
+            raise RuntimeError("classifier groups are missing the All Nodes root")
+
+        children = {}
+        for group in group_map.values():
+            children.setdefault((group.get("parent") or "").strip(), []).append(group)
+        for entries in children.values():
+            entries.sort(key=classifier_group_sort_key)
+
+        projected = []
+        logical_to_actual = {}
+        queue_items = [(root, ALL_NODES_GROUP_ID)]
+        seen_actual_ids = set()
+        while queue_items:
+            group, parent_logical_id = queue_items.pop(0)
+            actual_id = (group.get("id") or "").strip()
+            if not actual_id or actual_id in seen_actual_ids:
+                continue
+            seen_actual_ids.add(actual_id)
+            if self.classifier_group_is_local_exclusion_root(group, parent_logical_id):
+                continue
+
+            logical_id = self.classifier_builtin_logical_id(group, parent_logical_id) or actual_id
+            entry = normalize_classifier_group(group)
+            entry["id"] = logical_id
+            entry["parent"] = parent_logical_id or (entry.get("parent") or ALL_NODES_GROUP_ID)
+            entry["sourceId"] = actual_id
+            projected.append(entry)
+            logical_to_actual[logical_id] = actual_id
+
+            for child in children.get(actual_id, []):
+                queue_items.append((child, logical_id))
+
+        return projected, logical_to_actual
+
+    def retire_legacy_classifier_root(self, all_groups):
+        if not self.classifier_sync_enabled:
+            return all_groups
+
+        group_map = {
+            (group.get("id") or "").strip(): normalize_classifier_group(group)
+            for group in all_groups or []
+            if (group.get("id") or "").strip()
+        }
+        children = {}
+        for group in group_map.values():
+            children.setdefault((group.get("parent") or "").strip(), []).append(group)
+
+        legacy_group = group_map.get(LEGACY_CLASSIFIER_ROOT_GROUP_ID)
+        if legacy_group is None:
+            for group in group_map.values():
+                if (
+                    (group.get("name") or "").strip() == LEGACY_CLASSIFIER_ROOT_GROUP_NAME
+                    and (group.get("parent") or "").strip() == ALL_NODES_GROUP_ID
+                ):
+                    legacy_group = group
+                    break
+        if legacy_group is None:
+            return all_groups
+
+        legacy_group_id = (legacy_group.get("id") or "").strip()
+        if children.get(legacy_group_id):
+            return all_groups
+
+        self.classifier_request(
+            "DELETE",
+            f"/groups/{legacy_group_id}",
+            expected_statuses={204, 404},
+        )
+        log(
+            f"Removed legacy classifier sync root {LEGACY_CLASSIFIER_ROOT_GROUP_NAME} "
+            f"({legacy_group_id})"
+        )
+        return [
+            group
+            for group in all_groups or []
+            if (group.get("id") or "").strip() != legacy_group_id
+        ]
 
     def issue_service_token(self, service_host, username, password, lifetime, label_prefix):
         if not username or not password:
@@ -1128,64 +1248,13 @@ class RelayRuntime:
                 groups.append(normalized)
         return groups
 
-    def classifier_subtree_groups(self, all_groups):
-        group_map = {
-            (group.get("id") or "").strip(): normalize_classifier_group(group)
-            for group in all_groups or []
-            if (group.get("id") or "").strip()
-        }
-        root_id = self.classifier_sync_root_group_id
-        root = group_map.get(root_id)
-        if root is None:
-            return []
-
-        children = {}
-        for group in group_map.values():
-            children.setdefault((group.get("parent") or "").strip(), []).append(group)
-        for entries in children.values():
-            entries.sort(key=classifier_group_sort_key)
-
-        ordered = []
-        queue_items = [root]
-        seen = set()
-        while queue_items:
-            group = queue_items.pop(0)
-            group_id = (group.get("id") or "").strip()
-            if not group_id or group_id in seen:
-                continue
-            seen.add(group_id)
-            ordered.append(normalize_classifier_group(group))
-            queue_items.extend(children.get(group_id, []))
-        return ordered
-
-    def ensure_classifier_root_group(self):
-        if not self.classifier_sync_enabled:
-            return self.default_classifier_root_group()
-
-        groups = self.fetch_classifier_groups()
-        for group in groups:
-            if (group.get("id") or "").strip() == self.classifier_sync_root_group_id:
-                return normalize_classifier_group(group)
-
-        root_group = self.default_classifier_root_group()
-        self.classifier_request(
-            "PUT",
-            f"/groups/{self.classifier_sync_root_group_id}",
-            payload=classifier_group_put_payload(root_group),
-            expected_statuses={200, 201},
-        )
-        log(
-            f"Created classifier sync root group "
-            f"{self.classifier_sync_root_group_name} ({self.classifier_sync_root_group_id})"
-        )
-        return root_group
-
     def read_local_classifier_state(self):
-        self.ensure_classifier_root_group()
-        groups = self.classifier_subtree_groups(self.fetch_classifier_groups())
+        all_groups = self.fetch_classifier_groups()
+        all_groups = self.retire_legacy_classifier_root(all_groups)
+        groups, _ = self.classifier_project_sync_groups(all_groups)
         payload = {
-            "rootGroupId": self.classifier_sync_root_group_id,
-            "rootGroupName": self.classifier_sync_root_group_name,
+            "scope": self.classifier_sync_scope,
+            "excludedRoots": sorted(CLASSIFIER_LOCAL_EXCLUDE_ROOT_NAMES),
             "groups": groups,
             "groupCount": len(groups),
         }
@@ -1205,8 +1274,8 @@ class RelayRuntime:
         origin_participant = (snapshot.get("originParticipant") or "").strip()
 
         updates = {
-            "rootGroupId": self.classifier_sync_root_group_id,
-            "rootGroupName": self.classifier_sync_root_group_name,
+            "scope": self.classifier_sync_scope,
+            "excludedRoots": sorted(CLASSIFIER_LOCAL_EXCLUDE_ROOT_NAMES),
             "actualHash": actual_hash,
             "actualGroupCount": int(local_state.get("groupCount") or 0),
         }
@@ -1277,6 +1346,8 @@ class RelayRuntime:
         self.next_classifier_publish = now + self.publish_interval
         self.merge_classifier_sync_state(
             state="converged",
+            scope=self.classifier_sync_scope,
+            excludedRoots=sorted(CLASSIFIER_LOCAL_EXCLUDE_ROOT_NAMES),
             desiredHash=state_hash,
             actualHash=state_hash,
             desiredGroupCount=int(state.get("groupCount") or 0),
@@ -1289,21 +1360,23 @@ class RelayRuntime:
         )
 
     def reconcile_classifier_state(self, state_payload, published_at, origin_participant):
-        desired_groups = [
-            normalize_classifier_group(group)
-            for group in (state_payload.get("groups") or [])
-        ]
+        desired_groups = []
+        for raw_group in (state_payload.get("groups") or []):
+            group = normalize_classifier_group(raw_group)
+            source_id = ((raw_group or {}).get("sourceId") or "").strip()
+            if source_id:
+                group["sourceId"] = source_id
+            desired_groups.append(group)
         if not desired_groups:
-            desired_groups = [self.default_classifier_root_group()]
+            raise RuntimeError("classifier sync payload does not contain any managed groups")
 
         desired_map = {
             (group.get("id") or "").strip(): group
             for group in desired_groups
             if (group.get("id") or "").strip()
         }
-        if self.classifier_sync_root_group_id not in desired_map:
-            desired_groups.insert(0, self.default_classifier_root_group())
-            desired_map[self.classifier_sync_root_group_id] = desired_groups[0]
+        if ALL_NODES_GROUP_ID not in desired_map:
+            raise RuntimeError("classifier sync payload is missing the All Nodes root")
 
         desired_depth_cache = {}
         desired_groups.sort(
@@ -1311,7 +1384,7 @@ class RelayRuntime:
                 classifier_group_depth(
                     desired_map,
                     group.get("id"),
-                    self.classifier_sync_root_group_id,
+                    ALL_NODES_GROUP_ID,
                     desired_depth_cache,
                 ),
                 classifier_group_sort_key(group),
@@ -1319,28 +1392,40 @@ class RelayRuntime:
         )
 
         current_groups = self.fetch_classifier_groups()
-        current_shared = self.classifier_subtree_groups(current_groups)
+        current_groups = self.retire_legacy_classifier_root(current_groups)
+        current_projected, current_logical_to_actual = self.classifier_project_sync_groups(current_groups)
         current_map = {
-            (group.get("id") or "").strip(): normalize_classifier_group(group)
-            for group in current_shared
+            (group.get("id") or "").strip(): group
+            for group in current_projected
             if (group.get("id") or "").strip()
         }
 
         for group in desired_groups:
-            group_id = (group.get("id") or "").strip()
-            if not group_id:
+            logical_id = (group.get("id") or "").strip()
+            if not logical_id or logical_id == ALL_NODES_GROUP_ID:
                 continue
+            parent_logical_id = (group.get("parent") or "").strip() or ALL_NODES_GROUP_ID
+            target_group_id = (
+                current_logical_to_actual.get(logical_id)
+                or ((group.get("sourceId") or "").strip())
+                or logical_id
+            )
+            target_parent_id = current_logical_to_actual.get(parent_logical_id) or parent_logical_id
+            materialized_group = normalize_classifier_group(group)
+            materialized_group["parent"] = target_parent_id
             self.classifier_request(
                 "PUT",
-                f"/groups/{group_id}",
-                payload=classifier_group_put_payload(group),
+                f"/groups/{target_group_id}",
+                payload=classifier_group_put_payload(materialized_group),
                 expected_statuses={200, 201},
             )
+            current_logical_to_actual[logical_id] = target_group_id
 
         extra_groups = [
             group
             for group_id, group in current_map.items()
-            if group_id not in desired_map and group_id != self.classifier_sync_root_group_id
+            if group_id not in desired_map
+            and group_id not in self.classifier_sync_preserved_logical_ids()
         ]
         current_depth_cache = {}
         extra_groups.sort(
@@ -1348,16 +1433,22 @@ class RelayRuntime:
                 -classifier_group_depth(
                     current_map,
                     group.get("id"),
-                    self.classifier_sync_root_group_id,
+                    ALL_NODES_GROUP_ID,
                     current_depth_cache,
                 ),
                 classifier_group_sort_key(group),
             )
         )
         for group in extra_groups:
+            logical_id = (group.get("id") or "").strip()
+            target_group_id = (
+                current_logical_to_actual.get(logical_id)
+                or ((group.get("sourceId") or "").strip())
+                or logical_id
+            )
             self.classifier_request(
                 "DELETE",
-                f"/groups/{group['id']}",
+                f"/groups/{target_group_id}",
                 expected_statuses={204, 404},
             )
 
@@ -1365,6 +1456,10 @@ class RelayRuntime:
         actual_hash = (local_state.get("hash") or "").strip()
         desired_hash = (state_payload.get("hash") or "").strip()
         updates = {
+            "scope": state_payload.get("scope") or self.classifier_sync_scope,
+            "excludedRoots": list(
+                state_payload.get("excludedRoots") or sorted(CLASSIFIER_LOCAL_EXCLUDE_ROOT_NAMES)
+            ),
             "desiredHash": desired_hash,
             "actualHash": actual_hash,
             "desiredGroupCount": len(desired_groups),
@@ -1386,7 +1481,7 @@ class RelayRuntime:
                 {
                     "state": "failed",
                     "lastError": (
-                        "classifier subtree hash mismatch after apply: "
+                        "classifier managed-domain hash mismatch after apply: "
                         f"expected {desired_hash}, got {actual_hash or 'none'}"
                     ),
                 }
@@ -1412,6 +1507,17 @@ class RelayRuntime:
         if not desired_hash:
             raise RuntimeError("classifier sync payload is missing a hash")
 
+        has_all_nodes_root = any(
+            ((group or {}).get("id") or "").strip() == ALL_NODES_GROUP_ID
+            for group in (state_payload.get("groups") or [])
+        )
+        if not has_all_nodes_root:
+            log(
+                "Ignoring legacy classifier sync payload at "
+                f"{desired_hash[:12]} from {origin_participant}"
+            )
+            return
+
         published_at = int(payload.get("publishedAt") or 0)
         current_state = self.classifier_sync_state_snapshot()
         current_desired_hash = (current_state.get("desiredHash") or "").strip()
@@ -1427,8 +1533,10 @@ class RelayRuntime:
 
         self.merge_classifier_sync_state(
             state="pending",
-            rootGroupId=self.classifier_sync_root_group_id,
-            rootGroupName=self.classifier_sync_root_group_name,
+            scope=state_payload.get("scope") or self.classifier_sync_scope,
+            excludedRoots=list(
+                state_payload.get("excludedRoots") or sorted(CLASSIFIER_LOCAL_EXCLUDE_ROOT_NAMES)
+            ),
             desiredHash=desired_hash,
             desiredGroupCount=int(state_payload.get("groupCount") or len(state_payload.get("groups") or [])),
             originParticipant=origin_participant,
