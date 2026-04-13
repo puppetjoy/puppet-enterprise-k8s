@@ -3,6 +3,8 @@ set -euo pipefail
 
 source /usr/local/lib/pe-k8s-common.sh
 
+ensure_postgresql_server_bin_alternatives
+
 role="${1:-${PE_K8S_ROLE:-}}"
 [ -n "${role}" ] || {
     log "PE role is required"

@@ -287,7 +287,7 @@ spec:
             - name: PE_K8S_CONDUCTOR_RBAC_SYNC_ENABLED
               value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled .Values.conductor.relay.rbacSync.enabled) | quote }}
             - name: PE_K8S_ORCHESTRATION_SERVICE_HOST
-              value: {{ ternary (include "pe.controlPlaneOrchestrationServiceName" .) (include "pe.identity" .) (gt (int .Values.controlPlane.replicaCount) 1) | quote }}
+              value: {{ ternary (include "pe.primaryServiceName" .) (include "pe.identity" .) (eq (include "pe.primaryServiceEnabled" .) "true") | quote }}
           ports:
             - name: console-svc
               containerPort: 4433
@@ -320,9 +320,9 @@ spec:
             - name: PE_K8S_ORCHESTRATOR_PCP_BROKERS_CSV
               value: {{ include "pe.orchestratorPcpBrokerCertnamesCsv" . | quote }}
             - name: PE_K8S_ORCHESTRATION_SERVICE_HOST
-              value: {{ ternary (include "pe.controlPlaneOrchestrationServiceName" .) (include "pe.identity" .) (gt (int .Values.controlPlane.replicaCount) 1) | quote }}
+              value: {{ ternary (include "pe.primaryServiceName" .) (include "pe.identity" .) (eq (include "pe.primaryServiceEnabled" .) "true") | quote }}
             - name: PE_K8S_PCP_CONTROLLER_LOCAL_HOST
-              value: {{ ternary (include "pe.controlPlaneOrchestrationServiceName" .) (include "pe.identity" .) (gt (int .Values.controlPlane.replicaCount) 1) | quote }}
+              value: {{ ternary (include "pe.primaryServiceName" .) (include "pe.identity" .) (eq (include "pe.primaryServiceEnabled" .) "true") | quote }}
           ports:
             - name: orch-pcp
               containerPort: 8142
@@ -355,7 +355,7 @@ spec:
           command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "bolt-server"]
           env:
             - name: PE_K8S_ORCHESTRATION_SERVICE_HOST
-              value: {{ ternary (include "pe.controlPlaneOrchestrationServiceName" .) (include "pe.identity" .) (gt (int .Values.controlPlane.replicaCount) 1) | quote }}
+              value: {{ ternary (include "pe.primaryServiceName" .) (include "pe.identity" .) (eq (include "pe.primaryServiceEnabled" .) "true") | quote }}
           ports:
             - name: bolt-svc
               containerPort: 62658
@@ -386,7 +386,7 @@ spec:
           command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "ace-server"]
           env:
             - name: PE_K8S_ORCHESTRATION_SERVICE_HOST
-              value: {{ ternary (include "pe.controlPlaneOrchestrationServiceName" .) (include "pe.identity" .) (gt (int .Values.controlPlane.replicaCount) 1) | quote }}
+              value: {{ ternary (include "pe.primaryServiceName" .) (include "pe.identity" .) (eq (include "pe.primaryServiceEnabled" .) "true") | quote }}
           ports:
             - name: ace-svc
               containerPort: 44633
@@ -417,7 +417,7 @@ spec:
           command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "host-action-collector"]
           env:
             - name: PE_K8S_ORCHESTRATION_SERVICE_HOST
-              value: {{ ternary (include "pe.controlPlaneOrchestrationServiceName" .) (include "pe.identity" .) (gt (int .Values.controlPlane.replicaCount) 1) | quote }}
+              value: {{ ternary (include "pe.primaryServiceName" .) (include "pe.identity" .) (eq (include "pe.primaryServiceEnabled" .) "true") | quote }}
           ports:
             - name: hac-svc
               containerPort: 8147
@@ -714,8 +714,8 @@ spec:
               mountPath: {{ .Values.conductor.gateway.outputDir | quote }}
         {{- end }}
         {{- end }}
-        {{- if and .Values.compilers.enabled (gt (int .Values.compilers.replicaCount) 0) (gt (int .Values.controlPlane.replicaCount) 1) }}
-        - name: conductor-filesync-selector
+        {{- if eq (include "pe.primaryServiceEnabled" .) "true" }}
+        - name: conductor-primary-selector
           image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
           imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
           command: ["/usr/local/bin/conductor-service-selector"]
@@ -733,75 +733,15 @@ spec:
             - name: SERVICE_SELECTOR_LABEL_SELECTOR
               value: {{ printf "app.kubernetes.io/instance=%s,app.kubernetes.io/component=pe-services" .Release.Name | quote }}
             - name: SERVICE_SELECTOR_ACTIVE_LABEL_KEY
-              value: pe-k8s.puppet.com/filesync-active
+              value: pe-k8s.puppet.com/primary-active
             - name: SERVICE_SELECTOR_ACTIVE_LABEL_VALUE
               value: "true"
             - name: SERVICE_SELECTOR_POLL_INTERVAL_SECONDS
-              value: {{ .Values.controlPlane.fileSync.selectorPollIntervalSeconds | quote }}
+              value: {{ .Values.controlPlane.primary.selectorPollIntervalSeconds | quote }}
             - name: SERVICE_SELECTOR_SERVICE_NAME
-              value: {{ include "pe.controlPlaneFileSyncServiceName" . | quote }}
+              value: {{ include "pe.primaryServiceName" . | quote }}
             - name: SERVICE_SELECTOR_TARGET_DESCRIPTION
-              value: compiler file-sync traffic
-          resources: {}
-        {{- end }}
-        {{- if gt (int .Values.controlPlane.replicaCount) 1 }}
-        - name: conductor-orchestration-selector
-          image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
-          imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
-          command: ["/usr/local/bin/conductor-service-selector"]
-          env:
-            - name: SERVICE_SELECTOR_POD_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-            - name: SERVICE_SELECTOR_POD_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-            - name: SERVICE_SELECTOR_STATEFULSET_NAME
-              value: {{ include "pe.controlPlaneStatefulSetName" . | quote }}
-            - name: SERVICE_SELECTOR_LABEL_SELECTOR
-              value: {{ printf "app.kubernetes.io/instance=%s,app.kubernetes.io/component=pe-services" .Release.Name | quote }}
-            - name: SERVICE_SELECTOR_ACTIVE_LABEL_KEY
-              value: pe-k8s.puppet.com/orchestration-active
-            - name: SERVICE_SELECTOR_ACTIVE_LABEL_VALUE
-              value: "true"
-            - name: SERVICE_SELECTOR_POLL_INTERVAL_SECONDS
-              value: {{ .Values.controlPlane.orchestration.selectorPollIntervalSeconds | quote }}
-            - name: SERVICE_SELECTOR_SERVICE_NAME
-              value: {{ include "pe.controlPlaneOrchestrationServiceName" . | quote }}
-            - name: SERVICE_SELECTOR_TARGET_DESCRIPTION
-              value: orchestration and PCP traffic
-          resources: {}
-        {{- end }}
-        {{- if eq (include "pe.consoleStickyEnabled" .) "true" }}
-        - name: conductor-console-selector
-          image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
-          imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
-          command: ["/usr/local/bin/conductor-service-selector"]
-          env:
-            - name: SERVICE_SELECTOR_POD_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-            - name: SERVICE_SELECTOR_POD_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-            - name: SERVICE_SELECTOR_STATEFULSET_NAME
-              value: {{ include "pe.controlPlaneStatefulSetName" . | quote }}
-            - name: SERVICE_SELECTOR_LABEL_SELECTOR
-              value: {{ printf "app.kubernetes.io/instance=%s,app.kubernetes.io/component=pe-services" .Release.Name | quote }}
-            - name: SERVICE_SELECTOR_ACTIVE_LABEL_KEY
-              value: pe-k8s.puppet.com/console-active
-            - name: SERVICE_SELECTOR_ACTIVE_LABEL_VALUE
-              value: "true"
-            - name: SERVICE_SELECTOR_POLL_INTERVAL_SECONDS
-              value: {{ .Values.controlPlane.console.selectorPollIntervalSeconds | quote }}
-            - name: SERVICE_SELECTOR_SERVICE_NAME
-              value: {{ include "pe.consoleServiceName" . | quote }}
-            - name: SERVICE_SELECTOR_TARGET_DESCRIPTION
-              value: console traffic
+              value: stable control-plane traffic
           resources: {}
         {{- end }}
       volumes:

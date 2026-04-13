@@ -108,7 +108,7 @@ The current repo now has the first Gateway slice wired into the control-plane ru
 - Gateway reuses the pod's Warden-issued onboarding bundle to join Fabric on its own queue, publishes local Gateway health into Fabric, and stores fresh peer Gateway snapshots locally
 - Gateway readiness is tied to participant trust readiness plus local PCP broker and orchestration health, which makes `service/pe` drain stale or isolated control-plane replicas
 
-This is still not the whole Gateway design. The current implementation establishes service ownership, trust-aware readiness, selector-backed routing through an internal `pe-orchestration` service, and validated task/plan failover on the PCP/orchestration ingress path. The current evidence suggests that `pe-inventory` backs saved connection inventory rather than live PCP broker session state, so an empty `pe-inventory` database during certname-driven PCP execution is not itself a replication failure. Broader PCP semantics still are not mediated through Fabric.
+This is still not the whole Gateway design. The current implementation establishes service ownership, trust-aware readiness, selector-backed routing through an internal `pe-primary` service, and validated task/plan failover on the PCP/orchestration ingress path. The current evidence suggests that `pe-inventory` backs saved connection inventory rather than live PCP broker session state, so an empty `pe-inventory` database during certname-driven PCP execution is not itself a replication failure. Broader PCP semantics still are not mediated through Fabric.
 
 ## Code Deployment
 
@@ -132,7 +132,7 @@ Worker are not. Relay therefore records the origin Worker file-sync metadata
 for operator context, but it gates readiness on deploy-signature convergence.
 
 The current runtime also keeps compiler file-sync fetches off pooled
-`service/pe` by routing them through an internal `pe-filesync` service that
+`service/pe` by routing them through an internal `pe-primary` service that
 selects one healthy control-plane replica at a time. That is a tactical
 compiler-facing safeguard while PE file-sync object ownership is still
 instance-local. It is not a permanent topology goal or a SPOG requirement.
@@ -190,7 +190,7 @@ That means:
 - local-auth users, roles, role bindings, and normal user tokens can converge between `pe` replicas
 - a token issued on one control-plane replica can become valid on its peer without shared storage
 - the replicated RBAC domain remains authoritative enough for readiness while leaving replica-local operator diagnostics outside the convergence token
-- web console sessions remain local to the selected `pe-console` replica and are intentionally kept outside the replicated domain so browser traffic can stay consistent even while replicated state converges asynchronously
+- web console sessions remain local to the selected `pe-primary` backend and are intentionally kept outside the replicated domain so browser traffic can stay consistent even while replicated state converges asynchronously
 
 ## Shared Orchestration State
 
@@ -201,7 +201,7 @@ The current implementation:
 
 - projects the managed `pe-orchestrator` and `pe-inventory` database domain through Fabric and replays it onto peer control-plane replicas
 - reserves per-replica sequence residues so replicated inserts do not collide when both replicas create local jobs
-- routes compiler PCP brokers and Bolt/orchestrator clients through a selector-backed internal `pe-orchestration` service so one healthy control-plane replica owns orchestration traffic at a time
+- routes compiler PCP brokers, Bolt/orchestrator clients, console traffic, and compiler file-sync through a selector-backed internal `pe-primary` service so one healthy control-plane replica owns those stable-backend surfaces at a time
 - keeps Gateway as the transport and health boundary on `8142` and `8143`
 - treats `pe-inventory` as persisted connection inventory for saved targets and transport parameters, not as the source of truth for live PCP-connected certnames
 
@@ -209,7 +209,7 @@ That means:
 
 - task and plan execution can survive control-plane failover without shared storage
 - orchestration job and plan state can reconverge after a replica returns
-- pooled `service/pe` does not need to own PCP/orchestration traffic until those surfaces are replica-safe
+- pooled `service/pe` does not need to own the `pe-primary` traffic class until those surfaces are replica-safe
 - an empty `pe-inventory` database during certname-driven PCP execution is currently expected
 - broader PCP mediation and any remaining inventory surfaces beyond saved connection records remain open follow-up
 

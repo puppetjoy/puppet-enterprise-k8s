@@ -14,6 +14,11 @@ canonical_service_name() {
     local name="${1:-}"
     name="${name##*/}"
     name="${name%.service}"
+    case "${name}" in
+        postgresqld)
+            name="pe-postgresql"
+            ;;
+    esac
     printf '%s\n' "${name}"
 }
 

@@ -91,6 +91,7 @@ main() {
     start_install_logging
 
     if compiler_runtime_ready && [ "${PE_COMPILER_FORCE_REINSTALL}" != "true" ]; then
+        ensure_postgresql_server_bin_alternatives
         log "Compiler runtime marker already exists; skipping compiler package install"
         exit 0
     fi
@@ -101,6 +102,7 @@ main() {
     fi
 
     install_compiler_packages
+    ensure_postgresql_server_bin_alternatives
     ensure_pe_build_metadata
     export_runtime_rootfs_artifacts
     touch "${PE_K8S_COMPILER_INSTALL_MARKER}"

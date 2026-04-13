@@ -947,6 +947,48 @@ maintain_service_control_wrappers() {
     done
 }
 
+ensure_postgresql_server_bin_alternatives() {
+    local alternatives_dir=/etc/alternatives
+    local source_dir=/opt/puppetlabs/server/apps/postgresql/14/bin
+    local name source target
+
+    ensure_dir "${alternatives_dir}"
+
+    for name in \
+        psql \
+        createdb \
+        initdb \
+        pg_ctl \
+        pg_dump \
+        pg_restore
+    do
+        source="${source_dir}/${name}"
+
+        case "${name}" in
+            psql)
+                target="${alternatives_dir}/pe-postgresql"
+                ;;
+            createdb)
+                target="${alternatives_dir}/pe-postgresql-createdb"
+                ;;
+            initdb)
+                target="${alternatives_dir}/pe-postgresql-server-initdb"
+                ;;
+            pg_ctl)
+                target="${alternatives_dir}/pe-postgresql-server-pg_ctl"
+                ;;
+            pg_dump)
+                target="${alternatives_dir}/pe-postgresql-pg_dump"
+                ;;
+            pg_restore)
+                target="${alternatives_dir}/pe-postgresql-pg_restore"
+                ;;
+        esac
+
+        ln -sfn "${source}" "${target}"
+    done
+}
+
 export_runtime_rootfs_artifacts() {
     local path
 
@@ -1050,10 +1092,14 @@ EOF
 sync_pe_service_ssl_material() {
     local cert_path="$1"
     local key_path="$2"
+    local certname="${3:-}"
     local pk8_path
     local dir
     local backup_base
     local backup_dir
+    local cert_variant_path
+    local key_variant_path
+    local pk8_variant_path
 
     require_file "${cert_path}"
     require_file "${key_path}"
@@ -1098,6 +1144,31 @@ sync_pe_service_ssl_material() {
             chown --reference="${dir}" "${dir}/pe.private_key.pk8"
             chmod 0400 "${dir}/pe.private_key.pk8"
         fi
+
+        if [ -n "${certname}" ]; then
+            cert_variant_path="${dir}/${certname}.cert.pem"
+            key_variant_path="${dir}/${certname}.private_key.pem"
+            pk8_variant_path="${dir}/${certname}.private_key.pk8"
+
+            cp -f "${cert_path}" "${cert_variant_path}"
+            cp -f "${key_path}" "${key_variant_path}"
+            cp -f "${pk8_path}" "${pk8_variant_path}"
+
+            if [ -f "${cert_variant_path}" ]; then
+                chown --reference="${dir}/pe.cert.pem" "${cert_variant_path}"
+                chmod --reference="${dir}/pe.cert.pem" "${cert_variant_path}"
+            fi
+
+            if [ -f "${key_variant_path}" ]; then
+                chown --reference="${dir}/pe.private_key.pem" "${key_variant_path}"
+                chmod --reference="${dir}/pe.private_key.pem" "${key_variant_path}"
+            fi
+
+            if [ -f "${pk8_variant_path}" ]; then
+                chown --reference="${dir}/pe.private_key.pk8" "${pk8_variant_path}"
+                chmod --reference="${dir}/pe.private_key.pk8" "${pk8_variant_path}"
+            fi
+        fi
     done < <(pe_service_ssl_targets)
 
     rm -f "${pk8_path}"
@@ -1108,7 +1179,8 @@ repair_pe_service_ssl_material() {
 
     sync_pe_service_ssl_material \
         "/etc/puppetlabs/puppet/ssl/certs/${certname}.pem" \
-        "/etc/puppetlabs/puppet/ssl/private_keys/${certname}.pem"
+        "/etc/puppetlabs/puppet/ssl/private_keys/${certname}.pem" \
+        "${certname}"
 }
 
 patch_nginx_ingress_redirects() {

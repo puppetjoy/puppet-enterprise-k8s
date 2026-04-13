@@ -33,24 +33,16 @@ pe
 {{- printf "%s-headless" (include "pe.controlPlaneStatefulSetName" .) -}}
 {{- end -}}
 
-{{- define "pe.consoleServiceName" -}}
-{{- printf "%s-console" (include "pe.fullname" .) -}}
+{{- define "pe.primaryServiceName" -}}
+{{- printf "%s-primary" (include "pe.fullname" .) -}}
 {{- end -}}
 
-{{- define "pe.consoleStickyEnabled" -}}
-{{- if or .Values.controlPlane.console.enabled (gt (int .Values.controlPlane.replicaCount) 1) -}}
+{{- define "pe.primaryServiceEnabled" -}}
+{{- if gt (int .Values.controlPlane.replicaCount) 1 -}}
 true
 {{- else -}}
 false
 {{- end -}}
-{{- end -}}
-
-{{- define "pe.controlPlaneFileSyncServiceName" -}}
-{{- printf "%s-filesync" (include "pe.fullname" .) -}}
-{{- end -}}
-
-{{- define "pe.controlPlaneOrchestrationServiceName" -}}
-{{- printf "%s-orchestration" (include "pe.fullname" .) -}}
 {{- end -}}
 
 {{- define "pe.controlPlanePodNameForIndex" -}}
@@ -91,8 +83,7 @@ false
 
 {{- define "pe.controlPlaneFrontDoorDnsNames" -}}
 {{- $identity := include "pe.identity" . -}}
-{{- $fileSyncService := include "pe.controlPlaneFileSyncServiceName" . -}}
-{{- $orchestrationService := include "pe.controlPlaneOrchestrationServiceName" . -}}
+{{- $primaryService := include "pe.primaryServiceName" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
 {{- $serviceNames := list
     $identity
@@ -100,16 +91,12 @@ false
     (printf "%s.%s.svc" $identity .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $identity .Release.Namespace)
 -}}
-{{- if and .Values.compilers.enabled (gt (int .Values.compilers.replicaCount) 0) (gt (int .Values.controlPlane.replicaCount) 1) -}}
+{{- if eq (include "pe.primaryServiceEnabled" .) "true" -}}
 {{- $serviceNames = concat $serviceNames (list
-    $fileSyncService
-    (printf "%s.%s" $fileSyncService .Release.Namespace)
-    (printf "%s.%s.svc" $fileSyncService .Release.Namespace)
-    (printf "%s.%s.svc.cluster.local" $fileSyncService .Release.Namespace)
-    $orchestrationService
-    (printf "%s.%s" $orchestrationService .Release.Namespace)
-    (printf "%s.%s.svc" $orchestrationService .Release.Namespace)
-    (printf "%s.%s.svc.cluster.local" $orchestrationService .Release.Namespace)
+    $primaryService
+    (printf "%s.%s" $primaryService .Release.Namespace)
+    (printf "%s.%s.svc" $primaryService .Release.Namespace)
+    (printf "%s.%s.svc.cluster.local" $primaryService .Release.Namespace)
 ) -}}
 {{- end -}}
 {{- $frontDoorNames := list $puppetMasterHost -}}
@@ -129,8 +116,7 @@ false
 
 {{- define "pe.controlPlaneFrontDoorDnsNamesHocon" -}}
 {{- $identity := include "pe.identity" . -}}
-{{- $fileSyncService := include "pe.controlPlaneFileSyncServiceName" . -}}
-{{- $orchestrationService := include "pe.controlPlaneOrchestrationServiceName" . -}}
+{{- $primaryService := include "pe.primaryServiceName" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
 {{- $serviceNames := list
     $identity
@@ -138,16 +124,12 @@ false
     (printf "%s.%s.svc" $identity .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $identity .Release.Namespace)
 -}}
-{{- if and .Values.compilers.enabled (gt (int .Values.compilers.replicaCount) 0) (gt (int .Values.controlPlane.replicaCount) 1) -}}
+{{- if eq (include "pe.primaryServiceEnabled" .) "true" -}}
 {{- $serviceNames = concat $serviceNames (list
-    $fileSyncService
-    (printf "%s.%s" $fileSyncService .Release.Namespace)
-    (printf "%s.%s.svc" $fileSyncService .Release.Namespace)
-    (printf "%s.%s.svc.cluster.local" $fileSyncService .Release.Namespace)
-    $orchestrationService
-    (printf "%s.%s" $orchestrationService .Release.Namespace)
-    (printf "%s.%s.svc" $orchestrationService .Release.Namespace)
-    (printf "%s.%s.svc.cluster.local" $orchestrationService .Release.Namespace)
+    $primaryService
+    (printf "%s.%s" $primaryService .Release.Namespace)
+    (printf "%s.%s.svc" $primaryService .Release.Namespace)
+    (printf "%s.%s.svc.cluster.local" $primaryService .Release.Namespace)
 ) -}}
 {{- end -}}
 {{- $frontDoorNames := list $puppetMasterHost -}}
@@ -170,8 +152,7 @@ false
 
 {{- define "pe.controlPlaneFrontDoorDnsNamesCsv" -}}
 {{- $identity := include "pe.identity" . -}}
-{{- $fileSyncService := include "pe.controlPlaneFileSyncServiceName" . -}}
-{{- $orchestrationService := include "pe.controlPlaneOrchestrationServiceName" . -}}
+{{- $primaryService := include "pe.primaryServiceName" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
 {{- $serviceNames := list
     $identity
@@ -179,16 +160,12 @@ false
     (printf "%s.%s.svc" $identity .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $identity .Release.Namespace)
 -}}
-{{- if and .Values.compilers.enabled (gt (int .Values.compilers.replicaCount) 0) (gt (int .Values.controlPlane.replicaCount) 1) -}}
+{{- if eq (include "pe.primaryServiceEnabled" .) "true" -}}
 {{- $serviceNames = concat $serviceNames (list
-    $fileSyncService
-    (printf "%s.%s" $fileSyncService .Release.Namespace)
-    (printf "%s.%s.svc" $fileSyncService .Release.Namespace)
-    (printf "%s.%s.svc.cluster.local" $fileSyncService .Release.Namespace)
-    $orchestrationService
-    (printf "%s.%s" $orchestrationService .Release.Namespace)
-    (printf "%s.%s.svc" $orchestrationService .Release.Namespace)
-    (printf "%s.%s.svc.cluster.local" $orchestrationService .Release.Namespace)
+    $primaryService
+    (printf "%s.%s" $primaryService .Release.Namespace)
+    (printf "%s.%s.svc" $primaryService .Release.Namespace)
+    (printf "%s.%s.svc.cluster.local" $primaryService .Release.Namespace)
 ) -}}
 {{- end -}}
 {{- $frontDoorNames := list $puppetMasterHost -}}

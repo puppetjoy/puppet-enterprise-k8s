@@ -27,7 +27,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ ternary (include "pe.consoleServiceName" .) (include "pe.fullname" .) (eq (include "pe.consoleStickyEnabled" .) "true") }}
+                name: {{ ternary (include "pe.primaryServiceName" .) (include "pe.fullname" .) (eq (include "pe.primaryServiceEnabled" .) "true") }}
                 port:
                   name: http
 {{- end }}

@@ -504,6 +504,8 @@ ensure_control_plane_host_certificate() {
     cert_path="/etc/puppetlabs/puppet/ssl/certs/${certname}.pem"
 
     if cert_matches_desired_dns_alt_names "${cert_path}" "${dns_alt_names}"; then
+        repair_pe_service_ssl_material "${certname}"
+        log "Host certificate for ${certname} already matches desired SANs and service SSL copies were refreshed"
         return 0
     fi
 
@@ -672,6 +674,7 @@ refresh_existing_install_state() {
     install_service_control_wrappers
     import_control_plane_ca
     copy_exported_sysconfig_into_rootfs
+    ensure_postgresql_server_bin_alternatives
     ensure_control_plane_host_certificate
     sync_puppetdb_integration_settings
     ensure_pe_build_metadata
@@ -680,6 +683,7 @@ refresh_existing_install_state() {
 }
 
 main() {
+    ensure_postgresql_server_bin_alternatives
     ensure_runtime_mounts
     start_install_logging
     stage_optional_license
@@ -697,6 +701,7 @@ main() {
 
     install_service_control_wrappers
     run_install_sequence
+    ensure_postgresql_server_bin_alternatives
     sync_puppetdb_integration_settings
     export_runtime_rootfs_artifacts
     ensure_pe_build_metadata

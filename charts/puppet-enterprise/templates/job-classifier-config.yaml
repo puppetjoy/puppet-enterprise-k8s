@@ -30,7 +30,7 @@ spec:
             - name: PE_CLASSIFIER_WAIT_TIMEOUT_SECONDS
               value: {{ .Values.compilers.classifierWaitTimeoutSeconds | quote }}
             - name: PE_CLASSIFIER_PE_SERVICE
-              value: {{ include "pe.identity" . | quote }}
+              value: {{ ternary (include "pe.primaryServiceName" .) (include "pe.identity" .) (eq (include "pe.primaryServiceEnabled" .) "true") | quote }}
             - name: PE_CLASSIFIER_COMPILER_HOST
               value: {{ include "pe.compilerAgentHost" . | quote }}
             - name: PE_CLASSIFIER_SERVER_LIST

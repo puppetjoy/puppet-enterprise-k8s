@@ -112,18 +112,17 @@ Naming follows the Helm release name:
 
 The intended access pattern is:
 
-- `service/pe` is the technical front door for PE APIs and the non-compiler Puppet Server on `8140`
-- `service/pe` also fronts the colocated PuppetDB and PostgreSQL listeners on `8081` and `5432`
-- when the control plane has more than one replica, ingress points at sticky `service/pe-console` for the console hostname, with TLS terminated by the ingress controller
+- `service/pe` is the pooled technical front door for the control-plane surfaces we currently treat as replica-safe
+- `service/pe` currently fronts PuppetDB on `8081` and Code Manager on `8170`
+- when the control plane has more than one replica, ingress points at `service/pe-primary` for the console hostname, with TLS terminated by the ingress controller
 - `service/pe-compiler` is the optional compiler-pool endpoint for catalog traffic on `8140` and PCP broker traffic on `8142`
-- when the control plane has more than one replica, an internal `pe-orchestration` ClusterIP service selects one healthy `pe` replica for PCP broker and orchestration traffic on `8142` and `8143`
-- when the control plane has more than one replica, an internal `pe-filesync` ClusterIP service selects one healthy `pe` replica for compiler file-sync traffic on `8140`
+- when the control plane has more than one replica, an internal `pe-primary` ClusterIP service selects one healthy `pe` replica for console, compiler file-sync, and PCP/orchestration traffic
 - there are no standalone `service/pe-puppetdb` or `service/pe-postgresql` objects in the current model
 - when compilers are enabled, the `classifier-config` Job updates PE's built-in `PE Agent` node group so agent catalogs use the compiler endpoint for `server_list`, `primary_uris`, and `pcp_broker_list`
 - compiler-to-compiler coordination is not a replication mechanism in this chart
 - the long-term goal is that any healthy control-plane replica behind `service/pe` can satisfy compiler-facing control-plane traffic
 - if a specific surface temporarily requires routing constraints while convergence work is incomplete, that is a tactical safeguard rather than the target model
-- `pe-filesync` is one of those tactical safeguards: compiler file-sync fetches stay pinned to one healthy control-plane replica until PE file-sync object ownership is replica-safe behind pooled `service/pe`
+- `pe-primary` is the current stable-backend safeguard: console, compiler file-sync, and orchestration traffic stay pinned to one healthy control-plane replica until those surfaces are replica-safe behind pooled `service/pe`
 
 ## Conductor Direction
 
@@ -192,11 +191,11 @@ When `conductor.relay.rbacSync.enabled=true`:
 - ephemeral per-replica activity fields such as `last_login` and token `last_active` are intentionally normalized out of the authoritative convergence token
 - relay readiness can fail if the RBAC managed domain is stale or not converged for the local replica
 
-Relay is no longer limited to the PuppetDB submit-only path. The current implementation also converges the managed orchestration database domain between control-plane replicas, while Gateway and the selector-backed internal `pe-orchestration` service keep PCP broker ownership and Bolt/orchestrator client traffic on one healthy control-plane replica at a time.
+Relay is no longer limited to the PuppetDB submit-only path. The current implementation also converges the managed orchestration database domain between control-plane replicas, while Gateway and the selector-backed internal `pe-primary` service keep PCP broker ownership and Bolt/orchestrator client traffic on one healthy control-plane replica at a time.
 
 That gives the release a real Fabric membership model without shared storage or hard-coded peer lists, and live validation now covers Bolt task execution, plan execution, and selector failover from one control-plane replica to the other. It still does not mean the release is finished as a fully pooled active-active PE control plane.
 
-CA, classification, code-deploy intent, RBAC/local-auth, and managed orchestration job state are now in place, but the browser console is intentionally treated as a sticky-consistency boundary through `service/pe-console`, PCP/orchestration traffic uses sticky `pe-orchestration`, and compiler file-sync still uses sticky `pe-filesync`. Current evidence indicates that `pe-inventory` backs saved connection inventory such as `/connections`, `/query`, and `/overwrite-connections`, not live PCP broker presence, so an empty `pe-inventory` database during certname-driven task and plan validation is expected. The open orchestration question is broader PCP mediation and any additional inventory surfaces that should converge beyond those saved connection records.
+CA, classification, code-deploy intent, RBAC/local-auth, and managed orchestration job state are now in place, but the browser console, PCP/orchestration path, and compiler file-sync path are intentionally treated as stable-backend traffic through `service/pe-primary` rather than being exposed on pooled `service/pe`. Current evidence indicates that `pe-inventory` backs saved connection inventory such as `/connections`, `/query`, and `/overwrite-connections`, not live PCP broker presence, so an empty `pe-inventory` database during certname-driven task and plan validation is expected. The open orchestration question is broader PCP mediation and any additional inventory surfaces that should converge beyond those saved connection records.
 
 ## Code Manager
 

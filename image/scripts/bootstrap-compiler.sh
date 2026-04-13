@@ -3,6 +3,8 @@ set -euo pipefail
 
 source /usr/local/lib/pe-k8s-common.sh
 
+ensure_postgresql_server_bin_alternatives
+
 PE_COMPILER_CERTNAME="${PE_COMPILER_CERTNAME:-}"
 PE_COMPILER_POD_NAME="${PE_COMPILER_POD_NAME:-${HOSTNAME:-}}"
 PE_COMPILER_NAMESPACE="${PE_COMPILER_NAMESPACE:-default}"

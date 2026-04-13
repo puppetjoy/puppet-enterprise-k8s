@@ -81,7 +81,7 @@ Current status:
 
 - an optional `conductor-gateway` sidecar now runs inside the PE control-plane workload shape
 - `service/pe` and `pe-headless` can target Gateway listener ports for `8142` PCP broker traffic and `8143` orchestration traffic instead of targeting the orchestration container directly
-- multi-replica control planes now also expose a sticky internal `pe-orchestration` service so compiler brokers and Bolt/orchestrator clients share one healthy control-plane owner for PCP/orchestration traffic
+- multi-replica control planes now expose a selector-backed internal `pe-primary` service so console, compiler file-sync, compiler brokers, and Bolt/orchestrator clients share one healthy control-plane backend for stable traffic
 - Gateway proxies those TCP flows to the pod-local orchestration service, publishes Gateway status into Fabric, and stores fresh peer Gateway snapshots locally
 - Gateway readiness is tied to participant trust readiness plus local PCP broker and orchestration health, so stale or disconnected control-plane replicas fall out of service routing
 - live validation now covers Bolt task execution, plan execution, and selector failover from `pe-1` to `pe-0`, with compiler brokers reconnecting to the surviving control-plane replica
@@ -106,7 +106,7 @@ Current POC status:
 - verified live in Kubernetes with a deploy triggered on `pe-0` and replayed on `pe-1`
 - relay readiness now drains a Worker until its local deploy signature matches the desired deploy signature
 - origin file-sync commit metadata is preserved for visibility, but cross-Worker equality is based on deploy signature because PE file-sync commit IDs are instance-local
-- compiler runtime now patches PE file-sync client URLs to an internal `pe-filesync` service that selects one healthy control-plane replica at a time, which avoids pooled `service/pe` file-sync/object mismatches during control-plane convergence
+- compiler runtime now patches PE file-sync client URLs to the internal `pe-primary` service, which avoids pooled `service/pe` file-sync/object mismatches during control-plane convergence
 
 ## Phase 5: Worker And SPOG Topologies
 
