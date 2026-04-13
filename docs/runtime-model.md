@@ -114,7 +114,7 @@ The intended access pattern is:
 
 - `service/pe` is the technical front door for PE APIs and the non-compiler Puppet Server on `8140`
 - `service/pe` also fronts the colocated PuppetDB and PostgreSQL listeners on `8081` and `5432`
-- ingress points at `service/pe` for the console hostname, with TLS terminated by the ingress controller
+- when the control plane has more than one replica, ingress points at sticky `service/pe-console` for the console hostname, with TLS terminated by the ingress controller
 - `service/pe-compiler` is the optional compiler-pool endpoint for catalog traffic on `8140` and PCP broker traffic on `8142`
 - when the control plane has more than one replica, an internal `pe-filesync` ClusterIP service selects one healthy `pe` replica for compiler file-sync traffic on `8140`
 - there are no standalone `service/pe-puppetdb` or `service/pe-postgresql` objects in the current model
@@ -195,7 +195,7 @@ The current Relay implementation is still deliberately narrow. It now has a work
 
 That gives the release a real Fabric membership model without shared storage or hard-coded peer lists.
 It does not yet mean the release is finished as a fully pooled active-active PE control plane.
-CA, classification, code-deploy intent, and RBAC/local-auth convergence are now in place, but console session behaviour and some tactical routing exceptions still remain.
+CA, classification, code-deploy intent, and RBAC/local-auth convergence are now in place, but the browser console is intentionally treated as a sticky-consistency boundary through `service/pe-console` rather than a pooled active-active surface. Tactical routing exceptions such as `pe-filesync` still remain.
 
 ## Code Manager
 

@@ -180,7 +180,7 @@ This project is intentionally conservative right now:
 - centralized `puppet-code deploy` remains the code rollout entrypoint
 - separate Helm releases are independent sandboxes, not synchronization peers
 - active-active HA work is Conductor-aligned: Fabric, Relay, Gateway, and Warden
-- increasing `controlPlane.replicaCount` alone still does not deliver a fully pooled PE console UX; CA, classification, code-deploy intent, and RBAC/local-auth state now converge, but console sessions still rely on `pe-console` stickiness and compiler file-sync still uses the tactical `pe-filesync` selector
+- when the control plane has more than one replica, the chart now deliberately routes the web console through sticky `pe-console` service selection instead of trying to pool browser traffic behind `service/pe`; CA, classification, code-deploy intent, and RBAC/local-auth state still converge underneath that UI boundary, and compiler file-sync still uses the tactical `pe-filesync` selector
 - the repo does not yet deliver full active-active PE replication
 - the current Relay implementation now captures selected PuppetDB submit-only commands, replays facts and reports to the control-plane role, and intentionally keeps full catalogs local-only
 - classifier HA currently covers that filtered managed domain rather than a dedicated user subtree; PE-owned local classifier groups still remain locally owned on each control-plane replica

@@ -121,7 +121,7 @@ spec:
       port: 8140
       targetPort: puppetserver
 {{- end }}
-{{- if .Values.controlPlane.console.enabled }}
+{{- if eq (include "pe.consoleStickyEnabled" .) "true" }}
 ---
 apiVersion: v1
 kind: Service

@@ -190,7 +190,7 @@ That means:
 - local-auth users, roles, role bindings, and normal user tokens can converge between `pe` replicas
 - a token issued on one control-plane replica can become valid on its peer without shared storage
 - the replicated RBAC domain remains authoritative enough for readiness while leaving replica-local operator diagnostics outside the convergence token
-- web console sessions are still local to the selected `pe-console` replica and are not yet part of the replicated domain
+- web console sessions remain local to the selected `pe-console` replica and are intentionally kept outside the replicated domain so browser traffic can stay consistent even while replicated state converges asynchronously
 
 ## Non-Goals
 

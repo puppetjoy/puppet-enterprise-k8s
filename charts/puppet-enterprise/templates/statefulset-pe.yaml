@@ -719,7 +719,7 @@ spec:
               value: compiler file-sync traffic
           resources: {}
         {{- end }}
-        {{- if .Values.controlPlane.console.enabled }}
+        {{- if eq (include "pe.consoleStickyEnabled" .) "true" }}
         - name: conductor-console-selector
           image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
           imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}

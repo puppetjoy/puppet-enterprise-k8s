@@ -37,6 +37,14 @@ pe
 {{- printf "%s-console" (include "pe.fullname" .) -}}
 {{- end -}}
 
+{{- define "pe.consoleStickyEnabled" -}}
+{{- if or .Values.controlPlane.console.enabled (gt (int .Values.controlPlane.replicaCount) 1) -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
 {{- define "pe.controlPlaneFileSyncServiceName" -}}
 {{- printf "%s-filesync" (include "pe.fullname" .) -}}
 {{- end -}}
