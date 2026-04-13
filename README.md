@@ -10,12 +10,13 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 - Runs PostgreSQL, PuppetDB, the non-compiler Puppet Server, and PE edge/API services in a stateful `pe` control-plane pod set
 - Supports an optional compiler pool with per-replica non-shared PVCs, local PostgreSQL/PuppetDB, file-sync/PuppetDB-based readiness, compiler-side PCP brokers, and an internal file-sync service selector for multi-replica control planes
 - Supports optional Conductor participants on the control-plane and compiler pods via Warden-issued onboarding bundles, release trust bundles, participant readiness, and a separate Fabric hub
-- Supports an optional Conductor Relay sidecar that publishes local PuppetDB health into Fabric, records peer Relay status snapshots, and captures selected PuppetDB submit-only commands for replay to control-plane peers
+- Supports an optional Conductor Relay sidecar that publishes local health into Fabric, records peer Relay status snapshots, replays selected PuppetDB submit-only commands, and converges replicated control-plane state such as classification, RBAC/local-auth, code-deploy intent, and managed orchestration data
 - Supports multiple release-scoped PE instances in one cluster for isolated development and validation
+- Uses sticky internal `pe-console`, `pe-orchestration`, and `pe-filesync` services when a multi-replica control plane needs a tactical routing boundary
 - Treats one Helm release, not multiple separate releases, as the future active-active replication domain
 - Keeps compilers attached to one owning PE instance; compilers are not a replication mesh
 - Supports optional ingress exposure, Code Manager configuration, and a validation `puppet-agent` chart with explicit certificate signing
-- Still evolving toward a Conductor-aligned active-active control plane, upgrade orchestration, and hardening
+- Still evolving toward a Conductor-aligned active-active control plane, broader control-plane state convergence, and hardening
 
 ## How It Relates To Traditional PE
 
@@ -30,6 +31,12 @@ not cross instance-local PE file-sync object boundaries during convergence.
 This is a tactical safeguard for the current implementation, not a change to
 the long-term goal of keeping `service/pe` as the pooled control-plane front
 door.
+
+When the control plane has more than one replica, PCP broker and orchestration
+traffic also use an internal `pe-orchestration` ClusterIP service. That service
+selects one healthy control-plane replica at a time so compiler brokers and
+Bolt/orchestrator clients share the same live broker owner during normal
+operation and failover.
 
 For the deeper runtime and operator model, see:
 
@@ -175,6 +182,7 @@ This project is intentionally conservative right now:
 - when `conductor.relay.enabled=true`, control-plane and compiler pods also publish Relay status into Fabric, can gate readiness on participant trust plus local PuppetDB health, and can replay selected PuppetDB command traffic through Fabric
 - when `conductor.relay.classifierSync.enabled=true`, control-plane relays replicate the managed user-visible classifier domain under `All Nodes`, including the `All Environments` subtree and `PE Patch Management`, while leaving PE-owned local infrastructure groups like `PE Infrastructure` out of the sync domain
 - when `conductor.gateway.enabled=true`, control-plane pods front `service/pe` PCP and orchestration traffic through a Gateway sidecar that proxies local `8142/8143` listeners, publishes Gateway status into Fabric, and removes disconnected or unhealthy control-plane replicas from service routing
+- when the control plane has more than one replica, the chart deliberately routes PCP broker and orchestration traffic through sticky `pe-orchestration` service selection instead of pooling `8142/8143` directly behind `service/pe`; live validation now covers task execution, plan execution, and selector failover between `pe` replicas
 - when `conductor.relay.rbacSync.enabled=true`, control-plane relays replicate PE RBAC and local-auth managed state through Fabric, share console token-signing and SAML material, and intentionally treat per-replica login activity such as `last_login` as non-authoritative
 - compiler capacity can scale horizontally behind `service/pe-compiler`
 - centralized `puppet-code deploy` remains the code rollout entrypoint
@@ -184,7 +192,7 @@ This project is intentionally conservative right now:
 - the repo does not yet deliver full active-active PE replication
 - the current Relay implementation now captures selected PuppetDB submit-only commands, replays facts and reports to the control-plane role, and intentionally keeps full catalogs local-only
 - classifier HA currently covers that filtered managed domain rather than a dedicated user subtree; PE-owned local classifier groups still remain locally owned on each control-plane replica
-- the current Gateway implementation is a Fabric-aware ingress and health boundary for PCP/orchestration traffic; orchestration inventory replication and broader control-plane state convergence are still ahead
+- the current Gateway and Relay implementation now covers sticky PCP/orchestration routing, managed orchestration job-state convergence, and broker failover between control-plane replicas; `pe-inventory` persistence and broader PCP mediation are still ahead
 - code rollout across Workers remains operator-initiated through Code Manager; later Fabric work may propagate deploy intent and convergence state between Workers
 - charts provide generic defaults, not a ready-made cluster profile
 - operators are expected to supply environment-specific values locally

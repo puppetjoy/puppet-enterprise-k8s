@@ -1,4 +1,4 @@
-{{- if or (eq (include "pe.consoleStickyEnabled" .) "true") (and .Values.compilers.enabled (gt (int .Values.compilers.replicaCount) 0) (gt (int .Values.controlPlane.replicaCount) 1)) }}
+{{- if or (eq (include "pe.consoleStickyEnabled" .) "true") (gt (int .Values.controlPlane.replicaCount) 1) }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

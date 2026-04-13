@@ -209,6 +209,239 @@ RBAC_SYNC_VOLATILE_FIELDS = {
     "subjects": {"last_login"},
     "tokens": {"last_active"},
 }
+DEFAULT_ORCHESTRATION_TARGET_ROLES = [
+    "control-plane",
+]
+DEFAULT_ORCHESTRATION_SYNC_STATE_FILENAME = "orchestration-sync-state.json"
+DEFAULT_ORCHESTRATION_SYNC_SCOPE = "pe-orchestration-managed-domain"
+DEFAULT_ORCHESTRATION_SYNC_ORCHESTRATOR_CONF_PATH = (
+    "/etc/puppetlabs/orchestration-services/conf.d/orchestrator.conf"
+)
+DEFAULT_ORCHESTRATION_SYNC_INVENTORY_CONF_PATH = (
+    "/etc/puppetlabs/orchestration-services/conf.d/inventory.conf"
+)
+DEFAULT_ORCHESTRATION_SYNC_SEQUENCE_STRIDE = 1024
+ORCHESTRATION_SYNC_DATABASE_SPECS = {
+    "orchestrator": {
+        "tables": {
+            "encrypted_data": {
+                "columns": [
+                    ("id", "integer"),
+                    ("encryption_key_id", "text"),
+                    ("encrypted_data", "text"),
+                ],
+                "orderBy": ["id"],
+            },
+            "plan_jobs": {
+                "columns": [
+                    ("id", "integer"),
+                    ("plan_name", "text"),
+                    ("description", "text"),
+                    ("result", "jsonb"),
+                    ("status", "text"),
+                    ("parameters", "jsonb"),
+                    ("owner", "jsonb"),
+                    ("created_timestamp", "timestamp with time zone"),
+                    ("finished_timestamp", "timestamp with time zone"),
+                    ("sensitive", "text[]"),
+                    ("environment", "text"),
+                    ("project_id", "text"),
+                    ("ref", "text"),
+                    ("userdata", "jsonb"),
+                    ("timeout", "integer"),
+                    ("encrypted_input_id", "integer"),
+                ],
+                "orderBy": ["id"],
+            },
+            "jobs": {
+                "columns": [
+                    ("id", "integer"),
+                    ("environment", "text"),
+                    ("owner", "jsonb"),
+                    ("options", "jsonb"),
+                    ("command", "text"),
+                    ("files", "jsonb"),
+                    ("metadata", "jsonb"),
+                    ("description", "text"),
+                    ("plan_job_id", "integer"),
+                    ("project_id", "text"),
+                    ("ref", "text"),
+                    ("userdata", "jsonb"),
+                ],
+                "orderBy": ["id"],
+            },
+            "job_statuses": {
+                "columns": [
+                    ("id", "integer"),
+                    ("state", "text"),
+                    ("changed_by", "text"),
+                    ("enter_time", "timestamp without time zone"),
+                    ("exit_time", "timestamp without time zone"),
+                    ("job_id", "integer"),
+                ],
+                "orderBy": ["id"],
+            },
+            "nodes": {
+                "columns": [
+                    ("id", "integer"),
+                    ("name", "text"),
+                    ("transaction_uuid", "uuid"),
+                    ("state", "text"),
+                    ("job_id", "integer"),
+                    ("start_timestamp", "timestamp with time zone"),
+                    ("finish_timestamp", "timestamp with time zone"),
+                    ("transport", "text"),
+                ],
+                "orderBy": ["id"],
+            },
+            "events": {
+                "columns": [
+                    ("id", "integer"),
+                    ("type", "text"),
+                    ("details", "jsonb"),
+                    ("timestamp", "timestamp with time zone"),
+                    ("job_id", "integer"),
+                    ("encrypted_output_id", "integer"),
+                ],
+                "orderBy": ["id"],
+            },
+            "permitted_nodes_for_plan": {
+                "columns": [
+                    ("id", "integer"),
+                    ("permitted_nodes", "text[]"),
+                    ("all_nodes", "boolean"),
+                    ("plan_id", "integer"),
+                ],
+                "orderBy": ["id"],
+            },
+            "plan_events": {
+                "columns": [
+                    ("id", "integer"),
+                    ("type", "text"),
+                    ("details", "jsonb"),
+                    ("timestamp", "timestamp with time zone"),
+                    ("plan_id", "integer"),
+                ],
+                "orderBy": ["id"],
+            },
+            "sources": {
+                "columns": [
+                    ("id", "uuid"),
+                    ("name", "text"),
+                    ("project_ref", "text"),
+                    ("last_synced", "timestamp with time zone"),
+                    ("encryption_key_id", "text"),
+                    ("source_type", "text"),
+                    ("source_data", "text"),
+                    ("target_count", "integer"),
+                    ("description", "text"),
+                ],
+                "orderBy": ["name", "id"],
+            },
+            "targets": {
+                "columns": [
+                    ("name", "text"),
+                    ("uri", "text"),
+                    ("config", "text"),
+                    ("encryption_key_id", "text"),
+                    ("source_id", "uuid"),
+                    ("active", "boolean"),
+                    ("created_at", "timestamp with time zone"),
+                    ("last_synced", "timestamp with time zone"),
+                ],
+                "orderBy": ["source_id", "name", "uri"],
+            },
+        },
+        "clearOrder": [
+            "nodes",
+            "job_statuses",
+            "events",
+            "jobs",
+            "permitted_nodes_for_plan",
+            "plan_events",
+            "targets",
+            "plan_jobs",
+            "sources",
+            "encrypted_data",
+        ],
+        "loadOrder": [
+            "encrypted_data",
+            "plan_jobs",
+            "jobs",
+            "job_statuses",
+            "nodes",
+            "events",
+            "permitted_nodes_for_plan",
+            "plan_events",
+            "sources",
+            "targets",
+        ],
+        "sequenceColumns": [
+            ("encrypted_data", "id"),
+            ("plan_jobs", "id"),
+            ("jobs", "id"),
+            ("job_statuses", "id"),
+            ("nodes", "id"),
+            ("events", "id"),
+            ("permitted_nodes_for_plan", "id"),
+            ("plan_events", "id"),
+        ],
+    },
+    "inventory": {
+        "tables": {
+            "parameters": {
+                "columns": [
+                    ("id", "uuid"),
+                    ("parameters", "jsonb"),
+                ],
+                "orderBy": ["id"],
+            },
+            "sensitive_parameters": {
+                "columns": [
+                    ("id", "uuid"),
+                    ("encryption_key_id", "text"),
+                    ("parameters", "text"),
+                ],
+                "orderBy": ["id"],
+            },
+            "connections": {
+                "columns": [
+                    ("id", "uuid"),
+                    ("type", "text"),
+                    ("create_time", "timestamp with time zone"),
+                    ("parameters", "uuid"),
+                    ("sensitive_parameters", "uuid"),
+                    ("certnames", "text[]"),
+                    ("undiscoverable", "boolean"),
+                ],
+                "orderBy": ["id"],
+            },
+            "connection_metadata": {
+                "columns": [
+                    ("id", "uuid"),
+                    ("connection_id", "uuid"),
+                    ("metadata", "jsonb"),
+                    ("created_at", "timestamp with time zone"),
+                    ("updated_at", "timestamp with time zone"),
+                ],
+                "orderBy": ["id"],
+            },
+        },
+        "clearOrder": [
+            "connection_metadata",
+            "connections",
+            "sensitive_parameters",
+            "parameters",
+        ],
+        "loadOrder": [
+            "parameters",
+            "sensitive_parameters",
+            "connections",
+            "connection_metadata",
+        ],
+        "sequenceColumns": [],
+    },
+}
 DEFAULT_CONSOLE_WEBSERVER_CONF_PATH = "/etc/puppetlabs/console-services/conf.d/webserver.conf"
 DEFAULT_AUTH_BARRIER_SESSION_COOKIE_NAME = "__HOST-pl_sssi"
 DEFAULT_AUTH_BARRIER_AUTH_COOKIE_NAME = "__HOST-pl_ssti"
@@ -292,6 +525,26 @@ def sha256_bytes(value):
 
 def stable_json(value):
     return json.dumps(value, separators=(",", ":"), sort_keys=True)
+
+
+def sql_identifier(value):
+    identifier = (value or "").strip()
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", identifier):
+        raise RuntimeError(f"invalid SQL identifier: {value!r}")
+    return f'"{identifier}"'
+
+
+def pod_ordinal(value):
+    match = re.search(r"-(\d+)$", (value or "").strip())
+    return int(match.group(1)) if match else 0
+
+
+def sequence_value_for_residue(minimum_value, stride, residue):
+    stride = max(int(stride or 1), 1)
+    residue = max(int(residue or 1), 1)
+    minimum = max(int(minimum_value or 0), residue)
+    steps = max(0, (minimum - residue + stride - 1) // stride)
+    return residue + steps * stride
 
 
 def participant_secret_name(prefix, segment_name, participant_name, suffix):
@@ -605,6 +858,8 @@ def relay_status_ready(status):
     if status.get("classifierSyncEnabled", False) and not status.get("classifierSyncReady", False):
         return False
     if status.get("rbacSyncEnabled", False) and not status.get("rbacSyncReady", False):
+        return False
+    if status.get("orchestrationSyncEnabled", False) and not status.get("orchestrationSyncReady", False):
         return False
     if status.get("authBarrierEnabled", False) and not status.get("authBarrierReady", False):
         return False
@@ -1168,6 +1423,36 @@ class RelayRuntime:
             "CONDUCTOR_RELAY_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES",
             default=DEFAULT_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES,
         )
+        self.orchestration_sync_enabled = env_bool(
+            "CONDUCTOR_RELAY_ORCHESTRATION_SYNC_ENABLED",
+            False,
+        )
+        self.orchestration_sync_target_roles = env_csv(
+            "CONDUCTOR_RELAY_ORCHESTRATION_SYNC_TARGET_ROLES",
+            default=DEFAULT_ORCHESTRATION_TARGET_ROLES,
+        )
+        self.orchestration_sync_scope = DEFAULT_ORCHESTRATION_SYNC_SCOPE
+        self.orchestration_sync_state_path = os.path.join(
+            self.output_dir,
+            DEFAULT_ORCHESTRATION_SYNC_STATE_FILENAME,
+        )
+        self.orchestration_sync_orchestrator_conf_path = (
+            os.environ.get("CONDUCTOR_RELAY_ORCHESTRATION_SYNC_ORCHESTRATOR_CONF_PATH", "").strip()
+            or DEFAULT_ORCHESTRATION_SYNC_ORCHESTRATOR_CONF_PATH
+        )
+        self.orchestration_sync_inventory_conf_path = (
+            os.environ.get("CONDUCTOR_RELAY_ORCHESTRATION_SYNC_INVENTORY_CONF_PATH", "").strip()
+            or DEFAULT_ORCHESTRATION_SYNC_INVENTORY_CONF_PATH
+        )
+        self.orchestration_sync_sequence_stride = env_int(
+            "CONDUCTOR_RELAY_ORCHESTRATION_SYNC_SEQUENCE_STRIDE",
+            DEFAULT_ORCHESTRATION_SYNC_SEQUENCE_STRIDE,
+        )
+        self.orchestration_sync_sequence_residue = pod_ordinal(self.pod_name) + 1
+        if self.orchestration_sync_sequence_stride < self.orchestration_sync_sequence_residue:
+            raise RuntimeError(
+                "orchestration sequence stride must be greater than or equal to the pod residue"
+            )
         self.ca_sync_enabled = env_bool("CONDUCTOR_RELAY_CA_SYNC_ENABLED", False)
         self.ca_sync_dir = (
             os.environ.get("CONDUCTOR_RELAY_CA_SYNC_DIR", "").strip()
@@ -1263,6 +1548,7 @@ class RelayRuntime:
         self.code_deploy_runtime_error = ""
         self.classifier_sync_runtime_error = ""
         self.rbac_sync_runtime_error = ""
+        self.orchestration_sync_runtime_error = ""
         self.code_deploy_suppressions = {}
         self.code_deploy_queue = queue.Queue()
         self.code_deploy_queued = set()
@@ -1275,6 +1561,9 @@ class RelayRuntime:
         self.rbac_sync_state = self.default_rbac_sync_state()
         self.next_rbac_publish = 0
         self.last_published_rbac_hash = ""
+        self.orchestration_sync_state = self.default_orchestration_sync_state()
+        self.next_orchestration_publish = 0
+        self.last_published_orchestration_hash = ""
 
         self.connection = None
         self.channel = None
@@ -1370,6 +1659,30 @@ class RelayRuntime:
             "rbacSyncLastAppliedAt": 0,
             "rbacSyncLastConvergedAt": 0,
             "rbacSyncLastError": "",
+            "orchestrationSyncEnabled": self.orchestration_sync_enabled,
+            "orchestrationSyncReady": not self.orchestration_sync_enabled,
+            "orchestrationSyncTargetRoles": list(self.orchestration_sync_target_roles),
+            "orchestrationSyncScope": self.orchestration_sync_scope if self.orchestration_sync_enabled else "",
+            "orchestrationSyncState": "idle",
+            "orchestrationSyncDesiredHash": "",
+            "orchestrationSyncActualHash": "",
+            "orchestrationSyncDesiredDatabaseCount": 0,
+            "orchestrationSyncActualDatabaseCount": 0,
+            "orchestrationSyncDesiredTableCount": 0,
+            "orchestrationSyncActualTableCount": 0,
+            "orchestrationSyncDesiredRowCount": 0,
+            "orchestrationSyncActualRowCount": 0,
+            "orchestrationSyncSequenceStride": (
+                self.orchestration_sync_sequence_stride if self.orchestration_sync_enabled else 0
+            ),
+            "orchestrationSyncSequenceResidue": (
+                self.orchestration_sync_sequence_residue if self.orchestration_sync_enabled else 0
+            ),
+            "orchestrationSyncSequenceCount": 0,
+            "orchestrationSyncLastPublishedAt": 0,
+            "orchestrationSyncLastAppliedAt": 0,
+            "orchestrationSyncLastConvergedAt": 0,
+            "orchestrationSyncLastError": "",
             "authBarrierEnabled": self.auth_barrier_enabled,
             "authBarrierReady": not self.auth_barrier_enabled,
             "authBarrierHttpListenAddress": (
@@ -1410,6 +1723,7 @@ class RelayRuntime:
         }
         self.load_classifier_sync_state()
         self.load_rbac_sync_state()
+        self.load_orchestration_sync_state()
         self.load_code_deploy_state()
 
     @staticmethod
@@ -3093,6 +3407,658 @@ class RelayRuntime:
             f"{desired_hash[:12]} from {origin_participant}"
         )
         self.reconcile_rbac_state(state_payload, published_at, origin_participant)
+
+    def default_orchestration_sync_state(self):
+        return {
+            "state": "idle",
+            "scope": self.orchestration_sync_scope,
+            "desiredHash": "",
+            "actualHash": "",
+            "desiredDatabaseCount": 0,
+            "actualDatabaseCount": 0,
+            "desiredTableCount": 0,
+            "actualTableCount": 0,
+            "desiredRowCount": 0,
+            "actualRowCount": 0,
+            "sequenceStride": self.orchestration_sync_sequence_stride,
+            "sequenceResidue": self.orchestration_sync_sequence_residue,
+            "sequenceCount": 0,
+            "originParticipant": "",
+            "desiredPublishedAt": 0,
+            "lastReceivedAt": 0,
+            "lastPublishedAt": 0,
+            "lastAppliedAt": 0,
+            "lastConvergedAt": 0,
+            "lastError": "",
+            "lastErrorAt": 0,
+        }
+
+    def refresh_orchestration_summary_locked(self):
+        state = dict(self.orchestration_sync_state)
+        ready = not self.orchestration_sync_enabled
+        if self.orchestration_sync_enabled:
+            desired_hash = (state.get("desiredHash") or "").strip()
+            actual_hash = (state.get("actualHash") or "").strip()
+            phase = (state.get("state") or "idle").strip() or "idle"
+            ready = bool(actual_hash) and phase not in {"pending", "in-progress", "failed"}
+            if desired_hash and actual_hash != desired_hash:
+                ready = False
+            if self.orchestration_sync_runtime_error:
+                ready = False
+
+        last_error = self.orchestration_sync_runtime_error or (state.get("lastError") or "").strip()
+        self.status.update(
+            {
+                "orchestrationSyncReady": ready,
+                "orchestrationSyncTargetRoles": list(self.orchestration_sync_target_roles),
+                "orchestrationSyncScope": state.get("scope", ""),
+                "orchestrationSyncState": state.get("state", "idle"),
+                "orchestrationSyncDesiredHash": state.get("desiredHash", ""),
+                "orchestrationSyncActualHash": state.get("actualHash", ""),
+                "orchestrationSyncDesiredDatabaseCount": int(state.get("desiredDatabaseCount") or 0),
+                "orchestrationSyncActualDatabaseCount": int(state.get("actualDatabaseCount") or 0),
+                "orchestrationSyncDesiredTableCount": int(state.get("desiredTableCount") or 0),
+                "orchestrationSyncActualTableCount": int(state.get("actualTableCount") or 0),
+                "orchestrationSyncDesiredRowCount": int(state.get("desiredRowCount") or 0),
+                "orchestrationSyncActualRowCount": int(state.get("actualRowCount") or 0),
+                "orchestrationSyncSequenceStride": int(state.get("sequenceStride") or 0),
+                "orchestrationSyncSequenceResidue": int(state.get("sequenceResidue") or 0),
+                "orchestrationSyncSequenceCount": int(state.get("sequenceCount") or 0),
+                "orchestrationSyncLastPublishedAt": int(state.get("lastPublishedAt") or 0),
+                "orchestrationSyncLastAppliedAt": int(state.get("lastAppliedAt") or 0),
+                "orchestrationSyncLastConvergedAt": int(state.get("lastConvergedAt") or 0),
+                "orchestrationSyncLastError": last_error,
+            }
+        )
+
+    def refresh_orchestration_summary(self):
+        with self.lock:
+            self.refresh_orchestration_summary_locked()
+
+    def persist_orchestration_sync_state(self):
+        if not self.orchestration_sync_enabled:
+            return
+        with self.lock:
+            payload = {
+                "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+                "kind": "ConductorRelayOrchestrationSyncState",
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "state": dict(self.orchestration_sync_state),
+            }
+        write_text_file(
+            self.orchestration_sync_state_path,
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        )
+
+    def load_orchestration_sync_state(self):
+        state = self.default_orchestration_sync_state()
+        if self.orchestration_sync_enabled and os.path.isfile(self.orchestration_sync_state_path):
+            try:
+                payload = read_json_file(self.orchestration_sync_state_path)
+                raw_state = payload.get("state") or {}
+                if isinstance(raw_state, dict):
+                    state.update(raw_state)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
+                log(f"Failed to load orchestration sync state: {error}")
+        with self.lock:
+            self.orchestration_sync_state = state
+            self.refresh_orchestration_summary_locked()
+
+    def orchestration_sync_state_snapshot(self):
+        with self.lock:
+            return dict(self.orchestration_sync_state)
+
+    def merge_orchestration_sync_state(self, **updates):
+        with self.lock:
+            state = dict(self.orchestration_sync_state)
+            state.update(updates)
+            if "lastError" in updates:
+                if (updates.get("lastError") or "").strip():
+                    state["lastErrorAt"] = int(updates.get("lastErrorAt") or time.time())
+                else:
+                    state["lastErrorAt"] = 0
+                    self.orchestration_sync_runtime_error = ""
+            self.orchestration_sync_state = state
+            self.refresh_orchestration_summary_locked()
+            snapshot = dict(state)
+        self.persist_orchestration_sync_state()
+        return snapshot
+
+    def orchestration_db_conf_path(self, database_name):
+        if database_name == "orchestrator":
+            return self.orchestration_sync_orchestrator_conf_path
+        if database_name == "inventory":
+            return self.orchestration_sync_inventory_conf_path
+        raise RuntimeError(f"unsupported orchestration sync database {database_name}")
+
+    def orchestration_sync_db_spec(self, database_name):
+        spec = ORCHESTRATION_SYNC_DATABASE_SPECS.get(database_name)
+        if spec is None:
+            raise RuntimeError(f"unsupported orchestration sync database {database_name}")
+        return spec
+
+    def orchestration_sync_db_config_from_path(self, conf_path):
+        if not os.path.isfile(conf_path):
+            raise RuntimeError(f"orchestration database config not found: {conf_path}")
+        with open(conf_path, "r", encoding="utf-8") as handle:
+            content = handle.read()
+        subname = self.rbac_sync_hocon_string(content, "subname")
+        user = self.rbac_sync_hocon_string(content, "user")
+        migration_user = self.rbac_sync_hocon_string(content, "migration-user")
+        if not subname or not user:
+            raise RuntimeError(f"orchestration database configuration is incomplete: {conf_path}")
+        parsed = urllib.parse.urlsplit(f"postgresql:{subname}")
+        params = {
+            key: values[-1]
+            for key, values in urllib.parse.parse_qs(parsed.query).items()
+            if values
+        }
+        database = parsed.path.lstrip("/")
+        sslkey = params.get("sslkey", "")
+        if sslkey.endswith(".pk8"):
+            pem_key = re.sub(r"\.pk8$", ".pem", sslkey)
+            if os.path.isfile(pem_key):
+                sslkey = pem_key
+        return {
+            "host": parsed.hostname or "",
+            "port": int(parsed.port or 5432),
+            "database": database,
+            "user": user,
+            "migration_user": migration_user,
+            "sslrootcert": params.get("sslrootcert", ""),
+            "sslkey": sslkey,
+            "sslcert": params.get("sslcert", ""),
+        }
+
+    def orchestration_db_connection(self, conf_path, use_migration_user=False):
+        config = self.orchestration_sync_db_config_from_path(conf_path)
+        username = config["user"]
+        if use_migration_user and (config.get("migration_user") or "").strip():
+            username = config["migration_user"].strip()
+        context = ssl.create_default_context(cafile=config["sslrootcert"])
+        context.check_hostname = True
+        context.load_cert_chain(
+            certfile=config["sslcert"],
+            keyfile=config["sslkey"],
+        )
+        return pg8000.dbapi.connect(
+            user=username,
+            host=config["host"],
+            port=config["port"],
+            database=config["database"],
+            ssl_context=context,
+            timeout=15,
+        )
+
+    def orchestration_select_query(self, database_name, table_name):
+        table_spec = self.orchestration_sync_db_spec(database_name)["tables"].get(table_name)
+        if table_spec is None:
+            raise RuntimeError(
+                f"unsupported orchestration sync table {database_name}.{table_name}"
+            )
+        column_names = [name for name, _type_name in table_spec.get("columns") or []]
+        if not column_names:
+            raise RuntimeError(
+                f"orchestration sync table {database_name}.{table_name} has no columns"
+            )
+        order_names = list(table_spec.get("orderBy") or column_names)
+        select_columns = ",\n            ".join(sql_identifier(name) for name in column_names)
+        order_columns = ", ".join(sql_identifier(name) for name in order_names)
+        return (
+            "select\n"
+            f"            {select_columns}\n"
+            f"        from {sql_identifier(table_name)}\n"
+            f"        order by {order_columns}"
+        )
+
+    def ensure_orchestration_database_sequences(self, cursor, database_name):
+        spec = self.orchestration_sync_db_spec(database_name)
+        configured_sequences = []
+        for table_name, column_name in spec.get("sequenceColumns") or []:
+            cursor.execute(
+                "select pg_get_serial_sequence(%s, %s)",
+                (table_name, column_name),
+            )
+            row = cursor.fetchone()
+            sequence_name = ((row[0] if row else "") or "").strip()
+            if not sequence_name:
+                continue
+            cursor.execute(
+                f"select coalesce(max({sql_identifier(column_name)}), 0) from {sql_identifier(table_name)}"
+            )
+            max_value = int(cursor.fetchone()[0] or 0)
+            cursor.execute(f"select last_value, is_called from {sequence_name}")
+            sequence_row = cursor.fetchone()
+            if sequence_row is None:
+                last_value = 0
+                is_called = True
+            else:
+                last_value = int(sequence_row[0] or 0)
+                is_called = bool(sequence_row[1])
+            minimum_value = max(
+                max_value + 1,
+                last_value + (1 if is_called else 0),
+                self.orchestration_sync_sequence_residue,
+            )
+            next_value = sequence_value_for_residue(
+                minimum_value,
+                self.orchestration_sync_sequence_stride,
+                self.orchestration_sync_sequence_residue,
+            )
+            escaped_sequence_name = sequence_name.replace("'", "''")
+            cursor.execute(
+                f"alter sequence {sequence_name} "
+                f"increment by {self.orchestration_sync_sequence_stride} cache 1"
+            )
+            cursor.execute(
+                f"select setval('{escaped_sequence_name}', {next_value}, false)"
+            )
+            configured_sequences.append(sequence_name)
+        return configured_sequences
+
+    def prepare_orchestration_database_sequences(self, database_name, conf_path):
+        spec = self.orchestration_sync_db_spec(database_name)
+        if not spec.get("sequenceColumns"):
+            return []
+        connection = self.orchestration_db_connection(conf_path, use_migration_user=True)
+        try:
+            cursor = connection.cursor()
+            sequence_names = self.ensure_orchestration_database_sequences(cursor, database_name)
+            connection.commit()
+            cursor.close()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return sequence_names
+
+    def read_orchestration_database_state(self, database_name, conf_path):
+        spec = self.orchestration_sync_db_spec(database_name)
+        table_names = list(spec.get("tables") or {})
+        table_rows = {}
+        sequence_names = self.prepare_orchestration_database_sequences(database_name, conf_path)
+        connection = self.orchestration_db_connection(conf_path)
+        try:
+            cursor = connection.cursor()
+            for table_name in table_names:
+                rows = self.rbac_query_rows(
+                    cursor,
+                    self.orchestration_select_query(database_name, table_name),
+                )
+                table_rows[table_name] = rows
+            cursor.close()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+        row_count = sum(len(rows) for rows in table_rows.values())
+        return {
+            "tableNames": table_names,
+            "tables": table_rows,
+            "tableCount": len(table_names),
+            "rowCount": row_count,
+            "sequenceCount": len(sequence_names),
+        }
+
+    @staticmethod
+    def orchestration_rows_hash(databases):
+        normalized = {}
+        for database_name in ORCHESTRATION_SYNC_DATABASE_SPECS:
+            database_state = dict((databases or {}).get(database_name) or {})
+            table_names = list(database_state.get("tableNames") or [])
+            tables = {
+                table_name: list((database_state.get("tables") or {}).get(table_name) or [])
+                for table_name in table_names
+            }
+            normalized[database_name] = {
+                "tableNames": table_names,
+                "tables": tables,
+            }
+        return sha256_text(stable_json({"databases": normalized}))
+
+    def read_local_orchestration_state(self):
+        databases = {}
+        for database_name in ORCHESTRATION_SYNC_DATABASE_SPECS:
+            databases[database_name] = self.read_orchestration_database_state(
+                database_name,
+                self.orchestration_db_conf_path(database_name),
+            )
+        database_count = len(databases)
+        table_count = sum(int(database.get("tableCount") or 0) for database in databases.values())
+        row_count = sum(int(database.get("rowCount") or 0) for database in databases.values())
+        sequence_count = sum(
+            int(database.get("sequenceCount") or 0) for database in databases.values()
+        )
+        payload = {
+            "scope": self.orchestration_sync_scope,
+            "databases": databases,
+            "databaseCount": database_count,
+            "tableCount": table_count,
+            "rowCount": row_count,
+            "sequenceStride": self.orchestration_sync_sequence_stride,
+            "sequenceResidue": self.orchestration_sync_sequence_residue,
+            "sequenceCount": sequence_count,
+        }
+        payload["hash"] = self.orchestration_rows_hash(databases)
+        return payload
+
+    def refresh_local_orchestration_sync_state(self):
+        if not self.orchestration_sync_enabled:
+            return
+
+        observed_at = int(time.time())
+        local_state = self.read_local_orchestration_state()
+        snapshot = self.orchestration_sync_state_snapshot()
+        desired_hash = (snapshot.get("desiredHash") or "").strip()
+        actual_hash = (local_state.get("hash") or "").strip()
+        phase = (snapshot.get("state") or "idle").strip() or "idle"
+        origin_participant = (snapshot.get("originParticipant") or "").strip()
+
+        updates = {
+            "scope": self.orchestration_sync_scope,
+            "actualHash": actual_hash,
+            "actualDatabaseCount": int(local_state.get("databaseCount") or 0),
+            "actualTableCount": int(local_state.get("tableCount") or 0),
+            "actualRowCount": int(local_state.get("rowCount") or 0),
+            "sequenceStride": self.orchestration_sync_sequence_stride,
+            "sequenceResidue": self.orchestration_sync_sequence_residue,
+            "sequenceCount": int(local_state.get("sequenceCount") or 0),
+        }
+        if desired_hash and desired_hash == actual_hash:
+            updates.update(
+                {
+                    "state": "converged",
+                    "lastConvergedAt": observed_at,
+                    "lastError": "",
+                }
+            )
+        elif desired_hash and origin_participant and origin_participant != self.pod_name and phase in {
+            "pending",
+            "in-progress",
+            "failed",
+        }:
+            updates["state"] = phase
+        else:
+            updates.update(
+                {
+                    "state": "observed",
+                    "desiredHash": actual_hash,
+                    "desiredDatabaseCount": int(local_state.get("databaseCount") or 0),
+                    "desiredTableCount": int(local_state.get("tableCount") or 0),
+                    "desiredRowCount": int(local_state.get("rowCount") or 0),
+                    "originParticipant": self.pod_name,
+                    "desiredPublishedAt": observed_at,
+                    "lastConvergedAt": observed_at,
+                    "lastError": "",
+                }
+            )
+        self.orchestration_sync_runtime_error = ""
+        self.merge_orchestration_sync_state(**updates)
+
+    def build_orchestration_state_payload(self, state, published_at):
+        return {
+            "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+            "kind": "ConductorRelayOrchestrationState",
+            "publishedAt": published_at,
+            "origin": {
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "role": self.relay_role,
+                "segment": self.segment_name,
+            },
+            "targetRoles": list(self.orchestration_sync_target_roles),
+            "state": state,
+        }
+
+    def record_published_orchestration_state(self, state, published_at, now):
+        state_hash = (state.get("hash") or "").strip()
+        self.merge_orchestration_sync_state(
+            state="converged",
+            scope=self.orchestration_sync_scope,
+            desiredHash=state_hash,
+            actualHash=state_hash,
+            desiredDatabaseCount=int(state.get("databaseCount") or 0),
+            actualDatabaseCount=int(state.get("databaseCount") or 0),
+            desiredTableCount=int(state.get("tableCount") or 0),
+            actualTableCount=int(state.get("tableCount") or 0),
+            desiredRowCount=int(state.get("rowCount") or 0),
+            actualRowCount=int(state.get("rowCount") or 0),
+            sequenceStride=self.orchestration_sync_sequence_stride,
+            sequenceResidue=self.orchestration_sync_sequence_residue,
+            sequenceCount=int(state.get("sequenceCount") or 0),
+            originParticipant=self.pod_name,
+            desiredPublishedAt=published_at,
+            lastPublishedAt=now,
+            lastConvergedAt=now,
+            lastError="",
+        )
+
+    def publish_orchestration_state(self):
+        if (
+            not self.orchestration_sync_enabled
+            or self.connection is None
+            or self.channel is None
+            or self.bundle is None
+        ):
+            return
+
+        state = self.read_local_orchestration_state()
+        now = int(time.time())
+        state_hash = (state.get("hash") or "").strip()
+        should_publish = (
+            state_hash != self.last_published_orchestration_hash
+            or now >= self.next_orchestration_publish
+        )
+        if not should_publish:
+            return
+
+        snapshot = self.orchestration_sync_state_snapshot()
+        version_at = int(snapshot.get("desiredPublishedAt") or 0)
+        if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
+            version_at = now
+
+        payload = self.build_orchestration_state_payload(state, version_at)
+        self.channel.basic_publish(
+            exchange=self.bundle["hub"]["exchanges"]["data"],
+            routing_key=f"relay.orchestration-state.{sanitize_fragment(self.pod_name)}",
+            body=stable_json(payload).encode("utf-8"),
+            properties=pika.BasicProperties(content_type="application/json", delivery_mode=2),
+        )
+        self.last_published_orchestration_hash = state_hash
+        self.next_orchestration_publish = now + self.publish_interval
+        self.record_published_orchestration_state(state, version_at, now)
+
+    def replace_orchestration_table(self, cursor, database_name, table_name, rows):
+        table_spec = self.orchestration_sync_db_spec(database_name)["tables"].get(table_name)
+        if table_spec is None:
+            raise RuntimeError(
+                f"unsupported orchestration sync table {database_name}.{table_name}"
+            )
+        payload = json.dumps(rows, separators=(",", ":"), sort_keys=True)
+        table_identifier = sql_identifier(table_name)
+        column_names = [name for name, _type_name in table_spec.get("columns") or []]
+        column_list = ", ".join(sql_identifier(name) for name in column_names)
+        recordset_columns = ",\n                        ".join(
+            f"{sql_identifier(name)} {type_name}"
+            for name, type_name in table_spec.get("columns") or []
+        )
+        cursor.execute(f"delete from {table_identifier}")
+        if not rows:
+            return
+        cursor.execute(
+            f"""
+                    insert into {table_identifier} ({column_list})
+                    select {column_list}
+                    from json_to_recordset(%s::json) as x(
+                        {recordset_columns}
+                    )
+                    """,
+            (payload,),
+        )
+
+    def reconcile_orchestration_database(self, database_name, conf_path, desired_tables):
+        spec = self.orchestration_sync_db_spec(database_name)
+        self.prepare_orchestration_database_sequences(database_name, conf_path)
+        connection = self.orchestration_db_connection(conf_path)
+        try:
+            cursor = connection.cursor()
+            for table_name in spec.get("clearOrder") or []:
+                self.replace_orchestration_table(cursor, database_name, table_name, [])
+            for table_name in spec.get("loadOrder") or []:
+                self.replace_orchestration_table(
+                    cursor,
+                    database_name,
+                    table_name,
+                    desired_tables.get(table_name) or [],
+                )
+            connection.commit()
+            cursor.close()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def reconcile_orchestration_state(self, state_payload, published_at, origin_participant):
+        desired_databases = state_payload.get("databases") or {}
+        if not isinstance(desired_databases, dict):
+            raise RuntimeError("orchestration sync payload databases are invalid")
+
+        for database_name in ORCHESTRATION_SYNC_DATABASE_SPECS:
+            database_payload = desired_databases.get(database_name) or {}
+            if not isinstance(database_payload, dict):
+                raise RuntimeError(
+                    f"orchestration sync payload database {database_name} is invalid"
+                )
+            desired_tables_payload = database_payload.get("tables") or {}
+            if not isinstance(desired_tables_payload, dict):
+                raise RuntimeError(
+                    f"orchestration sync payload tables for {database_name} are invalid"
+                )
+            desired_tables = {}
+            for table_name in self.orchestration_sync_db_spec(database_name)["tables"]:
+                rows = desired_tables_payload.get(table_name) or []
+                if not isinstance(rows, list):
+                    raise RuntimeError(
+                        f"orchestration sync payload table {database_name}.{table_name} is not a list"
+                    )
+                desired_tables[table_name] = rows
+            self.reconcile_orchestration_database(
+                database_name,
+                self.orchestration_db_conf_path(database_name),
+                desired_tables,
+            )
+
+        local_state = self.read_local_orchestration_state()
+        actual_hash = (local_state.get("hash") or "").strip()
+        desired_hash = (state_payload.get("hash") or "").strip()
+        updates = {
+            "scope": state_payload.get("scope") or self.orchestration_sync_scope,
+            "desiredHash": desired_hash,
+            "actualHash": actual_hash,
+            "desiredDatabaseCount": int(
+                state_payload.get("databaseCount") or len(ORCHESTRATION_SYNC_DATABASE_SPECS)
+            ),
+            "actualDatabaseCount": int(local_state.get("databaseCount") or 0),
+            "desiredTableCount": int(state_payload.get("tableCount") or 0),
+            "actualTableCount": int(local_state.get("tableCount") or 0),
+            "desiredRowCount": int(state_payload.get("rowCount") or 0),
+            "actualRowCount": int(local_state.get("rowCount") or 0),
+            "sequenceStride": self.orchestration_sync_sequence_stride,
+            "sequenceResidue": self.orchestration_sync_sequence_residue,
+            "sequenceCount": int(local_state.get("sequenceCount") or 0),
+            "originParticipant": origin_participant,
+            "desiredPublishedAt": int(published_at or time.time()),
+            "lastAppliedAt": int(time.time()),
+        }
+        if actual_hash == desired_hash:
+            updates.update(
+                {
+                    "state": "converged",
+                    "lastConvergedAt": int(time.time()),
+                    "lastError": "",
+                }
+            )
+        else:
+            updates.update(
+                {
+                    "state": "failed",
+                    "lastError": (
+                        "orchestration managed-domain hash mismatch after apply: "
+                        f"expected {desired_hash}, got {actual_hash or 'none'}"
+                    ),
+                }
+            )
+        self.orchestration_sync_runtime_error = ""
+        self.merge_orchestration_sync_state(**updates)
+
+    def handle_remote_orchestration_state(self, payload):
+        if not self.orchestration_sync_enabled:
+            return
+
+        origin = payload.get("origin") or {}
+        origin_participant = (origin.get("participant") or "").strip()
+        if not origin_participant or origin_participant == self.pod_name:
+            return
+
+        target_roles = payload.get("targetRoles") or []
+        if target_roles and self.relay_role not in target_roles:
+            return
+
+        state_payload = payload.get("state") or {}
+        desired_hash = (state_payload.get("hash") or "").strip()
+        if not desired_hash:
+            raise RuntimeError("orchestration sync payload is missing a hash")
+
+        published_at = int(payload.get("publishedAt") or 0)
+        current_state = self.orchestration_sync_state_snapshot()
+        current_desired_hash = (current_state.get("desiredHash") or "").strip()
+        current_actual_hash = (current_state.get("actualHash") or "").strip()
+        current_published_at = int(current_state.get("desiredPublishedAt") or 0)
+        if current_published_at and published_at and published_at < current_published_at:
+            return
+        if (
+            current_published_at
+            and published_at
+            and published_at == current_published_at
+            and desired_hash == current_desired_hash
+        ):
+            return
+        if desired_hash == current_actual_hash and desired_hash == current_desired_hash:
+            self.merge_orchestration_sync_state(
+                state="converged",
+                lastReceivedAt=int(time.time()),
+                lastConvergedAt=int(time.time()),
+                lastError="",
+            )
+            return
+
+        self.merge_orchestration_sync_state(
+            state="pending",
+            scope=state_payload.get("scope") or self.orchestration_sync_scope,
+            desiredHash=desired_hash,
+            desiredDatabaseCount=int(
+                state_payload.get("databaseCount") or len(ORCHESTRATION_SYNC_DATABASE_SPECS)
+            ),
+            desiredTableCount=int(state_payload.get("tableCount") or 0),
+            desiredRowCount=int(state_payload.get("rowCount") or 0),
+            sequenceStride=self.orchestration_sync_sequence_stride,
+            sequenceResidue=self.orchestration_sync_sequence_residue,
+            sequenceCount=int(state_payload.get("sequenceCount") or 0),
+            originParticipant=origin_participant,
+            desiredPublishedAt=published_at or int(time.time()),
+            lastReceivedAt=int(time.time()),
+            lastError="",
+        )
+        log(
+            "Received orchestration sync intent at "
+            f"{desired_hash[:12]} from {origin_participant}"
+        )
+        self.reconcile_orchestration_state(state_payload, published_at, origin_participant)
 
     def code_deploy_hook_url(self):
         return (
@@ -5306,6 +6272,19 @@ class RelayRuntime:
                 channel.basic_nack(method.delivery_tag, requeue=True)
             return
 
+        if kind == "ConductorRelayOrchestrationState":
+            try:
+                self.handle_remote_orchestration_state(payload)
+                self.set_status(lastReceivedAt=int(time.time()))
+                channel.basic_ack(method.delivery_tag)
+            except Exception as error:
+                self.orchestration_sync_runtime_error = str(error)
+                self.refresh_orchestration_summary()
+                log(f"Remote orchestration sync handling failed: {error}")
+                time.sleep(2)
+                channel.basic_nack(method.delivery_tag, requeue=True)
+            return
+
         channel.basic_ack(method.delivery_tag)
 
     def connect(self, bundle, username, password):
@@ -5340,6 +6319,7 @@ class RelayRuntime:
         self.next_ca_publish = 0
         self.next_classifier_publish = 0
         self.next_rbac_publish = 0
+        self.next_orchestration_publish = 0
         self.set_status(connected=True, lastConnectedAt=int(time.time()), lastError="")
         log(
             "Connected to Fabric as "
@@ -5389,6 +6369,7 @@ class RelayRuntime:
         self.refresh_ca_peer_counts()
         self.refresh_classifier_summary()
         self.refresh_rbac_summary()
+        self.refresh_orchestration_summary()
         self.refresh_code_deploy_summary()
         self.set_status(lastPublishedAt=now)
         payload_status = self.snapshot_status()
@@ -5461,6 +6442,16 @@ class RelayRuntime:
                 log(f"RBAC sync refresh failed: {error}")
 
             try:
+                self.refresh_local_orchestration_sync_state()
+            except KeyboardInterrupt:
+                raise
+            except Exception as error:
+                last_error = str(error)
+                self.orchestration_sync_runtime_error = str(error)
+                self.refresh_orchestration_summary()
+                log(f"Orchestration sync refresh failed: {error}")
+
+            try:
                 self.refresh_local_code_deploy_status()
             except KeyboardInterrupt:
                 raise
@@ -5477,6 +6468,7 @@ class RelayRuntime:
                     self.publish_ca_state()
                     self.publish_classifier_state()
                     self.publish_rbac_state()
+                    self.publish_orchestration_state()
                     self.connection.process_data_events(time_limit=1)
                 else:
                     time.sleep(1)

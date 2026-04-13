@@ -108,7 +108,7 @@ The current repo now has the first Gateway slice wired into the control-plane ru
 - Gateway reuses the pod's Warden-issued onboarding bundle to join Fabric on its own queue, publishes local Gateway health into Fabric, and stores fresh peer Gateway snapshots locally
 - Gateway readiness is tied to participant trust readiness plus local PCP broker and orchestration health, which makes `service/pe` drain stale or isolated control-plane replicas
 
-This is also intentionally not the whole Gateway design yet. The current implementation establishes service ownership, trust-aware readiness, and Fabric status exchange on the PCP/orchestration ingress path. It does not yet synchronize orchestration inventory or mediate broader PCP semantics through Fabric.
+This is still not the whole Gateway design. The current implementation establishes service ownership, trust-aware readiness, selector-backed routing through an internal `pe-orchestration` service, and validated task/plan failover on the PCP/orchestration ingress path. It does not yet explain why `pe-inventory` remains empty in the current build, and it still does not mediate broader PCP semantics through Fabric.
 
 ## Code Deployment
 
@@ -192,6 +192,25 @@ That means:
 - the replicated RBAC domain remains authoritative enough for readiness while leaving replica-local operator diagnostics outside the convergence token
 - web console sessions remain local to the selected `pe-console` replica and are intentionally kept outside the replicated domain so browser traffic can stay consistent even while replicated state converges asynchronously
 
+## Shared Orchestration State
+
+The next PE-owned control-plane slice now carried through Fabric is managed
+orchestration state.
+
+The current implementation:
+
+- projects the managed `pe-orchestrator` and `pe-inventory` database domain through Fabric and replays it onto peer control-plane replicas
+- reserves per-replica sequence residues so replicated inserts do not collide when both replicas create local jobs
+- routes compiler PCP brokers and Bolt/orchestrator clients through a selector-backed internal `pe-orchestration` service so one healthy control-plane replica owns orchestration traffic at a time
+- keeps Gateway as the transport and health boundary on `8142` and `8143`
+
+That means:
+
+- task and plan execution can survive control-plane failover without shared storage
+- orchestration job and plan state can reconverge after a replica returns
+- pooled `service/pe` does not need to own PCP/orchestration traffic until those surfaces are replica-safe
+- `pe-inventory` persistence is still not fully explained in the current build and remains an open point
+
 ## Non-Goals
 
 The repo should not treat these as the HA architecture:
@@ -210,10 +229,10 @@ The next credible sequence is now:
 
 1. Fabric and Warden foundation
 2. Relay insertion on the Puppet Server/PuppetDB path
-3. Gateway insertion on the PCP/orchestrator path
+3. Gateway insertion and sticky orchestration routing on the PCP/orchestrator path
 4. Code deployment convergence across Workers
-5. Shared-classification convergence for PE-owned control-plane state
-6. Additional PE-owned state convergence and eventual reduction of tactical routing exceptions
+5. Shared classification, RBAC/local-auth, and orchestration job-state convergence
+6. Investigation of remaining PCP/inventory semantics and reduction of tactical routing exceptions
 7. Worker/SPOG role modelling only if a pooled Kubernetes control plane still needs it
 
 That ordering matters because Relay and Gateway depend on Fabric and Warden for identity, trust, and transport, and code convergence needs both paths in place before control-plane traffic can fail over cleanly.

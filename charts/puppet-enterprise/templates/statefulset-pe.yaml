@@ -286,6 +286,8 @@ spec:
           env:
             - name: PE_K8S_CONDUCTOR_RBAC_SYNC_ENABLED
               value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled .Values.conductor.relay.rbacSync.enabled) | quote }}
+            - name: PE_K8S_ORCHESTRATION_SERVICE_HOST
+              value: {{ ternary (include "pe.controlPlaneOrchestrationServiceName" .) (include "pe.identity" .) (gt (int .Values.controlPlane.replicaCount) 1) | quote }}
           ports:
             - name: console-svc
               containerPort: 4433
@@ -317,6 +319,10 @@ spec:
           env:
             - name: PE_K8S_ORCHESTRATOR_PCP_BROKERS_CSV
               value: {{ include "pe.orchestratorPcpBrokerCertnamesCsv" . | quote }}
+            - name: PE_K8S_ORCHESTRATION_SERVICE_HOST
+              value: {{ ternary (include "pe.controlPlaneOrchestrationServiceName" .) (include "pe.identity" .) (gt (int .Values.controlPlane.replicaCount) 1) | quote }}
+            - name: PE_K8S_PCP_CONTROLLER_LOCAL_HOST
+              value: {{ ternary (include "pe.controlPlaneOrchestrationServiceName" .) (include "pe.identity" .) (gt (int .Values.controlPlane.replicaCount) 1) | quote }}
           ports:
             - name: orch-pcp
               containerPort: 8142
@@ -347,6 +353,9 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "bolt-server"]
+          env:
+            - name: PE_K8S_ORCHESTRATION_SERVICE_HOST
+              value: {{ ternary (include "pe.controlPlaneOrchestrationServiceName" .) (include "pe.identity" .) (gt (int .Values.controlPlane.replicaCount) 1) | quote }}
           ports:
             - name: bolt-svc
               containerPort: 62658
@@ -375,6 +384,9 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "ace-server"]
+          env:
+            - name: PE_K8S_ORCHESTRATION_SERVICE_HOST
+              value: {{ ternary (include "pe.controlPlaneOrchestrationServiceName" .) (include "pe.identity" .) (gt (int .Values.controlPlane.replicaCount) 1) | quote }}
           ports:
             - name: ace-svc
               containerPort: 44633
@@ -403,6 +415,9 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "host-action-collector"]
+          env:
+            - name: PE_K8S_ORCHESTRATION_SERVICE_HOST
+              value: {{ ternary (include "pe.controlPlaneOrchestrationServiceName" .) (include "pe.identity" .) (gt (int .Values.controlPlane.replicaCount) 1) | quote }}
           ports:
             - name: hac-svc
               containerPort: 8147
@@ -581,6 +596,16 @@ spec:
               value: {{ join "," .Values.conductor.relay.rbacSync.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES
               value: {{ join "," .Values.conductor.relay.rbacSync.excludedTokenLabelPrefixes | quote }}
+            - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_ENABLED
+              value: {{ ternary "true" "false" .Values.conductor.relay.orchestrationSync.enabled | quote }}
+            - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_TARGET_ROLES
+              value: {{ join "," .Values.conductor.relay.orchestrationSync.targetRoles | quote }}
+            - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_ORCHESTRATOR_CONF_PATH
+              value: {{ .Values.conductor.relay.orchestrationSync.orchestratorConfPath | quote }}
+            - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_INVENTORY_CONF_PATH
+              value: {{ .Values.conductor.relay.orchestrationSync.inventoryConfPath | quote }}
+            - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_SEQUENCE_STRIDE
+              value: {{ .Values.conductor.relay.orchestrationSync.sequenceStride | quote }}
           readinessProbe:
             exec:
               command: ["/usr/local/bin/conductor-relay", "probe", "ready"]
@@ -717,6 +742,36 @@ spec:
               value: {{ include "pe.controlPlaneFileSyncServiceName" . | quote }}
             - name: SERVICE_SELECTOR_TARGET_DESCRIPTION
               value: compiler file-sync traffic
+          resources: {}
+        {{- end }}
+        {{- if gt (int .Values.controlPlane.replicaCount) 1 }}
+        - name: conductor-orchestration-selector
+          image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
+          imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
+          command: ["/usr/local/bin/conductor-service-selector"]
+          env:
+            - name: SERVICE_SELECTOR_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: SERVICE_SELECTOR_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SERVICE_SELECTOR_STATEFULSET_NAME
+              value: {{ include "pe.controlPlaneStatefulSetName" . | quote }}
+            - name: SERVICE_SELECTOR_LABEL_SELECTOR
+              value: {{ printf "app.kubernetes.io/instance=%s,app.kubernetes.io/component=pe-services" .Release.Name | quote }}
+            - name: SERVICE_SELECTOR_ACTIVE_LABEL_KEY
+              value: pe-k8s.puppet.com/orchestration-active
+            - name: SERVICE_SELECTOR_ACTIVE_LABEL_VALUE
+              value: "true"
+            - name: SERVICE_SELECTOR_POLL_INTERVAL_SECONDS
+              value: {{ .Values.controlPlane.orchestration.selectorPollIntervalSeconds | quote }}
+            - name: SERVICE_SELECTOR_SERVICE_NAME
+              value: {{ include "pe.controlPlaneOrchestrationServiceName" . | quote }}
+            - name: SERVICE_SELECTOR_TARGET_DESCRIPTION
+              value: orchestration and PCP traffic
           resources: {}
         {{- end }}
         {{- if eq (include "pe.consoleStickyEnabled" .) "true" }}

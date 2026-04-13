@@ -81,6 +81,8 @@ controlPlane:
     selectorPollIntervalSeconds: 5
   fileSync:
     selectorPollIntervalSeconds: 5
+  orchestration:
+    selectorPollIntervalSeconds: 5
   ca:
     provider: selfSigned
     importTimeoutSeconds: 300
@@ -191,6 +193,13 @@ conductor:
         - pe-k8s-conductor-
         - pe-k8s-classifier
         - pe-k8s-compiler certificate
+    orchestrationSync:
+      enabled: false
+      targetRoles:
+        - control-plane
+      orchestratorConfPath: /etc/puppetlabs/orchestration-services/conf.d/orchestrator.conf
+      inventoryConfPath: /etc/puppetlabs/orchestration-services/conf.d/inventory.conf
+      sequenceStride: 1024
     resources: {}
   gateway:
     enabled: false

@@ -49,6 +49,10 @@ false
 {{- printf "%s-filesync" (include "pe.fullname" .) -}}
 {{- end -}}
 
+{{- define "pe.controlPlaneOrchestrationServiceName" -}}
+{{- printf "%s-orchestration" (include "pe.fullname" .) -}}
+{{- end -}}
+
 {{- define "pe.controlPlanePodNameForIndex" -}}
 {{- $root := .root -}}
 {{- $index := int .index -}}
@@ -88,6 +92,7 @@ false
 {{- define "pe.controlPlaneFrontDoorDnsNames" -}}
 {{- $identity := include "pe.identity" . -}}
 {{- $fileSyncService := include "pe.controlPlaneFileSyncServiceName" . -}}
+{{- $orchestrationService := include "pe.controlPlaneOrchestrationServiceName" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
 {{- $serviceNames := list
     $identity
@@ -101,6 +106,10 @@ false
     (printf "%s.%s" $fileSyncService .Release.Namespace)
     (printf "%s.%s.svc" $fileSyncService .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $fileSyncService .Release.Namespace)
+    $orchestrationService
+    (printf "%s.%s" $orchestrationService .Release.Namespace)
+    (printf "%s.%s.svc" $orchestrationService .Release.Namespace)
+    (printf "%s.%s.svc.cluster.local" $orchestrationService .Release.Namespace)
 ) -}}
 {{- end -}}
 {{- $frontDoorNames := list $puppetMasterHost -}}
@@ -121,6 +130,7 @@ false
 {{- define "pe.controlPlaneFrontDoorDnsNamesHocon" -}}
 {{- $identity := include "pe.identity" . -}}
 {{- $fileSyncService := include "pe.controlPlaneFileSyncServiceName" . -}}
+{{- $orchestrationService := include "pe.controlPlaneOrchestrationServiceName" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
 {{- $serviceNames := list
     $identity
@@ -134,6 +144,10 @@ false
     (printf "%s.%s" $fileSyncService .Release.Namespace)
     (printf "%s.%s.svc" $fileSyncService .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $fileSyncService .Release.Namespace)
+    $orchestrationService
+    (printf "%s.%s" $orchestrationService .Release.Namespace)
+    (printf "%s.%s.svc" $orchestrationService .Release.Namespace)
+    (printf "%s.%s.svc.cluster.local" $orchestrationService .Release.Namespace)
 ) -}}
 {{- end -}}
 {{- $frontDoorNames := list $puppetMasterHost -}}
@@ -157,6 +171,7 @@ false
 {{- define "pe.controlPlaneFrontDoorDnsNamesCsv" -}}
 {{- $identity := include "pe.identity" . -}}
 {{- $fileSyncService := include "pe.controlPlaneFileSyncServiceName" . -}}
+{{- $orchestrationService := include "pe.controlPlaneOrchestrationServiceName" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
 {{- $serviceNames := list
     $identity
@@ -170,6 +185,10 @@ false
     (printf "%s.%s" $fileSyncService .Release.Namespace)
     (printf "%s.%s.svc" $fileSyncService .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $fileSyncService .Release.Namespace)
+    $orchestrationService
+    (printf "%s.%s" $orchestrationService .Release.Namespace)
+    (printf "%s.%s.svc" $orchestrationService .Release.Namespace)
+    (printf "%s.%s.svc.cluster.local" $orchestrationService .Release.Namespace)
 ) -}}
 {{- end -}}
 {{- $frontDoorNames := list $puppetMasterHost -}}

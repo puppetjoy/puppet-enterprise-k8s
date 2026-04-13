@@ -81,9 +81,11 @@ Current status:
 
 - an optional `conductor-gateway` sidecar now runs inside the PE control-plane workload shape
 - `service/pe` and `pe-headless` can target Gateway listener ports for `8142` PCP broker traffic and `8143` orchestration traffic instead of targeting the orchestration container directly
+- multi-replica control planes now also expose a sticky internal `pe-orchestration` service so compiler brokers and Bolt/orchestrator clients share one healthy control-plane owner for PCP/orchestration traffic
 - Gateway proxies those TCP flows to the pod-local orchestration service, publishes Gateway status into Fabric, and stores fresh peer Gateway snapshots locally
 - Gateway readiness is tied to participant trust readiness plus local PCP broker and orchestration health, so stale or disconnected control-plane replicas fall out of service routing
-- orchestration inventory replication and broader PCP message mediation are still outstanding
+- live validation now covers Bolt task execution, plan execution, and selector failover from `pe-1` to `pe-0`, with compiler brokers reconnecting to the surviving control-plane replica
+- `pe-inventory` persistence and broader PCP message mediation are still outstanding
 
 ## Phase 4: Code Deployment Convergence
 
@@ -143,6 +145,7 @@ Current status:
 - PE-owned local infrastructure roots such as `PE Infrastructure` remain outside the managed sync domain
 - live validation in Kubernetes confirmed create and delete convergence for managed groups between `pe-0` and `pe-1`
 - RBAC and local-auth managed state now converge across `pe` replicas, including cross-replica token validation for normal user tokens
+- managed orchestration job state now converges across `pe` replicas, with matching `pe-orchestrator` row counts after failover and recovery
 - console session behaviour and other remaining console-backed writes are still outstanding
 
 ## Explicit Non-Goals

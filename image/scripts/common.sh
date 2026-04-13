@@ -7,7 +7,8 @@ PE_K8S_INSTALL_MARKER="${PE_K8S_INSTALL_MARKER:-${PE_K8S_INSTALL_DIR}/install-co
 PE_K8S_SYSCONFIG_DIR="${PE_K8S_SYSCONFIG_DIR:-${PE_K8S_STATE_DIR}/sysconfig}"
 PE_K8S_WAIT_TIMEOUT_SECONDS="${PE_K8S_WAIT_TIMEOUT_SECONDS:-3600}"
 PE_K8S_SKIP_INSTALL_MARKER="${PE_K8S_SKIP_INSTALL_MARKER:-false}"
-PE_K8S_PCP_CONTROLLER_LOCAL_HOST="${PE_K8S_PCP_CONTROLLER_LOCAL_HOST:-puppet}"
+PE_K8S_ORCHESTRATION_SERVICE_HOST="${PE_K8S_ORCHESTRATION_SERVICE_HOST:-}"
+PE_K8S_PCP_CONTROLLER_LOCAL_HOST="${PE_K8S_PCP_CONTROLLER_LOCAL_HOST:-${PE_K8S_ORCHESTRATION_SERVICE_HOST:-pe}}"
 PE_K8S_SERVICEACCOUNT_DIR="${PE_K8S_SERVICEACCOUNT_DIR:-/var/run/secrets/kubernetes.io/serviceaccount}"
 
 log() {
@@ -544,6 +545,120 @@ if updated != content:
 PY
 
     log "Configured compiler file sync service through ${file_sync_conf_path}"
+}
+
+sync_orchestration_service_urls() {
+    local orchestration_service="${PE_K8S_ORCHESTRATION_SERVICE_HOST:-}"
+    local console_conf_path=/etc/puppetlabs/console-services/conf.d/console.conf
+    local client_orchestrator_conf_path=/etc/puppetlabs/client-tools/orchestrator.conf
+    local host_action_conf_path=/etc/puppetlabs/host-action-collector/conf.d/pe-host-action-collector.conf
+
+    [ -n "${orchestration_service}" ] || return 0
+
+    if [ -f "${client_orchestrator_conf_path}" ]; then
+        python3 - "${client_orchestrator_conf_path}" "${orchestration_service}" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+config_path = Path(sys.argv[1])
+service_host = sys.argv[2].strip()
+data = json.loads(config_path.read_text(encoding="utf-8"))
+options = data.setdefault("options", {})
+desired = f"https://{service_host}:8143"
+if options.get("service-url") != desired:
+    options["service-url"] = desired
+    config_path.write_text(json.dumps(data, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
+        log "Configured client-tools orchestrator service through ${client_orchestrator_conf_path}"
+    fi
+
+    if [ -f "${console_conf_path}" ]; then
+        python3 - "${console_conf_path}" "${orchestration_service}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+config_path = Path(sys.argv[1])
+service_host = sys.argv[2].strip()
+text = config_path.read_text(encoding="utf-8")
+patterns = {
+    r'(orchestrator-server:\s*")[^"]+(")': rf'\1https://{service_host}:8143/orchestrator\2',
+    r'(inventory-server:\s*")[^"]+(")': rf'\1https://{service_host}:8143/inventory\2',
+}
+updated = text
+for pattern, replacement in patterns.items():
+    updated, count = re.subn(pattern, replacement, updated, count=1)
+    if count != 1:
+        raise SystemExit(f"unable to update {pattern} in {config_path}")
+if updated != text:
+    config_path.write_text(updated, encoding="utf-8")
+PY
+        log "Configured console orchestration endpoints through ${console_conf_path}"
+    fi
+
+    if [ -f "${host_action_conf_path}" ]; then
+        python3 - "${host_action_conf_path}" "${orchestration_service}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+config_path = Path(sys.argv[1])
+service_host = sys.argv[2].strip()
+text = config_path.read_text(encoding="utf-8")
+updated, count = re.subn(
+    r'(inventory-url:\s*")[^"]+(")',
+    rf'\1https://{service_host}:8143/inventory\2',
+    text,
+    count=1,
+)
+if count != 1:
+    raise SystemExit(f"unable to update inventory-url in {config_path}")
+if updated != text:
+    config_path.write_text(updated, encoding="utf-8")
+PY
+        log "Configured host-action inventory endpoint through ${host_action_conf_path}"
+    fi
+}
+
+sync_orchestration_listener_ssl_material() {
+    local webserver_conf_path=/etc/puppetlabs/orchestration-services/conf.d/webserver.conf
+    local orchestrator_conf_path=/etc/puppetlabs/orchestration-services/conf.d/orchestrator.conf
+    local inventory_conf_path=/etc/puppetlabs/orchestration-services/conf.d/inventory.conf
+    local service_cert_path=/etc/puppetlabs/orchestration-services/ssl/pe.cert.pem
+    local service_key_path=/etc/puppetlabs/orchestration-services/ssl/pe.private_key.pem
+
+    [ -f "${service_cert_path}" ] || return 0
+    [ -f "${service_key_path}" ] || return 0
+
+    python3 - "${webserver_conf_path}" "${orchestrator_conf_path}" "${inventory_conf_path}" "${service_cert_path}" "${service_key_path}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+cert_path = sys.argv[4]
+key_path = sys.argv[5]
+for config_name in sys.argv[1:4]:
+    config_path = Path(config_name)
+    if not config_path.is_file():
+        continue
+    text = config_path.read_text(encoding="utf-8")
+    patterns = {
+        r'^(\s*ssl-cert\s*:\s*)"[^"]+"': rf'\1"{cert_path}"',
+        r'^(\s*ssl-key\s*:\s*)"[^"]+"': rf'\1"{key_path}"',
+    }
+    updated = text
+    replaced = False
+    for pattern, replacement in patterns.items():
+        updated, count = re.subn(pattern, replacement, updated, flags=re.MULTILINE)
+        if count < 1:
+            raise SystemExit(f"unable to update listener TLS path {pattern} in {config_path}")
+        replaced = replaced or bool(count)
+    if replaced and updated != text:
+        config_path.write_text(updated, encoding="utf-8")
+PY
+
+    log "Configured orchestration listener TLS material through ${webserver_conf_path}, ${orchestrator_conf_path}, and ${inventory_conf_path}"
 }
 
 patch_conductor_console_auth_barrier_ports() {

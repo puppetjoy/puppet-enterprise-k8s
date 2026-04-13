@@ -63,6 +63,8 @@ spec:
               value: {{ include "pe.compilerHeadlessServiceName" . | quote }}
             - name: PE_COMPILER_PE_SERVICE
               value: {{ include "pe.identity" . | quote }}
+            - name: PE_COMPILER_ORCHESTRATION_SERVICE
+              value: {{ ternary (include "pe.controlPlaneOrchestrationServiceName" .) (include "pe.identity" .) (gt (int .Values.controlPlane.replicaCount) 1) | quote }}
             - name: PE_COMPILER_PE_CERTNAME
               value: {{ include "pe.certname" . | quote }}
             - name: PE_COMPILER_PUPPETDB_HOST

@@ -116,6 +116,7 @@ The intended access pattern is:
 - `service/pe` also fronts the colocated PuppetDB and PostgreSQL listeners on `8081` and `5432`
 - when the control plane has more than one replica, ingress points at sticky `service/pe-console` for the console hostname, with TLS terminated by the ingress controller
 - `service/pe-compiler` is the optional compiler-pool endpoint for catalog traffic on `8140` and PCP broker traffic on `8142`
+- when the control plane has more than one replica, an internal `pe-orchestration` ClusterIP service selects one healthy `pe` replica for PCP broker and orchestration traffic on `8142` and `8143`
 - when the control plane has more than one replica, an internal `pe-filesync` ClusterIP service selects one healthy `pe` replica for compiler file-sync traffic on `8140`
 - there are no standalone `service/pe-puppetdb` or `service/pe-postgresql` objects in the current model
 - when compilers are enabled, the `classifier-config` Job updates PE's built-in `PE Agent` node group so agent catalogs use the compiler endpoint for `server_list`, `primary_uris`, and `pcp_broker_list`
@@ -191,11 +192,11 @@ When `conductor.relay.rbacSync.enabled=true`:
 - ephemeral per-replica activity fields such as `last_login` and token `last_active` are intentionally normalized out of the authoritative convergence token
 - relay readiness can fail if the RBAC managed domain is stale or not converged for the local replica
 
-The current Relay implementation is still deliberately narrow. It now has a working selected-command write path, but it is not yet the full Conductor data plane for PCP, orchestration, or broader control-plane state convergence.
+Relay is no longer limited to the PuppetDB submit-only path. The current implementation also converges the managed orchestration database domain between control-plane replicas, while Gateway and the selector-backed internal `pe-orchestration` service keep PCP broker ownership and Bolt/orchestrator client traffic on one healthy control-plane replica at a time.
 
-That gives the release a real Fabric membership model without shared storage or hard-coded peer lists.
-It does not yet mean the release is finished as a fully pooled active-active PE control plane.
-CA, classification, code-deploy intent, and RBAC/local-auth convergence are now in place, but the browser console is intentionally treated as a sticky-consistency boundary through `service/pe-console` rather than a pooled active-active surface. Tactical routing exceptions such as `pe-filesync` still remain.
+That gives the release a real Fabric membership model without shared storage or hard-coded peer lists, and live validation now covers Bolt task execution, plan execution, and selector failover from one control-plane replica to the other. It still does not mean the release is finished as a fully pooled active-active PE control plane.
+
+CA, classification, code-deploy intent, RBAC/local-auth, and managed orchestration job state are now in place, but the browser console is intentionally treated as a sticky-consistency boundary through `service/pe-console`, PCP/orchestration traffic uses sticky `pe-orchestration`, and compiler file-sync still uses sticky `pe-filesync`. The open orchestration question is inventory persistence: the replicated `pe-inventory` database remains empty during live task and plan validation, so broader PCP and inventory semantics still need more investigation.
 
 ## Code Manager
 

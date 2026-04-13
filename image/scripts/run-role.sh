@@ -151,6 +151,7 @@ case "${role}" in
     console-services)
         patch_conductor_console_auth_barrier_ports
         sync_conductor_console_auth_shared_state
+        sync_orchestration_service_urls
         exec_as_user pe-console-services \
             /opt/puppetlabs/server/apps/console-services/bin/console-services \
             foreground
@@ -158,16 +159,19 @@ case "${role}" in
     orchestration-services)
         patch_orchestrator_pcp_broker_allowlist
         patch_local_pcp_controller_uri
+        sync_orchestration_listener_ssl_material
         exec_as_user pe-orchestration-services \
             /opt/puppetlabs/server/apps/orchestration-services/bin/orchestration-services \
             foreground
         ;;
     host-action-collector)
+        sync_orchestration_service_urls
         exec_as_user pe-host-action-collector \
             /opt/puppetlabs/server/apps/host-action-collector/bin/host-action-collector \
             foreground
         ;;
     bolt-server)
+        sync_orchestration_service_urls
         export GEM_PATH=/opt/puppetlabs/server/apps/bolt-server/lib/ruby/gems/3.2.0
         export GEM_HOME=/opt/puppetlabs/server/apps/bolt-server/lib/ruby/gems/3.2.0
         export APP_ENV=production
