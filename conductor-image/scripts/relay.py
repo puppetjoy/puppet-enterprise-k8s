@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import http.client
 import json
 import os
 import queue
@@ -148,7 +149,7 @@ RBAC_SYNC_SELECT_QUERIES = {
             display_name,
             email,
             is_revoked,
-            null::timestamp without time zone as last_login,
+            last_login,
             password,
             reset_password_uuid,
             failed_login_attempts,
@@ -189,7 +190,7 @@ RBAC_SYNC_SELECT_QUERIES = {
             client,
             description,
             timeout,
-            null::timestamp with time zone as last_active,
+            coalesce(last_active, creation) as last_active,
             token_hash
         from tokens
         order by id
@@ -204,6 +205,31 @@ RBAC_SYNC_OPTIONAL_AUTH_FILES = {
     "samlKey": DEFAULT_RBAC_SYNC_SHARED_SAML_KEY_PATH,
     "samlCert": DEFAULT_RBAC_SYNC_SHARED_SAML_CERT_PATH,
 }
+RBAC_SYNC_VOLATILE_FIELDS = {
+    "subjects": {"last_login"},
+    "tokens": {"last_active"},
+}
+DEFAULT_CONSOLE_WEBSERVER_CONF_PATH = "/etc/puppetlabs/console-services/conf.d/webserver.conf"
+DEFAULT_AUTH_BARRIER_SESSION_COOKIE_NAME = "__HOST-pl_sssi"
+DEFAULT_AUTH_BARRIER_AUTH_COOKIE_NAME = "__HOST-pl_ssti"
+DEFAULT_AUTH_BARRIER_LOGIN_PATH = "/auth/login"
+DEFAULT_AUTH_BARRIER_TOKEN_PATH = "/rbac-api/v1/auth/token"
+DEFAULT_AUTH_BARRIER_LOGINSESSION_PATH_PREFIX = "/conductor/auth/v1/loginsession/"
+AUTH_BARRIER_LOGIN_PAGE_MARKERS = (
+    "id=\"loginForm\"",
+    "Log In | Puppet Enterprise",
+    "/auth/scripts/lib/login.js",
+)
+HOP_BY_HOP_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
 
 
 def log(message):
@@ -215,6 +241,13 @@ def env_int(name, default):
     if not value:
         return default
     return int(value)
+
+
+def env_float(name, default):
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    return float(value)
 
 
 def env_bool(name, default=False):
@@ -303,6 +336,19 @@ def normalize_datetime(value):
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def datetime_to_text(value):
+    value = normalize_datetime(value)
+    return value.isoformat() if value is not None else ""
+
+
+def parse_datetime_text(value):
+    text = (value or "").strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    return normalize_datetime(datetime.fromisoformat(normalized))
 
 
 def datetime_sort_value(value):
@@ -462,6 +508,31 @@ def classifier_group_depth(group_map, group_id, root_id, cache):
     cache[group_id] = depth
     return depth
 
+def request_path_with_query(parsed):
+    path = parsed.path or "/"
+    if parsed.query:
+        return f"{path}?{parsed.query}"
+    return path
+
+
+def extract_response_cookie(headers, cookie_name):
+    prefix = f"{cookie_name}="
+    for header_name, header_value in headers or []:
+        if header_name.lower() != "set-cookie":
+            continue
+        value = (header_value or "").strip()
+        if value.startswith(prefix):
+            return value.split(";", 1)[0]
+    return ""
+
+
+def response_is_console_page(body):
+    if not body:
+        return False
+    text = body[:8192].decode("utf-8", errors="replace")
+    return not any(marker in text for marker in AUTH_BARRIER_LOGIN_PAGE_MARKERS)
+
+
 def http_request_raw(method, url, headers=None, data=None, context=None, timeout=30):
     request = urllib.request.Request(url, method=method, data=data)
     for key, value in (headers or {}).items():
@@ -520,6 +591,28 @@ def participant_status_ready(status, max_age_seconds):
     return True, age_seconds
 
 
+def relay_status_ready(status):
+    if not status.get("connected", False):
+        return False
+    if not status.get("participantReady", False):
+        return False
+    if not status.get("localPuppetdbHealthy", False):
+        return False
+    if status.get("commandProxyEnabled", False) and not status.get("commandProxyReady", False):
+        return False
+    if status.get("caSyncEnabled", False) and not status.get("caSyncReady", False):
+        return False
+    if status.get("classifierSyncEnabled", False) and not status.get("classifierSyncReady", False):
+        return False
+    if status.get("rbacSyncEnabled", False) and not status.get("rbacSyncReady", False):
+        return False
+    if status.get("authBarrierEnabled", False) and not status.get("authBarrierReady", False):
+        return False
+    if status.get("codeDeployEnabled", False) and not status.get("codeDeployReady", False):
+        return False
+    return True
+
+
 def probe(mode):
     status_path = default_status_path()
     max_age_seconds = env_int("CONDUCTOR_RELAY_STATUS_MAX_AGE_SECONDS", 60)
@@ -543,21 +636,7 @@ def probe(mode):
     if mode == "live":
         return 0
 
-    if not status.get("connected", False):
-        return 1
-    if not status.get("participantReady", False):
-        return 1
-    if not status.get("localPuppetdbHealthy", False):
-        return 1
-    if status.get("commandProxyEnabled", False) and not status.get("commandProxyReady", False):
-        return 1
-    if status.get("caSyncEnabled", False) and not status.get("caSyncReady", False):
-        return 1
-    if status.get("classifierSyncEnabled", False) and not status.get("classifierSyncReady", False):
-        return 1
-    if status.get("rbacSyncEnabled", False) and not status.get("rbacSyncReady", False):
-        return 1
-    if status.get("codeDeployEnabled", False) and not status.get("codeDeployReady", False):
+    if not relay_status_ready(status):
         return 1
 
     return 0
@@ -697,6 +776,176 @@ class LocalCodeDeployHookHandler(BaseHTTPRequestHandler):
         self.json_response(200, response)
 
 
+class LocalAuthBarrierHandler(BaseHTTPRequestHandler):
+    server_version = "ConductorRelay/0.2"
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, _format, *_args):
+        return
+
+    def text_response(self, status_code, message):
+        body = (message.rstrip() + "\n").encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def json_response(self, status_code, payload):
+        body = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def send_proxy_response(self, status_code, headers, body):
+        body = body or b""
+        self.send_response(status_code)
+        for header_name, header_value in headers or []:
+            header_lower = header_name.lower()
+            if header_lower in HOP_BY_HOP_HEADERS or header_lower == "content-length":
+                continue
+            self.send_header(header_name, header_value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def read_request_body(self):
+        transfer_encoding = self.headers.get("Transfer-Encoding", "").strip().lower()
+        if "chunked" in transfer_encoding:
+            chunks = []
+            while True:
+                line = self.rfile.readline()
+                if not line:
+                    raise RelayLocalCommandError(400, "unexpected EOF while reading chunked body")
+                chunk_size_text = line.split(b";", 1)[0].strip()
+                try:
+                    chunk_size = int(chunk_size_text, 16)
+                except ValueError as error:
+                    raise RelayLocalCommandError(400, "invalid chunk size") from error
+                if chunk_size == 0:
+                    while True:
+                        trailer_line = self.rfile.readline()
+                        if not trailer_line or trailer_line in {b"\r\n", b"\n"}:
+                            return b"".join(chunks)
+                chunk = self.rfile.read(chunk_size)
+                if len(chunk) != chunk_size:
+                    raise RelayLocalCommandError(400, "unexpected EOF while reading chunk data")
+                chunks.append(chunk)
+                crlf = self.rfile.read(2)
+                if crlf != b"\r\n":
+                    raise RelayLocalCommandError(400, "invalid chunk terminator")
+
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as error:
+            raise RelayLocalCommandError(400, "invalid content length") from error
+        return self.rfile.read(content_length) if content_length > 0 else b""
+
+    def peer_subject(self):
+        if not hasattr(self.connection, "getpeercert"):
+            return ""
+        try:
+            peer_cert = self.connection.getpeercert(binary_form=True)
+        except TypeError:
+            return ""
+        if not peer_cert:
+            return ""
+        try:
+            certificate = x509.load_der_x509_certificate(peer_cert)
+            return certificate.subject.rfc4514_string()
+        except Exception:
+            return ""
+
+    def handle_loginsession_request(self, parsed):
+        session_id = parsed.path[len(DEFAULT_AUTH_BARRIER_LOGINSESSION_PATH_PREFIX) :].strip()
+        try:
+            session_id = self.server.runtime.normalize_loginsession_id(session_id)
+        except RelayLocalCommandError as error:
+            self.text_response(error.status_code, error.message)
+            return
+
+        try:
+            if self.command == "GET":
+                payload = self.server.runtime.read_local_loginsession(session_id)
+                if payload is None:
+                    self.text_response(404, "loginsession not found")
+                    return
+                self.json_response(200, payload)
+                return
+
+            if self.command == "PUT":
+                body = self.read_request_body()
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    self.text_response(400, "invalid JSON body")
+                    return
+                self.server.runtime.upsert_local_loginsession(payload, expected_session_id=session_id)
+                self.json_response(200, {"id": session_id, "status": "ok"})
+                return
+
+            self.text_response(405, "method not allowed")
+        except RelayLocalCommandError as error:
+            self.text_response(error.status_code, error.message)
+        except Exception as error:  # pragma: no cover - defensive fallback
+            self.text_response(500, str(error))
+
+    def handle_proxy_request(self):
+        parsed = urllib.parse.urlsplit(self.path)
+        if (
+            self.server.barrier_name == "api"
+            and parsed.path.startswith(DEFAULT_AUTH_BARRIER_LOGINSESSION_PATH_PREFIX)
+        ):
+            self.handle_loginsession_request(parsed)
+            return
+        client_address = self.client_address[0] if self.client_address else ""
+        try:
+            body = self.read_request_body()
+            status_code, headers, response_body = self.server.runtime.handle_local_auth_barrier_request(
+                self.server.barrier_name,
+                self.command,
+                parsed,
+                self.headers,
+                body,
+                peer_subject=self.peer_subject(),
+                client_address=client_address,
+            )
+        except RelayLocalCommandError as error:
+            self.text_response(error.status_code, error.message)
+            return
+        except Exception as error:  # pragma: no cover - defensive fallback
+            self.text_response(500, str(error))
+            return
+
+        self.send_proxy_response(status_code, headers, response_body)
+
+    def do_DELETE(self):
+        self.handle_proxy_request()
+
+    def do_GET(self):
+        self.handle_proxy_request()
+
+    def do_HEAD(self):
+        self.handle_proxy_request()
+
+    def do_OPTIONS(self):
+        self.handle_proxy_request()
+
+    def do_PATCH(self):
+        self.handle_proxy_request()
+
+    def do_POST(self):
+        self.handle_proxy_request()
+
+    def do_PUT(self):
+        self.handle_proxy_request()
+
+
 class K8sApi:
     def __init__(self, namespace):
         host = os.environ.get("KUBERNETES_SERVICE_HOST", "").strip()
@@ -774,7 +1023,7 @@ class RelayRuntime:
         self.command_proxy_enabled = env_bool("CONDUCTOR_RELAY_COMMAND_PROXY_ENABLED", False)
         self.command_proxy_bind_host = (
             os.environ.get("CONDUCTOR_RELAY_COMMAND_PROXY_BIND_HOST", "").strip()
-            or "0.0.0.0"
+            or "127.0.0.1"
         )
         self.command_proxy_port = env_int("CONDUCTOR_RELAY_COMMAND_PROXY_PORT", 18081)
         self.command_proxy_path = (
@@ -936,6 +1185,66 @@ class RelayRuntime:
             "CONDUCTOR_RELAY_CA_SYNC_TARGET_ROLES",
             default=DEFAULT_TARGET_ROLES,
         )
+        self.auth_barrier_enabled = env_bool(
+            "CONDUCTOR_RELAY_AUTH_BARRIER_ENABLED",
+            self.rbac_sync_enabled,
+        )
+        self.auth_barrier_wait_timeout_seconds = env_int(
+            "CONDUCTOR_RELAY_AUTH_BARRIER_WAIT_TIMEOUT_SECONDS",
+            20,
+        )
+        self.auth_barrier_request_timeout_seconds = env_int(
+            "CONDUCTOR_RELAY_AUTH_BARRIER_REQUEST_TIMEOUT_SECONDS",
+            30,
+        )
+        self.auth_barrier_peer_request_timeout_seconds = env_int(
+            "CONDUCTOR_RELAY_AUTH_BARRIER_PEER_REQUEST_TIMEOUT_SECONDS",
+            5,
+        )
+        self.auth_barrier_poll_interval_seconds = env_float(
+            "CONDUCTOR_RELAY_AUTH_BARRIER_POLL_INTERVAL_SECONDS",
+            0.25,
+        )
+        self.auth_barrier_http_listen_host = (
+            os.environ.get("CONDUCTOR_RELAY_AUTH_BARRIER_HTTP_LISTEN_HOST", "").strip()
+            or "127.0.0.1"
+        )
+        self.auth_barrier_http_port = env_int(
+            "CONDUCTOR_RELAY_AUTH_BARRIER_HTTP_LISTEN_PORT",
+            4430,
+        )
+        self.auth_barrier_http_target_host = (
+            os.environ.get("CONDUCTOR_RELAY_AUTH_BARRIER_HTTP_TARGET_HOST", "").strip()
+            or "127.0.0.1"
+        )
+        self.auth_barrier_http_target_port = env_int(
+            "CONDUCTOR_RELAY_AUTH_BARRIER_HTTP_TARGET_PORT",
+            4440,
+        )
+        self.auth_barrier_api_listen_host = (
+            os.environ.get("CONDUCTOR_RELAY_AUTH_BARRIER_API_LISTEN_HOST", "").strip()
+            or "0.0.0.0"
+        )
+        self.auth_barrier_api_port = env_int(
+            "CONDUCTOR_RELAY_AUTH_BARRIER_API_LISTEN_PORT",
+            4444,
+        )
+        self.auth_barrier_api_target_host = (
+            os.environ.get("CONDUCTOR_RELAY_AUTH_BARRIER_API_TARGET_HOST", "").strip()
+            or "127.0.0.1"
+        )
+        self.auth_barrier_api_target_port = env_int(
+            "CONDUCTOR_RELAY_AUTH_BARRIER_API_TARGET_PORT",
+            4432,
+        )
+        self.auth_barrier_control_plane_headless_service = (
+            os.environ.get("CONDUCTOR_RELAY_CONTROL_PLANE_HEADLESS_SERVICE", "").strip()
+            or f"{self.code_deploy_service_host}-headless"
+        )
+        self.console_webserver_conf_path = (
+            os.environ.get("CONDUCTOR_RELAY_CONSOLE_WEBSERVER_CONF_PATH", "").strip()
+            or DEFAULT_CONSOLE_WEBSERVER_CONF_PATH
+        )
 
         self.k8s = K8sApi(self.pod_namespace)
         self.onboarding_secret_name = participant_secret_name(
@@ -980,6 +1289,12 @@ class RelayRuntime:
         self.command_proxy_thread = None
         self.code_deploy_hook_server = None
         self.code_deploy_hook_thread = None
+        self.auth_barrier_http_server = None
+        self.auth_barrier_http_thread = None
+        self.auth_barrier_api_server = None
+        self.auth_barrier_api_thread = None
+        self.auth_barrier_start_error = ""
+        self.auth_barrier_last_error = ""
 
         self.status = {
             "participant": self.pod_name,
@@ -1055,6 +1370,22 @@ class RelayRuntime:
             "rbacSyncLastAppliedAt": 0,
             "rbacSyncLastConvergedAt": 0,
             "rbacSyncLastError": "",
+            "authBarrierEnabled": self.auth_barrier_enabled,
+            "authBarrierReady": not self.auth_barrier_enabled,
+            "authBarrierHttpListenAddress": (
+                f"{self.auth_barrier_http_listen_host}:{self.auth_barrier_http_port}"
+                if self.auth_barrier_enabled
+                else ""
+            ),
+            "authBarrierApiListenAddress": (
+                f"{self.auth_barrier_api_listen_host}:{self.auth_barrier_api_port}"
+                if self.auth_barrier_enabled
+                else ""
+            ),
+            "authBarrierWaitTimeoutSeconds": (
+                self.auth_barrier_wait_timeout_seconds if self.auth_barrier_enabled else 0
+            ),
+            "authBarrierLastError": "",
             "caSyncEnabled": self.ca_sync_enabled,
             "caSyncReady": not self.ca_sync_enabled,
             "caSyncDir": self.ca_sync_dir if self.ca_sync_enabled else "",
@@ -1231,6 +1562,7 @@ class RelayRuntime:
                     state["lastErrorAt"] = int(updates.get("lastErrorAt") or time.time())
                 else:
                     state["lastErrorAt"] = 0
+                    self.classifier_sync_runtime_error = ""
             self.classifier_sync_state = state
             self.refresh_classifier_summary_locked()
             snapshot = dict(state)
@@ -1968,9 +2300,27 @@ class RelayRuntime:
         )
 
     @staticmethod
+    def normalize_rbac_rows_for_hash(table_rows):
+        normalized_tables = {}
+        for table_name in RBAC_SYNC_TABLE_NAMES:
+            volatile_fields = RBAC_SYNC_VOLATILE_FIELDS.get(table_name, set())
+            normalized_rows = []
+            for row in list(table_rows.get(table_name) or []):
+                if not volatile_fields:
+                    normalized_rows.append(row)
+                    continue
+                normalized_row = dict(row)
+                for field_name in volatile_fields:
+                    if field_name in normalized_row:
+                        normalized_row[field_name] = None
+                normalized_rows.append(normalized_row)
+            normalized_tables[table_name] = normalized_rows
+        return normalized_tables
+
+    @staticmethod
     def rbac_rows_hash(table_rows, auth_files, excluded_token_label_prefixes):
         payload = {
-            "tables": {name: list(table_rows.get(name) or []) for name in RBAC_SYNC_TABLE_NAMES},
+            "tables": RelayRuntime.normalize_rbac_rows_for_hash(table_rows),
             "authFiles": dict(sorted((auth_files or {}).items())),
             "excludedTokenLabelPrefixes": list(excluded_token_label_prefixes or []),
         }
@@ -2088,6 +2438,62 @@ class RelayRuntime:
         self.rbac_sync_runtime_error = ""
         self.merge_rbac_sync_state(**updates)
 
+    def build_rbac_state_payload(self, state, published_at):
+        return {
+            "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+            "kind": "ConductorRelayRbacState",
+            "publishedAt": published_at,
+            "origin": {
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "role": self.relay_role,
+                "segment": self.segment_name,
+            },
+            "targetRoles": list(self.rbac_sync_target_roles),
+            "state": state,
+        }
+
+    def record_published_rbac_state(self, state, published_at, now):
+        state_hash = (state.get("hash") or "").strip()
+        self.merge_rbac_sync_state(
+            state="converged",
+            scope=self.rbac_sync_scope,
+            excludedTokenLabelPrefixes=list(self.rbac_sync_excluded_token_label_prefixes),
+            desiredHash=state_hash,
+            actualHash=state_hash,
+            desiredTableCount=int(state.get("tableCount") or 0),
+            actualTableCount=int(state.get("tableCount") or 0),
+            desiredRowCount=int(state.get("rowCount") or 0),
+            actualRowCount=int(state.get("rowCount") or 0),
+            authFileCount=int(state.get("authFileCount") or 0),
+            originParticipant=self.pod_name,
+            desiredPublishedAt=published_at,
+            lastPublishedAt=now,
+            lastConvergedAt=now,
+            lastError="",
+        )
+
+    def publish_rbac_state_now(self):
+        if not self.rbac_sync_enabled:
+            return
+
+        state = self.read_local_rbac_state()
+        now = int(time.time())
+        state_hash = (state.get("hash") or "").strip()
+        snapshot = self.rbac_sync_state_snapshot()
+        version_at = int(snapshot.get("desiredPublishedAt") or 0)
+        if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
+            version_at = now
+
+        payload = self.build_rbac_state_payload(state, version_at)
+        self.publish_envelope(
+            f"relay.rbac-state.{sanitize_fragment(self.pod_name)}",
+            payload,
+        )
+        self.last_published_rbac_hash = state_hash
+        self.next_rbac_publish = now + self.publish_interval
+        self.record_published_rbac_state(state, version_at, now)
+
     def publish_rbac_state(self):
         if (
             not self.rbac_sync_enabled
@@ -2109,19 +2515,7 @@ class RelayRuntime:
         if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
             version_at = now
 
-        payload = {
-            "apiVersion": "pe-k8s.puppet.com/v1alpha1",
-            "kind": "ConductorRelayRbacState",
-            "publishedAt": version_at,
-            "origin": {
-                "participant": self.pod_name,
-                "namespace": self.pod_namespace,
-                "role": self.relay_role,
-                "segment": self.segment_name,
-            },
-            "targetRoles": list(self.rbac_sync_target_roles),
-            "state": state,
-        }
+        payload = self.build_rbac_state_payload(state, version_at)
         self.channel.basic_publish(
             exchange=self.bundle["hub"]["exchanges"]["data"],
             routing_key=f"relay.rbac-state.{sanitize_fragment(self.pod_name)}",
@@ -2130,23 +2524,7 @@ class RelayRuntime:
         )
         self.last_published_rbac_hash = state_hash
         self.next_rbac_publish = now + self.publish_interval
-        self.merge_rbac_sync_state(
-            state="converged",
-            scope=self.rbac_sync_scope,
-            excludedTokenLabelPrefixes=list(self.rbac_sync_excluded_token_label_prefixes),
-            desiredHash=state_hash,
-            actualHash=state_hash,
-            desiredTableCount=int(state.get("tableCount") or 0),
-            actualTableCount=int(state.get("tableCount") or 0),
-            desiredRowCount=int(state.get("rowCount") or 0),
-            actualRowCount=int(state.get("rowCount") or 0),
-            authFileCount=int(state.get("authFileCount") or 0),
-            originParticipant=self.pod_name,
-            desiredPublishedAt=version_at,
-            lastPublishedAt=now,
-            lastConvergedAt=now,
-            lastError="",
-        )
+        self.record_published_rbac_state(state, version_at, now)
 
     def rbac_managed_tokens_delete_sql(self):
         if not self.rbac_sync_excluded_token_label_prefixes:
@@ -2532,8 +2910,16 @@ class RelayRuntime:
                 )
             return
         if table_name == "tokens":
+            normalized_rows = []
+            for row in rows:
+                normalized_row = dict(row)
+                timeout = (normalized_row.get("timeout") or "").strip()
+                if timeout and not normalized_row.get("last_active"):
+                    normalized_row["last_active"] = normalized_row.get("creation")
+                normalized_rows.append(normalized_row)
+            payload = json.dumps(normalized_rows, separators=(",", ":"), sort_keys=True)
             cursor.execute(self.rbac_managed_tokens_delete_sql())
-            if rows:
+            if normalized_rows:
                 cursor.execute(
                     """
                     insert into tokens (
@@ -2851,6 +3237,7 @@ class RelayRuntime:
                     state["lastErrorAt"] = int(updates.get("lastErrorAt") or time.time())
                 else:
                     state["lastErrorAt"] = 0
+                    self.code_deploy_runtime_error = ""
             self.code_deploy_states[environment] = state
             self.refresh_code_deploy_summary_locked()
             snapshot = dict(state)
@@ -3487,6 +3874,574 @@ class RelayRuntime:
     def build_local_service_context(self):
         _, _, _, ca_path = self.puppet_ssl_paths()
         return ssl.create_default_context(cafile=ca_path)
+
+    def console_webserver_conf_text(self):
+        if not os.path.isfile(self.console_webserver_conf_path):
+            raise RuntimeError(
+                f"console webserver config not found: {self.console_webserver_conf_path}"
+            )
+        with open(self.console_webserver_conf_path, "r", encoding="utf-8") as handle:
+            return handle.read()
+
+    def console_webserver_hocon_string(self, key):
+        content = self.console_webserver_conf_text()
+        match = re.search(
+            rf'^\s*{re.escape(key)}\s*:\s*"([^"]+)"',
+            content,
+            re.MULTILINE,
+        )
+        if not match:
+            raise RuntimeError(
+                f"unable to locate {key} in {self.console_webserver_conf_path}"
+            )
+        return match.group(1)
+
+    def auth_barrier_tls_paths(self):
+        cert_path = self.console_webserver_hocon_string("ssl-cert")
+        key_path = self.console_webserver_hocon_string("ssl-key")
+        ca_path = self.console_webserver_hocon_string("ssl-ca-cert")
+        for path in [cert_path, key_path, ca_path]:
+            if not os.path.isfile(path):
+                raise RuntimeError(f"required auth barrier TLS file not found: {path}")
+        return cert_path, key_path, ca_path
+
+    def build_auth_barrier_server_context(self):
+        cert_path, key_path, ca_path = self.auth_barrier_tls_paths()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+        context.load_verify_locations(cafile=ca_path)
+        context.verify_mode = ssl.CERT_OPTIONAL
+        return context
+
+    def auth_barrier_peer_host(self, participant_name):
+        participant_name = (participant_name or "").strip()
+        if not participant_name:
+            raise RuntimeError("peer participant name is required")
+        return (
+            f"{participant_name}.{self.auth_barrier_control_plane_headless_service}."
+            f"{self.pod_namespace}.svc.cluster.local"
+        )
+
+    def fresh_peer_statuses(self):
+        fresh_statuses = []
+        os.makedirs(self.peer_dir, exist_ok=True)
+        now = int(time.time())
+        for entry in os.scandir(self.peer_dir):
+            if not entry.is_file() or not entry.name.endswith(".json"):
+                continue
+            try:
+                status = read_json_file(entry.path)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                continue
+            last_updated_at = int(status.get("lastUpdatedAt") or 0)
+            if last_updated_at <= 0:
+                continue
+            if now - last_updated_at > self.peer_status_max_age:
+                continue
+            fresh_statuses.append(status)
+        return fresh_statuses
+
+    def auth_barrier_target_peers(self):
+        peers = []
+        for status in self.fresh_peer_statuses():
+            participant = (status.get("participant") or "").strip()
+            if not participant or participant == self.pod_name:
+                continue
+            if status.get("role") != "control-plane":
+                continue
+            if not relay_status_ready(status):
+                continue
+            peers.append({
+                "participant": participant,
+                "host": self.auth_barrier_peer_host(participant),
+            })
+        peers.sort(key=lambda peer: peer["participant"])
+        return peers
+
+    def proxy_request_headers(self, barrier_name, request_headers, client_address, peer_subject):
+        headers = {}
+        for header_name, header_value in request_headers.items():
+            header_lower = header_name.lower()
+            if header_lower in HOP_BY_HOP_HEADERS or header_lower == "content-length":
+                continue
+            headers[header_name] = header_value
+
+        forwarded_for = headers.get("X-Forwarded-For", "").strip()
+        if client_address:
+            headers["X-Forwarded-For"] = (
+                f"{forwarded_for}, {client_address}" if forwarded_for else client_address
+            )
+        if barrier_name == "api":
+            headers.setdefault("X-Forwarded-Proto", "https")
+            if peer_subject:
+                headers.setdefault("X-SSL-Subject", peer_subject)
+                headers.setdefault("X-Client-DN", peer_subject)
+                headers.setdefault("X-Client-Verify", "SUCCESS")
+            else:
+                headers.setdefault("X-Client-Verify", "NONE")
+        return headers
+
+    @staticmethod
+    def proxy_upstream_request(scheme, host, port, method, path, headers, body, timeout, context=None):
+        connection_class = (
+            http.client.HTTPSConnection if scheme == "https" else http.client.HTTPConnection
+        )
+        kwargs = {"timeout": timeout}
+        if scheme == "https":
+            kwargs["context"] = context
+        connection = connection_class(host, port, **kwargs)
+        try:
+            connection.request(method, path, body=body if body else None, headers=headers)
+            response = connection.getresponse()
+            response_body = response.read()
+            return response.status, response.reason, response.getheaders(), response_body
+        finally:
+            connection.close()
+
+    def validate_session_cookie_on_peer(self, peer_host, cookie_header):
+        status_code, _reason, _headers, body = self.proxy_upstream_request(
+            "https",
+            peer_host,
+            443,
+            "GET",
+            "/",
+            headers={
+                "Accept": "text/html,application/xhtml+xml",
+                "Cookie": cookie_header,
+                "Host": peer_host,
+            },
+            body=b"",
+            timeout=self.auth_barrier_peer_request_timeout_seconds,
+            context=self.build_local_service_context(),
+        )
+        if status_code != 200:
+            return False
+        return response_is_console_page(body)
+
+    def normalize_loginsession_id(self, session_id):
+        value = (session_id or "").strip()
+        if not value:
+            raise RelayLocalCommandError(400, "loginsession id is required")
+        try:
+            return str(uuid.UUID(value))
+        except ValueError as error:
+            raise RelayLocalCommandError(400, f"invalid loginsession id: {value}") from error
+
+    def serialize_loginsession_row(self, row):
+        if not row:
+            return None
+        return {
+            "id": self.normalize_loginsession_id(row["id"]),
+            "creationDate": datetime_to_text(row["creationDate"]),
+            "expirationDate": datetime_to_text(row["expirationDate"]),
+        }
+
+    def read_local_loginsession(self, session_id):
+        session_id = self.normalize_loginsession_id(session_id)
+        connection = self.rbac_db_connection()
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    select id::text, creation_date, expiration_date
+                    from loginsession
+                    where id = %s::uuid
+                    """,
+                    (session_id,),
+                )
+                row = cursor.fetchone()
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+        if row is None:
+            return None
+        return self.serialize_loginsession_row(
+            {
+                "id": row[0],
+                "creationDate": row[1],
+                "expirationDate": row[2],
+            }
+        )
+
+    def wait_for_local_loginsession(self, session_id):
+        deadline = time.time() + max(self.auth_barrier_wait_timeout_seconds, 1)
+        while time.time() < deadline:
+            payload = self.read_local_loginsession(session_id)
+            if payload is not None:
+                return payload
+            time.sleep(self.auth_barrier_poll_interval_seconds)
+        raise RuntimeError(f"timed out waiting for local loginsession {session_id}")
+
+    def upsert_local_loginsession(self, payload, expected_session_id=""):
+        session_id = self.normalize_loginsession_id(
+            (payload or {}).get("id") or expected_session_id
+        )
+        if expected_session_id and session_id != self.normalize_loginsession_id(expected_session_id):
+            raise RelayLocalCommandError(400, "loginsession id does not match request path")
+
+        try:
+            creation_date = parse_datetime_text((payload or {}).get("creationDate"))
+            expiration_date = parse_datetime_text((payload or {}).get("expirationDate"))
+        except ValueError as error:
+            raise RelayLocalCommandError(400, f"invalid loginsession timestamp: {error}") from error
+
+        if creation_date is None or expiration_date is None:
+            raise RelayLocalCommandError(
+                400,
+                "loginsession creationDate and expirationDate are required",
+            )
+
+        connection = self.rbac_db_connection()
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    insert into loginsession (id, creation_date, expiration_date)
+                    values (%s::uuid, %s, %s)
+                    on conflict (id) do update
+                    set
+                        creation_date = excluded.creation_date,
+                        expiration_date = excluded.expiration_date
+                    """,
+                    (session_id, creation_date, expiration_date),
+                )
+            finally:
+                cursor.close()
+            connection.commit()
+        finally:
+            connection.close()
+        return {
+            "id": session_id,
+            "creationDate": datetime_to_text(creation_date),
+            "expirationDate": datetime_to_text(expiration_date),
+        }
+
+    def peer_loginsession_url(self, peer_host, session_id):
+        session_id = self.normalize_loginsession_id(session_id)
+        return (
+            f"https://{peer_host}:{self.auth_barrier_api_port}"
+            f"{DEFAULT_AUTH_BARRIER_LOGINSESSION_PATH_PREFIX}{urllib.parse.quote(session_id)}"
+        )
+
+    def push_loginsession_to_peer(self, peer_host, payload):
+        status_code, body = http_request_json(
+            "PUT",
+            self.peer_loginsession_url(peer_host, payload.get("id")),
+            headers={"Content-Type": "application/json"},
+            payload=payload,
+            context=self.build_local_service_context(),
+            timeout=self.auth_barrier_peer_request_timeout_seconds,
+        )
+        if status_code != 200:
+            raise RuntimeError(f"loginsession sync returned {status_code}: {body}")
+
+    def validate_loginsession_on_peer(self, peer_host, session_id):
+        status_code, _body = http_request_json(
+            "GET",
+            self.peer_loginsession_url(peer_host, session_id),
+            headers={"Accept": "application/json"},
+            context=self.build_local_service_context(),
+            timeout=self.auth_barrier_peer_request_timeout_seconds,
+        )
+        return status_code == 200
+
+    def synchronize_loginsession(self, session_id):
+        peers = self.auth_barrier_target_peers()
+        if not peers:
+            return
+
+        session_payload = self.wait_for_local_loginsession(session_id)
+        pending = {peer["participant"]: peer["host"] for peer in peers}
+        last_errors = {}
+        deadline = time.time() + max(self.auth_barrier_wait_timeout_seconds, 1)
+
+        while pending and time.time() < deadline:
+            for participant, host in list(pending.items()):
+                try:
+                    self.push_loginsession_to_peer(host, session_payload)
+                    if self.validate_loginsession_on_peer(host, session_id):
+                        pending.pop(participant, None)
+                        last_errors.pop(participant, None)
+                        continue
+                    last_errors[participant] = "not yet converged"
+                except Exception as error:  # pragma: no cover - transient network failures
+                    last_errors[participant] = str(error)
+            if pending:
+                time.sleep(self.auth_barrier_poll_interval_seconds)
+
+        if pending:
+            details = ", ".join(
+                f"{participant} ({last_errors.get(participant, 'not yet converged')})"
+                for participant in sorted(pending)
+            )
+            raise RuntimeError(f"timed out waiting for loginsession convergence on {details}")
+
+    def validate_bearer_token_on_peer(self, peer_host, token):
+        status_code, _reason, _headers, _body = self.proxy_upstream_request(
+            "https",
+            peer_host,
+            self.auth_barrier_api_port,
+            "GET",
+            "/rbac-api/v1/users/current",
+            headers={
+                "Accept": "application/json",
+                "Host": peer_host,
+                "X-Authentication": token,
+            },
+            body=b"",
+            timeout=self.auth_barrier_peer_request_timeout_seconds,
+            context=self.build_local_service_context(),
+        )
+        return status_code == 200
+
+    def wait_for_auth_replication(self, auth_kind, credential):
+        peers = self.auth_barrier_target_peers()
+        if not peers:
+            return
+
+        validator = (
+            self.validate_session_cookie_on_peer
+            if auth_kind == "session"
+            else self.validate_bearer_token_on_peer
+        )
+        pending = {peer["participant"]: peer["host"] for peer in peers}
+        last_errors = {}
+        deadline = time.time() + max(self.auth_barrier_wait_timeout_seconds, 1)
+        while pending and time.time() < deadline:
+            for participant, host in list(pending.items()):
+                try:
+                    if validator(host, credential):
+                        pending.pop(participant, None)
+                        last_errors.pop(participant, None)
+                        continue
+                except Exception as error:  # pragma: no cover - transient network failures
+                    last_errors[participant] = str(error)
+            if pending:
+                time.sleep(self.auth_barrier_poll_interval_seconds)
+
+        if pending:
+            details = ", ".join(
+                f"{participant} ({last_errors.get(participant, 'not yet converged')})"
+                for participant in sorted(pending)
+            )
+            raise RuntimeError(f"timed out waiting for auth convergence on {details}")
+
+    def auth_barrier_proxy_target(self, barrier_name):
+        if barrier_name == "console":
+            return (
+                "http",
+                self.auth_barrier_http_target_host,
+                self.auth_barrier_http_target_port,
+            )
+        if barrier_name == "api":
+            return (
+                "http",
+                self.auth_barrier_api_target_host,
+                self.auth_barrier_api_target_port,
+            )
+        raise RelayLocalCommandError(404, f"unknown auth barrier target: {barrier_name}")
+
+    def parse_auth_barrier_token(self, body):
+        if not body:
+            return ""
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return ""
+        if isinstance(payload, str):
+            return payload.strip()
+        if isinstance(payload, dict):
+            return (payload.get("token") or "").strip()
+        return ""
+
+    def handle_local_auth_barrier_request(
+        self,
+        barrier_name,
+        method,
+        parsed,
+        request_headers,
+        body,
+        *,
+        peer_subject="",
+        client_address="",
+    ):
+        scheme, host, port = self.auth_barrier_proxy_target(barrier_name)
+        path = request_path_with_query(parsed)
+        proxy_headers = self.proxy_request_headers(
+            barrier_name,
+            request_headers,
+            client_address,
+            peer_subject,
+        )
+
+        try:
+            status_code, _reason, response_headers, response_body = self.proxy_upstream_request(
+                scheme,
+                host,
+                port,
+                method,
+                path,
+                headers=proxy_headers,
+                body=body,
+                timeout=self.auth_barrier_request_timeout_seconds,
+            )
+        except RelayLocalCommandError:
+            raise
+        except Exception as error:
+            self.auth_barrier_last_error = str(error)
+            self.set_status(authBarrierLastError=str(error))
+            raise RelayLocalCommandError(502, f"auth barrier upstream request failed: {error}") from error
+
+        if not self.auth_barrier_enabled:
+            return status_code, response_headers, response_body
+
+        if barrier_name == "console" and 200 <= status_code < 400:
+            session_cookie = extract_response_cookie(
+                response_headers,
+                DEFAULT_AUTH_BARRIER_SESSION_COOKIE_NAME,
+            )
+            if session_cookie:
+                session_parts = session_cookie.split("=", 1)
+                session_id = session_parts[1].strip() if len(session_parts) == 2 else ""
+                if session_id:
+                    try:
+                        self.synchronize_loginsession(session_id)
+                        self.auth_barrier_last_error = ""
+                        self.set_status(authBarrierLastError="")
+                    except Exception as error:
+                        self.auth_barrier_last_error = str(error)
+                        self.set_status(authBarrierLastError=str(error))
+                        raise RelayLocalCommandError(
+                            503,
+                            f"auth issuance did not converge: {error}",
+                        ) from error
+
+            auth_cookie = extract_response_cookie(
+                response_headers,
+                DEFAULT_AUTH_BARRIER_AUTH_COOKIE_NAME,
+            )
+            if auth_cookie:
+                try:
+                    self.publish_rbac_state_now()
+                    self.wait_for_auth_replication("session", auth_cookie)
+                    self.auth_barrier_last_error = ""
+                    self.set_status(authBarrierLastError="")
+                except Exception as error:
+                    self.auth_barrier_last_error = str(error)
+                    self.set_status(authBarrierLastError=str(error))
+                    raise RelayLocalCommandError(
+                        503,
+                        f"auth issuance did not converge: {error}",
+                    ) from error
+
+        if not (barrier_name == "api" and method == "POST"):
+            return status_code, response_headers, response_body
+
+        auth_kind = ""
+        credential = ""
+        if parsed.path == DEFAULT_AUTH_BARRIER_TOKEN_PATH and status_code == 200:
+            credential = self.parse_auth_barrier_token(response_body)
+            if credential:
+                auth_kind = "token"
+
+        if not auth_kind or not credential:
+            return status_code, response_headers, response_body
+
+        try:
+            self.publish_rbac_state_now()
+            self.wait_for_auth_replication(auth_kind, credential)
+            self.auth_barrier_last_error = ""
+            self.set_status(authBarrierLastError="")
+        except Exception as error:
+            self.auth_barrier_last_error = str(error)
+            self.set_status(authBarrierLastError=str(error))
+            raise RelayLocalCommandError(503, f"auth issuance did not converge: {error}") from error
+
+        return status_code, response_headers, response_body
+
+    def ensure_auth_barrier_running(self):
+        if not self.auth_barrier_enabled:
+            return
+
+        http_ready = (
+            self.auth_barrier_http_server is not None
+            and self.auth_barrier_http_thread is not None
+            and self.auth_barrier_http_thread.is_alive()
+        )
+        api_ready = (
+            self.auth_barrier_api_server is not None
+            and self.auth_barrier_api_thread is not None
+            and self.auth_barrier_api_thread.is_alive()
+        )
+        if http_ready and api_ready:
+            self.auth_barrier_start_error = ""
+            self.set_status(
+                authBarrierReady=True,
+                authBarrierLastError=self.auth_barrier_last_error,
+            )
+            return
+
+        try:
+            if not http_ready:
+                server = ThreadingHTTPServer(
+                    (self.auth_barrier_http_listen_host, self.auth_barrier_http_port),
+                    LocalAuthBarrierHandler,
+                )
+                server.runtime = self
+                server.barrier_name = "console"
+                server.daemon_threads = True
+                thread = threading.Thread(
+                    target=server.serve_forever,
+                    name="conductor-relay-auth-http",
+                    daemon=True,
+                )
+                thread.start()
+                self.auth_barrier_http_server = server
+                self.auth_barrier_http_thread = thread
+                log(
+                    "Started auth barrier HTTP proxy on "
+                    f"{self.auth_barrier_http_listen_host}:{self.auth_barrier_http_port}"
+                )
+
+            if not api_ready:
+                server = ThreadingHTTPServer(
+                    (self.auth_barrier_api_listen_host, self.auth_barrier_api_port),
+                    LocalAuthBarrierHandler,
+                )
+                server.runtime = self
+                server.barrier_name = "api"
+                server.daemon_threads = True
+                context = self.build_auth_barrier_server_context()
+                server.socket = context.wrap_socket(server.socket, server_side=True)
+                thread = threading.Thread(
+                    target=server.serve_forever,
+                    name="conductor-relay-auth-api",
+                    daemon=True,
+                )
+                thread.start()
+                self.auth_barrier_api_server = server
+                self.auth_barrier_api_thread = thread
+                log(
+                    "Started auth barrier API proxy on "
+                    f"{self.auth_barrier_api_listen_host}:{self.auth_barrier_api_port}"
+                )
+
+            self.auth_barrier_start_error = ""
+            self.set_status(
+                authBarrierReady=True,
+                authBarrierLastError=self.auth_barrier_last_error,
+            )
+        except Exception as error:
+            if str(error) != self.auth_barrier_start_error:
+                log(f"Auth barrier startup failed: {error}")
+                self.auth_barrier_start_error = str(error)
+            self.set_status(
+                authBarrierReady=False,
+                authBarrierLastError=str(error),
+            )
 
     def ensure_code_deploy_hook_running(self):
         if not self.code_deploy_enabled:
@@ -4459,6 +5414,7 @@ class RelayRuntime:
             try:
                 self.ensure_command_proxy_running()
                 self.ensure_code_deploy_hook_running()
+                self.ensure_auth_barrier_running()
                 self.start_code_deploy_worker()
                 self.refresh_participant_status()
             except KeyboardInterrupt:

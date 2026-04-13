@@ -546,6 +546,45 @@ PY
     log "Configured compiler file sync service through ${file_sync_conf_path}"
 }
 
+patch_conductor_console_auth_barrier_ports() {
+    local enabled="${PE_K8S_CONDUCTOR_RBAC_SYNC_ENABLED:-false}"
+    local webserver_conf_path=/etc/puppetlabs/console-services/conf.d/webserver.conf
+
+    [ "${enabled}" = "true" ] || return 0
+    [ -f "${webserver_conf_path}" ] || return 0
+
+    python3 - "${webserver_conf_path}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+webserver_conf_path = Path(sys.argv[1])
+text = webserver_conf_path.read_text(encoding="utf-8")
+if 'port: "4440"' in text and 'ssl-port: 4433' in text:
+    raise SystemExit(0)
+
+updated, console_count = re.subn(
+    r'(\n\s*port:\s*")4430(")',
+    r'\g<1>4440\2',
+    text,
+    count=1,
+)
+updated, api_count = re.subn(
+    r'(\n\s*ssl-port:\s*)4443\b',
+    r'\g<1>4433',
+    updated,
+    count=1,
+)
+if console_count != 1 and 'port: "4440"' not in updated:
+    raise SystemExit(f"unable to patch auth barrier ports in {webserver_conf_path}")
+if api_count != 1 and 'ssl-port: 4433' not in updated:
+    raise SystemExit(f"unable to patch auth barrier ports in {webserver_conf_path}")
+if updated != text:
+    webserver_conf_path.write_text(updated, encoding="utf-8")
+PY
+
+    log "Patched console-services listener ports for the Conductor auth barrier"
+}
 sync_conductor_console_auth_shared_state() {
     local enabled="${PE_K8S_CONDUCTOR_RBAC_SYNC_ENABLED:-false}"
     local rbac_conf_path=/etc/puppetlabs/console-services/conf.d/rbac.conf
@@ -960,6 +999,34 @@ repair_pe_service_ssl_material() {
 patch_nginx_ingress_redirects() {
     local path
 
+    python3 - <<'PY'
+from pathlib import Path
+
+location_block = """location = /rbac-api/v1/auth/token
+{
+proxy_pass https://127.0.0.1:4444;
+proxy_redirect https://127.0.0.1:4444 /;
+proxy_read_timeout 120;
+proxy_set_header X-SSL-Subject $ssl_client_s_dn;
+proxy_set_header X-Client-DN $ssl_client_s_dn;
+proxy_set_header X-Client-Verify $ssl_client_verify;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-Proto https;
+}
+"""
+
+proxy_conf_path = Path("/etc/puppetlabs/nginx/conf.d/proxy.conf")
+if proxy_conf_path.is_file():
+    text = proxy_conf_path.read_text(encoding="utf-8")
+    if "location = /rbac-api/v1/auth/token" not in text:
+        marker = "location /\n{"
+        if marker not in text:
+            raise SystemExit(f"unable to locate nginx location block in {proxy_conf_path}")
+        text = text.replace(marker, f"{location_block}\n{marker}", 1)
+        proxy_conf_path.write_text(text, encoding="utf-8")
+PY
+
     path=/etc/puppetlabs/nginx/conf.d/proxy.conf
     if [ -f "${path}" ]; then
         sed -i 's/ ipv6only=off//g' "${path}"
@@ -979,6 +1046,15 @@ server {
 
   if ($pe_ingress_https != 1) {
     return 301 https://$http_host$request_uri;
+  }
+
+  location = /rbac-api/v1/auth/token {
+    proxy_pass https://127.0.0.1:4444;
+    proxy_redirect https://127.0.0.1:4444 /;
+    proxy_read_timeout 120;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
   }
 
   location / {

@@ -149,6 +149,7 @@ case "${role}" in
             -c /etc/puppetlabs/nginx/nginx.conf
         ;;
     console-services)
+        patch_conductor_console_auth_barrier_ports
         sync_conductor_console_auth_shared_state
         exec_as_user pe-console-services \
             /opt/puppetlabs/server/apps/console-services/bin/console-services \
