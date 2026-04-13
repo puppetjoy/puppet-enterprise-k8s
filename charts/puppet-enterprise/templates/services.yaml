@@ -64,28 +64,9 @@ spec:
   selector:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: pe-services
-  ports:
-    - name: puppetdb
-      port: 8081
-      targetPort: puppetdb
-    {{- if .Values.codeManager.enabled }}
-    - name: code-manager
-      port: 8170
-      targetPort: code-manager
+    {{- if eq (include "pe.frontDoorSelectorEnabled" .) "true" }}
+    pe-k8s.puppet.com/frontdoor-active: "true"
     {{- end }}
-{{- if eq (include "pe.primaryServiceEnabled" .) "true" }}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "pe.primaryServiceName" . }}
-  labels:
-    {{- include "pe.labels" . | nindent 4 }}
-spec:
-  selector:
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/component: pe-services
-    pe-k8s.puppet.com/primary-active: "true"
   ports:
     - name: http
       port: 80
@@ -93,18 +74,29 @@ spec:
     - name: https
       port: 443
       targetPort: nginx-https
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+    - name: puppetdb
+      port: 8081
+      targetPort: puppetdb
     - name: puppetserver
       port: 8140
       targetPort: puppetserver
     - name: pcp-broker
-      port: {{ .Values.services.orchestration.pcpPort }}
+      port: 8142
       targetPort: {{ ternary "gw-pcp" "orch-pcp" (and .Values.conductor.enabled .Values.conductor.gateway.enabled .Values.conductor.gateway.pcp.enabled) }}
     - name: orchestration
-      port: {{ .Values.services.orchestration.servicePort }}
+      port: 8143
       targetPort: {{ ternary "gw-orch" "orch-svc" (and .Values.conductor.enabled .Values.conductor.gateway.enabled .Values.conductor.gateway.orchestration.enabled) }}
     - name: host-action
       port: 8147
       targetPort: hac-svc
+    {{- if .Values.codeManager.enabled }}
+    - name: code-manager
+      port: 8170
+      targetPort: code-manager
+    {{- end }}
     - name: console-api
       port: 4433
       targetPort: console-svc
@@ -114,4 +106,3 @@ spec:
     - name: ace-server
       port: 44633
       targetPort: ace-svc
-{{- end }}

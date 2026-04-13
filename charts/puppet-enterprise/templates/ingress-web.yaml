@@ -27,7 +27,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ ternary (include "pe.primaryServiceName" .) (include "pe.fullname" .) (eq (include "pe.primaryServiceEnabled" .) "true") }}
+                name: {{ include "pe.fullname" . }}
                 port:
                   name: http
 {{- end }}

@@ -76,7 +76,7 @@ storage:
 controlPlane:
   replicaCount: 1
   podManagementPolicy: OrderedReady
-  primary:
+  frontDoor:
     selectorPollIntervalSeconds: 5
   ca:
     provider: selfSigned

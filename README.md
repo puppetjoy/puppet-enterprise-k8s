@@ -12,7 +12,7 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 - Supports optional Conductor participants on the control-plane and compiler pods via Warden-issued onboarding bundles, release trust bundles, participant readiness, and a separate Fabric hub
 - Supports an optional Conductor Relay sidecar that publishes local health into Fabric, records peer Relay status snapshots, replays selected PuppetDB submit-only commands, and converges replicated control-plane state such as classification, RBAC/local-auth, code-deploy intent, and managed orchestration data
 - Supports multiple release-scoped PE instances in one cluster for isolated development and validation
-- Uses an internal `pe-primary` service when a multi-replica control plane needs one stable backend for console, file-sync, and orchestration traffic
+- Uses `service/pe` as the single control-plane front door, with selector-backed stable routing when a multi-replica control plane needs one backend for console, file-sync, and orchestration traffic
 - Treats one Helm release, not multiple separate releases, as the future active-active replication domain
 - Keeps compilers attached to one owning PE instance; compilers are not a replication mesh
 - Supports optional ingress exposure, Code Manager configuration, and a validation `puppet-agent` chart with explicit certificate signing
@@ -20,14 +20,13 @@ This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent 
 
 ## How It Relates To Traditional PE
 
-This is not a systemd container port. Each `pe` control-plane replica installs PE onto its own PVC set, then runs the PE services as foreground containers inside a StatefulSet pod. `service/pe` remains the pooled technical front door for the control-plane surfaces we currently treat as replica-safe, while `service/pe-primary` carries traffic that still needs one stable `pe` backend at a time. An optional `service/pe-compiler` can expose the compiler pool separately.
+This is not a systemd container port. Each `pe` control-plane replica installs PE onto its own PVC set, then runs the PE services as foreground containers inside a StatefulSet pod. `service/pe` is the technical front door for control-plane traffic, and in a multi-replica control plane it can be pinned to one healthy `pe` replica at a time when that traffic still needs a stable backend. An optional `service/pe-compiler` can expose the compiler pool separately.
 
 Internally, each control-plane replica installs PE against its own stable pod certname on the headless service. The shared `service/pe` address is preserved as a front door and certificate SAN, not as the replica's install identity.
 
-When the control plane has more than one replica, compiler file-sync, console,
-and PCP/orchestration traffic use an internal `pe-primary` ClusterIP service.
-That service selects one healthy control-plane replica at a time so those
-surfaces share the same live backend during normal operation and failover.
+When the control plane has more than one replica, `service/pe` can use
+selector-backed stable routing so compiler file-sync, console, and
+PCP/orchestration traffic share one healthy control-plane replica at a time.
 This is a tactical safeguard for the current implementation, not a statement
 that only one control-plane replica is active.
 
@@ -184,13 +183,13 @@ This project is intentionally conservative right now:
 - when `conductor.relay.enabled=true`, control-plane and compiler pods also publish Relay status into Fabric, can gate readiness on participant trust plus local PuppetDB health, and can replay selected PuppetDB command traffic through Fabric
 - when `conductor.relay.classifierSync.enabled=true`, control-plane relays replicate the managed user-visible classifier domain under `All Nodes`, including the `All Environments` subtree and `PE Patch Management`, while leaving PE-owned local infrastructure groups like `PE Infrastructure` out of the sync domain
 - when `conductor.gateway.enabled=true`, control-plane pods front PCP and orchestration traffic through a Gateway sidecar that proxies local `8142/8143` listeners, publishes Gateway status into Fabric, and removes disconnected or unhealthy control-plane replicas from service routing
-- when the control plane has more than one replica, the chart now routes PCP broker and orchestration traffic through `service/pe-primary` instead of pooling `8142/8143` directly behind `service/pe`; live validation now covers task execution, plan execution, and selector failover between `pe` replicas
+- when the control plane has more than one replica, `service/pe` now uses selector-backed stable routing for PCP broker and orchestration traffic instead of exposing a separate sticky service; live validation now covers task execution, plan execution, and selector failover between `pe` replicas
 - when `conductor.relay.rbacSync.enabled=true`, control-plane relays replicate PE RBAC and local-auth managed state through Fabric, share console token-signing and SAML material, and intentionally treat per-replica login activity such as `last_login` as non-authoritative
 - compiler capacity can scale horizontally behind `service/pe-compiler`
 - centralized `puppet-code deploy` remains the code rollout entrypoint
 - separate Helm releases are independent sandboxes, not synchronization peers
 - active-active HA work is Conductor-aligned: Fabric, Relay, Gateway, and Warden
-- when the control plane has more than one replica, the chart now deliberately routes the web console, compiler file-sync, and orchestration traffic through `service/pe-primary` instead of exposing those same surfaces on pooled `service/pe`; CA, classification, code-deploy intent, and RBAC/local-auth state still converge underneath that stable-backend boundary
+- when the control plane has more than one replica, the chart now deliberately routes the web console, compiler file-sync, and orchestration traffic through selector-backed `service/pe` instead of splitting those same surfaces onto a second control-plane service; CA, classification, code-deploy intent, and RBAC/local-auth state still converge underneath that stable-backend boundary
 - the repo does not yet deliver full active-active PE replication
 - the current Relay implementation now captures selected PuppetDB submit-only commands, replays facts and reports to the control-plane role, and intentionally keeps full catalogs local-only
 - classifier HA currently covers that filtered managed domain rather than a dedicated user subtree; PE-owned local classifier groups still remain locally owned on each control-plane replica

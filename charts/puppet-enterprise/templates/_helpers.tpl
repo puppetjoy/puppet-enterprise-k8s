@@ -33,11 +33,7 @@ pe
 {{- printf "%s-headless" (include "pe.controlPlaneStatefulSetName" .) -}}
 {{- end -}}
 
-{{- define "pe.primaryServiceName" -}}
-{{- printf "%s-primary" (include "pe.fullname" .) -}}
-{{- end -}}
-
-{{- define "pe.primaryServiceEnabled" -}}
+{{- define "pe.frontDoorSelectorEnabled" -}}
 {{- if gt (int .Values.controlPlane.replicaCount) 1 -}}
 true
 {{- else -}}
@@ -83,7 +79,6 @@ false
 
 {{- define "pe.controlPlaneFrontDoorDnsNames" -}}
 {{- $identity := include "pe.identity" . -}}
-{{- $primaryService := include "pe.primaryServiceName" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
 {{- $serviceNames := list
     $identity
@@ -91,14 +86,6 @@ false
     (printf "%s.%s.svc" $identity .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $identity .Release.Namespace)
 -}}
-{{- if eq (include "pe.primaryServiceEnabled" .) "true" -}}
-{{- $serviceNames = concat $serviceNames (list
-    $primaryService
-    (printf "%s.%s" $primaryService .Release.Namespace)
-    (printf "%s.%s.svc" $primaryService .Release.Namespace)
-    (printf "%s.%s.svc.cluster.local" $primaryService .Release.Namespace)
-) -}}
-{{- end -}}
 {{- $frontDoorNames := list $puppetMasterHost -}}
 {{- $external := list -}}
 {{- if .Values.peConfig.certname -}}
@@ -116,7 +103,6 @@ false
 
 {{- define "pe.controlPlaneFrontDoorDnsNamesHocon" -}}
 {{- $identity := include "pe.identity" . -}}
-{{- $primaryService := include "pe.primaryServiceName" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
 {{- $serviceNames := list
     $identity
@@ -124,14 +110,6 @@ false
     (printf "%s.%s.svc" $identity .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $identity .Release.Namespace)
 -}}
-{{- if eq (include "pe.primaryServiceEnabled" .) "true" -}}
-{{- $serviceNames = concat $serviceNames (list
-    $primaryService
-    (printf "%s.%s" $primaryService .Release.Namespace)
-    (printf "%s.%s.svc" $primaryService .Release.Namespace)
-    (printf "%s.%s.svc.cluster.local" $primaryService .Release.Namespace)
-) -}}
-{{- end -}}
 {{- $frontDoorNames := list $puppetMasterHost -}}
 {{- $external := list -}}
 {{- if .Values.peConfig.certname -}}
@@ -152,7 +130,6 @@ false
 
 {{- define "pe.controlPlaneFrontDoorDnsNamesCsv" -}}
 {{- $identity := include "pe.identity" . -}}
-{{- $primaryService := include "pe.primaryServiceName" . -}}
 {{- $puppetMasterHost := include "pe.puppetMasterHost" . -}}
 {{- $serviceNames := list
     $identity
@@ -160,14 +137,6 @@ false
     (printf "%s.%s.svc" $identity .Release.Namespace)
     (printf "%s.%s.svc.cluster.local" $identity .Release.Namespace)
 -}}
-{{- if eq (include "pe.primaryServiceEnabled" .) "true" -}}
-{{- $serviceNames = concat $serviceNames (list
-    $primaryService
-    (printf "%s.%s" $primaryService .Release.Namespace)
-    (printf "%s.%s.svc" $primaryService .Release.Namespace)
-    (printf "%s.%s.svc.cluster.local" $primaryService .Release.Namespace)
-) -}}
-{{- end -}}
 {{- $frontDoorNames := list $puppetMasterHost -}}
 {{- $external := list -}}
 {{- if .Values.peConfig.certname -}}
