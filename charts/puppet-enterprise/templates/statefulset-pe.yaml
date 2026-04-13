@@ -617,7 +617,7 @@ spec:
           volumeMounts:
             - name: etc
               mountPath: /etc/puppetlabs
-              readOnly: {{ not (or .Values.conductor.relay.caSync.enabled .Values.conductor.relay.rbacSync.enabled) }}
+              readOnly: {{ not (or .Values.conductor.relay.caSync.enabled .Values.conductor.relay.rbacSync.enabled .Values.conductor.relay.orchestrationSync.enabled) }}
             - name: opt
               mountPath: /opt/puppetlabs
               readOnly: true

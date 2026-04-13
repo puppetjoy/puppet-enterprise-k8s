@@ -108,7 +108,7 @@ The current repo now has the first Gateway slice wired into the control-plane ru
 - Gateway reuses the pod's Warden-issued onboarding bundle to join Fabric on its own queue, publishes local Gateway health into Fabric, and stores fresh peer Gateway snapshots locally
 - Gateway readiness is tied to participant trust readiness plus local PCP broker and orchestration health, which makes `service/pe` drain stale or isolated control-plane replicas
 
-This is still not the whole Gateway design. The current implementation establishes service ownership, trust-aware readiness, selector-backed routing through an internal `pe-orchestration` service, and validated task/plan failover on the PCP/orchestration ingress path. It does not yet explain why `pe-inventory` remains empty in the current build, and it still does not mediate broader PCP semantics through Fabric.
+This is still not the whole Gateway design. The current implementation establishes service ownership, trust-aware readiness, selector-backed routing through an internal `pe-orchestration` service, and validated task/plan failover on the PCP/orchestration ingress path. The current evidence suggests that `pe-inventory` backs saved connection inventory rather than live PCP broker session state, so an empty `pe-inventory` database during certname-driven PCP execution is not itself a replication failure. Broader PCP semantics still are not mediated through Fabric.
 
 ## Code Deployment
 
@@ -203,13 +203,15 @@ The current implementation:
 - reserves per-replica sequence residues so replicated inserts do not collide when both replicas create local jobs
 - routes compiler PCP brokers and Bolt/orchestrator clients through a selector-backed internal `pe-orchestration` service so one healthy control-plane replica owns orchestration traffic at a time
 - keeps Gateway as the transport and health boundary on `8142` and `8143`
+- treats `pe-inventory` as persisted connection inventory for saved targets and transport parameters, not as the source of truth for live PCP-connected certnames
 
 That means:
 
 - task and plan execution can survive control-plane failover without shared storage
 - orchestration job and plan state can reconverge after a replica returns
 - pooled `service/pe` does not need to own PCP/orchestration traffic until those surfaces are replica-safe
-- `pe-inventory` persistence is still not fully explained in the current build and remains an open point
+- an empty `pe-inventory` database during certname-driven PCP execution is currently expected
+- broader PCP mediation and any remaining inventory surfaces beyond saved connection records remain open follow-up
 
 ## Non-Goals
 
@@ -232,7 +234,7 @@ The next credible sequence is now:
 3. Gateway insertion and sticky orchestration routing on the PCP/orchestrator path
 4. Code deployment convergence across Workers
 5. Shared classification, RBAC/local-auth, and orchestration job-state convergence
-6. Investigation of remaining PCP/inventory semantics and reduction of tactical routing exceptions
+6. Investigation of remaining PCP semantics, saved connection inventory use cases, and reduction of tactical routing exceptions
 7. Worker/SPOG role modelling only if a pooled Kubernetes control plane still needs it
 
 That ordering matters because Relay and Gateway depend on Fabric and Warden for identity, trust, and transport, and code convergence needs both paths in place before control-plane traffic can fail over cleanly.

@@ -59,7 +59,7 @@ For the deeper runtime and operator model, see:
 - `helm`
 - `kubectl` pointed at your cluster
 - access to a container registry for the built images
-- a PE installer tarball at `installers/puppet-enterprise-<version>-el-9-x86_64.tar.gz`
+- a PE installer tarball available on the machine running the image build
 
 Depending on your environment, you may also need:
 
@@ -84,7 +84,8 @@ Typical overrides include:
 - PE and compiler technical hostnames
 - Code Manager settings and secret references
 
-The helper target below validates the repo-local artifact layout used by the Makefile workflow:
+The helper target below validates the repo-local artifact layout used by the
+default Makefile workflow:
 
 ```bash
 make check-current-state PE_VERSION=2025.9.0
@@ -97,14 +98,22 @@ Build the PE runtime image:
 ```bash
 CONTAINER_ENGINE=podman \
 make build-k8s-runtime \
-  PE_VERSION=2025.9.0
+  PE_VERSION=2025.9.0 \
+  PE_INSTALLER_TAR_PATH=/absolute/path/to/puppet-enterprise-2025.9.0-el-9-x86_64.tar.gz
 ```
 
-By default this expects the installer tarball at:
+`PE_INSTALLER_TAR_PATH` is the real build input. The Makefile stages that
+archive into the image build context before invoking `podman build`.
+
+If you do not set `PE_INSTALLER_TAR_PATH`, the Makefile defaults to the
+repo-local convention:
 
 ```text
 installers/puppet-enterprise-2025.9.0-el-9-x86_64.tar.gz
 ```
+
+That path is a convenience for local development, not a required repository
+layout for user-supplied installer artifacts.
 
 Push the runtime image if needed:
 
@@ -192,7 +201,7 @@ This project is intentionally conservative right now:
 - the repo does not yet deliver full active-active PE replication
 - the current Relay implementation now captures selected PuppetDB submit-only commands, replays facts and reports to the control-plane role, and intentionally keeps full catalogs local-only
 - classifier HA currently covers that filtered managed domain rather than a dedicated user subtree; PE-owned local classifier groups still remain locally owned on each control-plane replica
-- the current Gateway and Relay implementation now covers sticky PCP/orchestration routing, managed orchestration job-state convergence, and broker failover between control-plane replicas; `pe-inventory` persistence and broader PCP mediation are still ahead
+- the current Gateway and Relay implementation now covers sticky PCP/orchestration routing, managed orchestration job-state convergence, and broker failover between control-plane replicas; `pe-inventory` now appears to back saved connection inventory rather than live PCP broker presence, so broader PCP mediation is still ahead
 - code rollout across Workers remains operator-initiated through Code Manager; later Fabric work may propagate deploy intent and convergence state between Workers
 - charts provide generic defaults, not a ready-made cluster profile
 - operators are expected to supply environment-specific values locally

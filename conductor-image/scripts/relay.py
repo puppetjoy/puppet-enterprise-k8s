@@ -220,7 +220,17 @@ DEFAULT_ORCHESTRATION_SYNC_ORCHESTRATOR_CONF_PATH = (
 DEFAULT_ORCHESTRATION_SYNC_INVENTORY_CONF_PATH = (
     "/etc/puppetlabs/orchestration-services/conf.d/inventory.conf"
 )
+DEFAULT_ORCHESTRATION_SYNC_KEYS_PATH = (
+    "/etc/puppetlabs/orchestration-services/conf.d/secrets/keys.json"
+)
+DEFAULT_ORCHESTRATION_SYNC_ENCRYPTION_STORE_PATH = (
+    "/etc/puppetlabs/orchestration-services/conf.d/secrets/orchestrator-encryption-keys.json"
+)
 DEFAULT_ORCHESTRATION_SYNC_SEQUENCE_STRIDE = 1024
+ORCHESTRATION_SYNC_REQUIRED_AUTH_FILES = {
+    "inventoryKeysJson": DEFAULT_ORCHESTRATION_SYNC_KEYS_PATH,
+    "orchestratorEncryptionStore": DEFAULT_ORCHESTRATION_SYNC_ENCRYPTION_STORE_PATH,
+}
 ORCHESTRATION_SYNC_DATABASE_SPECS = {
     "orchestrator": {
         "tables": {
@@ -2849,7 +2859,7 @@ class RelayRuntime:
         ]
         return "delete from tokens where not (" + " or ".join(conditions) + ")"
 
-    def write_rbac_managed_file(self, path, content, reference_path, default_mode):
+    def write_managed_file(self, path, content, reference_path, default_mode):
         directory = os.path.dirname(path)
         if directory:
             os.makedirs(directory, exist_ok=True)
@@ -2893,7 +2903,7 @@ class RelayRuntime:
             if current_content == content:
                 continue
             default_mode = 0o400 if logical_name.endswith("Key") else 0o644
-            self.write_rbac_managed_file(
+            self.write_managed_file(
                 target_path,
                 content,
                 current_paths.get(logical_name),
@@ -3420,6 +3430,7 @@ class RelayRuntime:
             "actualTableCount": 0,
             "desiredRowCount": 0,
             "actualRowCount": 0,
+            "authFileCount": 0,
             "sequenceStride": self.orchestration_sync_sequence_stride,
             "sequenceResidue": self.orchestration_sync_sequence_residue,
             "sequenceCount": 0,
@@ -3461,6 +3472,7 @@ class RelayRuntime:
                 "orchestrationSyncActualTableCount": int(state.get("actualTableCount") or 0),
                 "orchestrationSyncDesiredRowCount": int(state.get("desiredRowCount") or 0),
                 "orchestrationSyncActualRowCount": int(state.get("actualRowCount") or 0),
+                "orchestrationSyncAuthFileCount": int(state.get("authFileCount") or 0),
                 "orchestrationSyncSequenceStride": int(state.get("sequenceStride") or 0),
                 "orchestrationSyncSequenceResidue": int(state.get("sequenceResidue") or 0),
                 "orchestrationSyncSequenceCount": int(state.get("sequenceCount") or 0),
@@ -3569,6 +3581,35 @@ class RelayRuntime:
             "sslrootcert": params.get("sslrootcert", ""),
             "sslkey": sslkey,
             "sslcert": params.get("sslcert", ""),
+        }
+
+    def orchestration_sync_auth_file_paths(self):
+        inventory_conf_path = self.orchestration_sync_inventory_conf_path
+        orchestrator_conf_path = self.orchestration_sync_orchestrator_conf_path
+
+        inventory_content = ""
+        if os.path.isfile(inventory_conf_path):
+            with open(inventory_conf_path, "r", encoding="utf-8") as handle:
+                inventory_content = handle.read()
+
+        orchestrator_content = ""
+        if os.path.isfile(orchestrator_conf_path):
+            with open(orchestrator_conf_path, "r", encoding="utf-8") as handle:
+                orchestrator_content = handle.read()
+
+        key_dir = self.rbac_sync_hocon_string(inventory_content, "keypath")
+        inventory_keys_path = (
+            os.path.join(key_dir, "keys.json")
+            if key_dir
+            else DEFAULT_ORCHESTRATION_SYNC_KEYS_PATH
+        )
+        orchestrator_encryption_store = (
+            self.rbac_sync_hocon_string(orchestrator_content, "encryption-store")
+            or DEFAULT_ORCHESTRATION_SYNC_ENCRYPTION_STORE_PATH
+        )
+        return {
+            "inventoryKeysJson": inventory_keys_path,
+            "orchestratorEncryptionStore": orchestrator_encryption_store,
         }
 
     def orchestration_db_connection(self, conf_path, use_migration_user=False):
@@ -3705,7 +3746,7 @@ class RelayRuntime:
         }
 
     @staticmethod
-    def orchestration_rows_hash(databases):
+    def orchestration_rows_hash(databases, auth_files):
         normalized = {}
         for database_name in ORCHESTRATION_SYNC_DATABASE_SPECS:
             database_state = dict((databases or {}).get(database_name) or {})
@@ -3718,7 +3759,14 @@ class RelayRuntime:
                 "tableNames": table_names,
                 "tables": tables,
             }
-        return sha256_text(stable_json({"databases": normalized}))
+        return sha256_text(
+            stable_json(
+                {
+                    "databases": normalized,
+                    "authFiles": dict(sorted((auth_files or {}).items())),
+                }
+            )
+        )
 
     def read_local_orchestration_state(self):
         databases = {}
@@ -3727,6 +3775,14 @@ class RelayRuntime:
                 database_name,
                 self.orchestration_db_conf_path(database_name),
             )
+        auth_files = {}
+        for logical_name, source_path in self.orchestration_sync_auth_file_paths().items():
+            if not source_path or not os.path.isfile(source_path):
+                raise RuntimeError(
+                    f"orchestration auth file is missing: {source_path or logical_name}"
+                )
+            with open(source_path, "rb") as handle:
+                auth_files[logical_name] = base64.b64encode(handle.read()).decode("ascii")
         database_count = len(databases)
         table_count = sum(int(database.get("tableCount") or 0) for database in databases.values())
         row_count = sum(int(database.get("rowCount") or 0) for database in databases.values())
@@ -3739,11 +3795,13 @@ class RelayRuntime:
             "databaseCount": database_count,
             "tableCount": table_count,
             "rowCount": row_count,
+            "authFiles": auth_files,
+            "authFileCount": len(auth_files),
             "sequenceStride": self.orchestration_sync_sequence_stride,
             "sequenceResidue": self.orchestration_sync_sequence_residue,
             "sequenceCount": sequence_count,
         }
-        payload["hash"] = self.orchestration_rows_hash(databases)
+        payload["hash"] = self.orchestration_rows_hash(databases, auth_files)
         return payload
 
     def refresh_local_orchestration_sync_state(self):
@@ -3764,6 +3822,7 @@ class RelayRuntime:
             "actualDatabaseCount": int(local_state.get("databaseCount") or 0),
             "actualTableCount": int(local_state.get("tableCount") or 0),
             "actualRowCount": int(local_state.get("rowCount") or 0),
+            "authFileCount": int(local_state.get("authFileCount") or 0),
             "sequenceStride": self.orchestration_sync_sequence_stride,
             "sequenceResidue": self.orchestration_sync_sequence_residue,
             "sequenceCount": int(local_state.get("sequenceCount") or 0),
@@ -3827,6 +3886,7 @@ class RelayRuntime:
             actualTableCount=int(state.get("tableCount") or 0),
             desiredRowCount=int(state.get("rowCount") or 0),
             actualRowCount=int(state.get("rowCount") or 0),
+            authFileCount=int(state.get("authFileCount") or 0),
             sequenceStride=self.orchestration_sync_sequence_stride,
             sequenceResidue=self.orchestration_sync_sequence_residue,
             sequenceCount=int(state.get("sequenceCount") or 0),
@@ -3871,6 +3931,29 @@ class RelayRuntime:
         self.last_published_orchestration_hash = state_hash
         self.next_orchestration_publish = now + self.publish_interval
         self.record_published_orchestration_state(state, version_at, now)
+
+    def apply_orchestration_auth_files(self, auth_files):
+        changed = False
+        target_paths = self.orchestration_sync_auth_file_paths()
+        for logical_name, encoded in (auth_files or {}).items():
+            target_path = target_paths.get(logical_name)
+            if not target_path:
+                continue
+            content = base64.b64decode(encoded.encode("ascii"))
+            current_content = b""
+            if os.path.isfile(target_path):
+                with open(target_path, "rb") as handle:
+                    current_content = handle.read()
+            if current_content == content:
+                continue
+            self.write_managed_file(
+                target_path,
+                content,
+                target_path,
+                0o640,
+            )
+            changed = True
+        return changed
 
     def replace_orchestration_table(self, cursor, database_name, table_name, rows):
         table_spec = self.orchestration_sync_db_spec(database_name)["tables"].get(table_name)
@@ -3928,6 +4011,9 @@ class RelayRuntime:
         if not isinstance(desired_databases, dict):
             raise RuntimeError("orchestration sync payload databases are invalid")
 
+        auth_files = dict(state_payload.get("authFiles") or {})
+        self.apply_orchestration_auth_files(auth_files)
+
         for database_name in ORCHESTRATION_SYNC_DATABASE_SPECS:
             database_payload = desired_databases.get(database_name) or {}
             if not isinstance(database_payload, dict):
@@ -3968,6 +4054,7 @@ class RelayRuntime:
             "actualTableCount": int(local_state.get("tableCount") or 0),
             "desiredRowCount": int(state_payload.get("rowCount") or 0),
             "actualRowCount": int(local_state.get("rowCount") or 0),
+            "authFileCount": int(local_state.get("authFileCount") or 0),
             "sequenceStride": self.orchestration_sync_sequence_stride,
             "sequenceResidue": self.orchestration_sync_sequence_residue,
             "sequenceCount": int(local_state.get("sequenceCount") or 0),
@@ -4046,6 +4133,7 @@ class RelayRuntime:
             ),
             desiredTableCount=int(state_payload.get("tableCount") or 0),
             desiredRowCount=int(state_payload.get("rowCount") or 0),
+            authFileCount=int(state_payload.get("authFileCount") or 0),
             sequenceStride=self.orchestration_sync_sequence_stride,
             sequenceResidue=self.orchestration_sync_sequence_residue,
             sequenceCount=int(state_payload.get("sequenceCount") or 0),

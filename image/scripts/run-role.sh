@@ -120,6 +120,80 @@ wait_for_postgresql() {
     return 1
 }
 
+orchestration_secret_fingerprint() {
+    local path
+    local summary=""
+
+    for path in \
+        "${PE_K8S_ORCHESTRATION_INVENTORY_KEYS_PATH:-/etc/puppetlabs/orchestration-services/conf.d/secrets/keys.json}" \
+        "${PE_K8S_ORCHESTRATION_ENCRYPTION_STORE_PATH:-/etc/puppetlabs/orchestration-services/conf.d/secrets/orchestrator-encryption-keys.json}"
+    do
+        if [ -f "${path}" ]; then
+            summary+="${path}:$(sha256sum "${path}" | awk '{print $1}')"$'\n'
+        else
+            summary+="${path}:missing"$'\n'
+        fi
+    done
+
+    printf '%s' "${summary}" | sha256sum | awk '{print $1}'
+}
+
+ORCHESTRATION_CHILD_PID=""
+
+stop_orchestration_child() {
+    local signal="${1:-TERM}"
+
+    [ -n "${ORCHESTRATION_CHILD_PID}" ] || return 0
+    if kill -0 "${ORCHESTRATION_CHILD_PID}" 2>/dev/null; then
+        kill "-${signal}" "${ORCHESTRATION_CHILD_PID}" 2>/dev/null || true
+        wait "${ORCHESTRATION_CHILD_PID}" 2>/dev/null || true
+    fi
+    ORCHESTRATION_CHILD_PID=""
+}
+
+start_orchestration_child() {
+    if [ "$(id -u)" -eq 0 ]; then
+        prepare_user_env pe-orchestration-services
+        runuser --preserve-environment -u pe-orchestration-services -- \
+            /opt/puppetlabs/server/apps/orchestration-services/bin/orchestration-services \
+            foreground &
+    else
+        /opt/puppetlabs/server/apps/orchestration-services/bin/orchestration-services \
+            foreground &
+    fi
+    ORCHESTRATION_CHILD_PID=$!
+}
+
+run_orchestration_services_supervised() {
+    local expected_fingerprint current_fingerprint rc
+
+    trap 'stop_orchestration_child TERM; exit 143' TERM INT
+
+    while true; do
+        expected_fingerprint="$(orchestration_secret_fingerprint)"
+        start_orchestration_child
+
+        while kill -0 "${ORCHESTRATION_CHILD_PID}" 2>/dev/null; do
+            sleep 2
+            current_fingerprint="$(orchestration_secret_fingerprint)"
+            if [ "${current_fingerprint}" != "${expected_fingerprint}" ]; then
+                log "Detected orchestration encryption material change; restarting orchestration-services"
+                stop_orchestration_child TERM
+                break
+            fi
+        done
+
+        if [ -n "${ORCHESTRATION_CHILD_PID}" ]; then
+            wait "${ORCHESTRATION_CHILD_PID}"
+            rc=$?
+            ORCHESTRATION_CHILD_PID=""
+            return "${rc}"
+        fi
+
+        sleep 1
+    done
+}
+
 case "${role}" in
     postgresql)
         PGDATA="${PGDATA:-/opt/puppetlabs/server/data/postgresql/14/data}"
@@ -160,9 +234,7 @@ case "${role}" in
         patch_orchestrator_pcp_broker_allowlist
         patch_local_pcp_controller_uri
         sync_orchestration_listener_ssl_material
-        exec_as_user pe-orchestration-services \
-            /opt/puppetlabs/server/apps/orchestration-services/bin/orchestration-services \
-            foreground
+        run_orchestration_services_supervised
         ;;
     host-action-collector)
         sync_orchestration_service_urls

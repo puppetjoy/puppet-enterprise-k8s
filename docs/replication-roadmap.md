@@ -73,7 +73,7 @@ Gateway brings orchestrator and PCP traffic into the same HA model.
 This phase should prove:
 
 - pxp-agent traffic terminates through Gateway
-- orchestration inventory can be synchronized through Fabric
+- persisted orchestration connection inventory can be synchronized through Fabric
 - control-plane failure or isolation is reflected in broker readiness and routing
 - the compiler and PE service layout still tracks traditional PE responsibilities
 
@@ -85,7 +85,7 @@ Current status:
 - Gateway proxies those TCP flows to the pod-local orchestration service, publishes Gateway status into Fabric, and stores fresh peer Gateway snapshots locally
 - Gateway readiness is tied to participant trust readiness plus local PCP broker and orchestration health, so stale or disconnected control-plane replicas fall out of service routing
 - live validation now covers Bolt task execution, plan execution, and selector failover from `pe-1` to `pe-0`, with compiler brokers reconnecting to the surviving control-plane replica
-- `pe-inventory` persistence and broader PCP message mediation are still outstanding
+- current evidence indicates that `pe-inventory` stores saved connection inventory rather than live PCP broker presence, so broader PCP message mediation is still outstanding
 
 ## Phase 4: Code Deployment Convergence
 

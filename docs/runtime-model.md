@@ -196,7 +196,7 @@ Relay is no longer limited to the PuppetDB submit-only path. The current impleme
 
 That gives the release a real Fabric membership model without shared storage or hard-coded peer lists, and live validation now covers Bolt task execution, plan execution, and selector failover from one control-plane replica to the other. It still does not mean the release is finished as a fully pooled active-active PE control plane.
 
-CA, classification, code-deploy intent, RBAC/local-auth, and managed orchestration job state are now in place, but the browser console is intentionally treated as a sticky-consistency boundary through `service/pe-console`, PCP/orchestration traffic uses sticky `pe-orchestration`, and compiler file-sync still uses sticky `pe-filesync`. The open orchestration question is inventory persistence: the replicated `pe-inventory` database remains empty during live task and plan validation, so broader PCP and inventory semantics still need more investigation.
+CA, classification, code-deploy intent, RBAC/local-auth, and managed orchestration job state are now in place, but the browser console is intentionally treated as a sticky-consistency boundary through `service/pe-console`, PCP/orchestration traffic uses sticky `pe-orchestration`, and compiler file-sync still uses sticky `pe-filesync`. Current evidence indicates that `pe-inventory` backs saved connection inventory such as `/connections`, `/query`, and `/overwrite-connections`, not live PCP broker presence, so an empty `pe-inventory` database during certname-driven task and plan validation is expected. The open orchestration question is broader PCP mediation and any additional inventory surfaces that should converge beyond those saved connection records.
 
 ## Code Manager
 
