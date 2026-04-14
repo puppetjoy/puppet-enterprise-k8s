@@ -3853,6 +3853,7 @@ class RelayRuntime:
         connection = self.orchestration_db_connection(conf_path)
         try:
             cursor = connection.cursor()
+            cursor.execute("set transaction isolation level repeatable read, read only")
             for table_name in table_names:
                 rows = self.rbac_query_rows(
                     cursor,

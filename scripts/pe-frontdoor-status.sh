@@ -24,9 +24,9 @@ from datetime import datetime, timezone
 pods_path, endpoints_path, service_name = sys.argv[1:4]
 
 with open(pods_path, "r", encoding="utf-8") as handle:
-    pods = json.load(handle)
+    pods = json.load(handle) or {}
 with open(endpoints_path, "r", encoding="utf-8") as handle:
-    endpoint_slices = json.load(handle)
+    endpoint_slices = json.load(handle) or {}
 
 frontdoor = {
     "eligible": "pe-k8s.puppet.com/frontdoor-eligible",
@@ -41,7 +41,7 @@ frontdoor = {
 
 active_targets = []
 for item in endpoint_slices.get("items", []):
-    for endpoint in item.get("endpoints", []):
+    for endpoint in item.get("endpoints") or []:
         target_ref = endpoint.get("targetRef") or {}
         active_targets.append(
             {
@@ -64,7 +64,7 @@ def fmt_epoch(value):
 
 rows = []
 for pod in sorted(
-    pods.get("items", []),
+    pods.get("items") or [],
     key=lambda item: item.get("metadata", {}).get("name", ""),
 ):
     metadata = pod.get("metadata", {})

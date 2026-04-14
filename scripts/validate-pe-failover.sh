@@ -105,8 +105,18 @@ wait_for_console_check() {
 }
 
 run_agent_check() {
+  local output_file="${tmp_dir}/agent-run.log"
+  local rc=0
+
   kubectl -n "$namespace" exec "$test_node_pod" -- \
-    puppet agent -t --server "$compiler_server"
+    puppet agent -t --server "$compiler_server" >"${output_file}" 2>&1 || rc=$?
+
+  if [[ "${rc}" -ne 0 && "${rc}" -ne 2 ]]; then
+    cat "${output_file}" >&2 || true
+    return "${rc}"
+  fi
+
+  cat "${output_file}"
 }
 
 issue_admin_token() {
@@ -138,7 +148,7 @@ raise SystemExit(1)
 PY
 )
 cat > /tmp/pe-k8s-token.json <<EOF
-{"login":"admin","password":"${password}","lifetime":"5m","label":"pe-k8s-failover"}
+{"login":"admin","password":"${password}","lifetime":"5m","label":"pe-k8s-failover-$(date +%s%N)"}
 EOF
 response="$(
 /usr/bin/curl -sk \
@@ -578,21 +588,34 @@ run_code_deploy_check() {
   local pod="$1"
   local output_file="$tmp_dir/code-deploy-${pod}.log"
   local status_file="$tmp_dir/code-deploy-status-${pod}.json"
+  local deadline=$((SECONDS + wait_seconds))
+  local attempt=1
   local rc=0
-  run_with_admin_token "$pod" \
-    /usr/bin/timeout 60s /opt/puppetlabs/bin/puppet code deploy production --wait >"$output_file" \
-    || rc=$?
-  if [[ "$rc" -ne 0 && "$rc" -ne 124 ]]; then
-    cat "$output_file" >&2
-    return "$rc"
-  fi
-  if [[ "$rc" -eq 124 ]]; then
-    echo "[info] puppet code deploy timed out; checking Code Manager status directly"
-  fi
-  run_with_admin_token "$pod" \
-    /bin/sh -lc 'token=$(cat /root/.puppetlabs/token); exec /usr/bin/curl -sk -H "Accept: application/json" -H "X-Authentication: ${token}" https://127.0.0.1:8170/code-manager/v1/deploys/status' >"$status_file" \
-    || { cat "$status_file" >&2; return 1; }
-  python3 - "$status_file" <<'PY'
+
+  while :; do
+    rc=0
+    run_with_admin_token "$pod" \
+      /usr/bin/timeout 60s /opt/puppetlabs/bin/puppet code deploy production --wait >"$output_file" \
+      || rc=$?
+
+    if [[ "$rc" -ne 0 && "$rc" -ne 124 ]]; then
+      if grep -q "Authentication token has been revoked" "$output_file" 2>/dev/null && (( SECONDS < deadline )); then
+        echo "[info] code deploy attempt ${attempt} is waiting for post-failover auth stability"
+        attempt=$((attempt + 1))
+        sleep 5
+        continue
+      fi
+      cat "$output_file" >&2
+      return "$rc"
+    fi
+
+    if [[ "$rc" -eq 124 ]]; then
+      echo "[info] puppet code deploy timed out; checking Code Manager status directly"
+    fi
+
+    if run_with_admin_token "$pod" \
+      /bin/sh -lc 'token=$(cat /root/.puppetlabs/token); exec /usr/bin/curl -sk -H "Accept: application/json" -H "X-Authentication: ${token}" https://127.0.0.1:8170/code-manager/v1/deploys/status' >"$status_file"; then
+      python3 - "$status_file" <<'PY'
 import json
 import sys
 
@@ -626,6 +649,19 @@ for entry in entries:
 
 raise SystemExit("production deploy status not found")
 PY
+      return 0
+    fi
+
+    if grep -q "Authentication token has been revoked" "$status_file" 2>/dev/null && (( SECONDS < deadline )); then
+      echo "[info] code deploy status attempt ${attempt} is waiting for post-failover auth stability"
+      attempt=$((attempt + 1))
+      sleep 5
+      continue
+    fi
+
+    cat "$status_file" >&2
+    return 1
+  done
 }
 
 summarize_job_output() {
@@ -650,10 +686,6 @@ run_orchestration_check() {
 
   echo "[check] task run via ${pod}"
   until run_task_check "$pod" "$certname" >"$task_output"; do
-    if [[ "$phase" != "post-failover" ]]; then
-      cat "$task_output" >&2
-      return 1
-    fi
     if ! grep -q "either disconnected or does not have a connection type" "$task_output"; then
       cat "$task_output" >&2
       return 1
@@ -671,10 +703,6 @@ run_orchestration_check() {
   echo "[check] plan run via ${pod}"
   attempt=1
   until run_plan_check "$pod" "$certname" >"$plan_output"; do
-    if [[ "$phase" != "post-failover" ]]; then
-      cat "$plan_output" >&2
-      return 1
-    fi
     if ! grep -q "either disconnected or does not have a connection type" "$plan_output"; then
       cat "$plan_output" >&2
       return 1
@@ -704,10 +732,10 @@ run_checks() {
   echo "[check] code deploy via ${pod}"
   run_code_deploy_check "$pod"
 
-  run_orchestration_check "$pod" "$certname" "$phase"
-
   echo "[check] agent run via ${compiler_server}"
   run_agent_check
+
+  run_orchestration_check "$pod" "$certname" "$phase"
 }
 
 certname="$(agent_certname)"

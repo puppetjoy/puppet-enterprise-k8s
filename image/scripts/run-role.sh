@@ -556,6 +556,8 @@ case "${role}" in
             foreground
         ;;
     orchestration-services)
+        sync_control_plane_ca_bundle_once
+        sync_control_plane_hostcrl_setting
         patch_orchestrator_pcp_broker_allowlist
         patch_local_pcp_controller_uri
         sync_orchestration_listener_ssl_material
