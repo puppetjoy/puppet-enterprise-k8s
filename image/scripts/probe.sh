@@ -30,17 +30,11 @@ curl_with_local_role_cert() {
         "$@"
 }
 
-compiler_filesync_ready() {
-    local local_status pe_status puppetdb_status pcp_broker_port file_sync_service
+compiler_puppetserver_local_ready() {
+    local local_status pcp_broker_port
 
-    [ -n "${PE_K8S_COMPILER_PE_SERVICE:-}" ] || return 1
-    file_sync_service="${PE_K8S_COMPILER_FILE_SYNC_SERVICE:-${PE_K8S_COMPILER_PE_SERVICE:-}}"
-    [ -n "${file_sync_service}" ] || return 1
     pcp_broker_port="${PE_K8S_COMPILER_PCP_BROKER_PORT:-8142}"
 
-    /opt/puppetlabs/server/apps/postgresql/14/bin/pg_isready \
-        -h 127.0.0.1 \
-        -p "${PGPORT:-5432}" >/dev/null 2>&1
     python3 - "${pcp_broker_port}" <<'PY'
 import socket
 import sys
@@ -49,8 +43,44 @@ port = int(sys.argv[1])
 with socket.create_connection(("127.0.0.1", port), timeout=5):
     pass
 PY
-    puppetdb_status="$(curl -skf https://127.0.0.1:8081/status/v1/services?level=debug)"
+    local_status="$(curl -sk https://127.0.0.1:8140/status/v1/services?level=debug)"
+    python3 - "${local_status}" <<'PY'
+import json
+import sys
 
+local = json.loads(sys.argv[1])
+
+server = local.get("server") or {}
+if server.get("state") != "running":
+    raise SystemExit(1)
+
+master = local.get("master") or {}
+if master.get("state") != "running":
+    raise SystemExit(1)
+
+broker = local.get("broker-service") or {}
+if broker.get("state") != "running":
+    raise SystemExit(1)
+
+file_sync_client = local.get("file-sync-client-service") or {}
+if file_sync_client.get("state") != "running":
+    raise SystemExit(1)
+PY
+}
+
+compiler_filesync_ready() {
+    local local_status pe_status puppetdb_status file_sync_service
+
+    [ -n "${PE_K8S_COMPILER_PE_SERVICE:-}" ] || return 1
+    file_sync_service="${PE_K8S_COMPILER_FILE_SYNC_SERVICE:-${PE_K8S_COMPILER_PE_SERVICE:-}}"
+    [ -n "${file_sync_service}" ] || return 1
+
+    compiler_puppetserver_local_ready
+
+    /opt/puppetlabs/server/apps/postgresql/14/bin/pg_isready \
+        -h 127.0.0.1 \
+        -p "${PGPORT:-5432}" >/dev/null 2>&1
+    puppetdb_status="$(curl -skf https://127.0.0.1:8081/status/v1/services?level=debug)"
     local_status="$(curl -sk https://127.0.0.1:8140/status/v1/services?level=debug)"
     pe_status="$(curl -skf "https://${file_sync_service}:8140/status/v1/services?level=debug")"
 
@@ -158,6 +188,9 @@ case "${role}" in
         ;;
     compiler-puppetserver)
         compiler_filesync_ready
+        ;;
+    compiler-puppetserver-live)
+        compiler_puppetserver_local_ready
         ;;
     nginx)
         exec curl -skf https://127.0.0.1:443/

@@ -46,6 +46,10 @@ DEFAULT_CODE_DEPLOY_HOOK_PATH = "/conductor/code-manager/v1/post-environment"
 DEFAULT_CODE_DEPLOY_STATE_FILENAME = "code-deploy-state.json"
 DEFAULT_CLASSIFIER_SYNC_STATE_FILENAME = "classifier-sync-state.json"
 DEFAULT_CLASSIFIER_SYNC_SCOPE = "filtered-all-nodes"
+FRONTDOOR_ELIGIBLE_ANNOTATION = "pe-k8s.puppet.com/frontdoor-eligible"
+FRONTDOOR_BLOCKERS_ANNOTATION = "pe-k8s.puppet.com/frontdoor-blockers"
+FRONTDOOR_REASON_ANNOTATION = "pe-k8s.puppet.com/frontdoor-reason"
+FRONTDOOR_UPDATED_AT_ANNOTATION = "pe-k8s.puppet.com/frontdoor-updated-at"
 ALL_NODES_GROUP_ID = "00000000-0000-4000-8000-000000000000"
 LEGACY_CLASSIFIER_ROOT_GROUP_ID = "f6b0f884-0fb8-4f5b-9cf8-0d430711f4d2"
 LEGACY_CLASSIFIER_ROOT_GROUP_NAME = "Conductor Shared Classification"
@@ -878,6 +882,31 @@ def relay_status_ready(status):
     return True
 
 
+def relay_frontdoor_blockers(status):
+    blockers = []
+    if not status.get("connected", False):
+        blockers.append("relay-disconnected")
+    if not status.get("participantReady", False):
+        blockers.append("participant-not-ready")
+    if not status.get("localPuppetdbHealthy", False):
+        blockers.append("local-puppetdb-unhealthy")
+    if status.get("commandProxyEnabled", False) and not status.get("commandProxyReady", False):
+        blockers.append("command-proxy-not-ready")
+    if status.get("caSyncEnabled", False) and not status.get("caSyncReady", False):
+        blockers.append("ca-sync-not-ready")
+    if status.get("classifierSyncEnabled", False) and not status.get("classifierSyncReady", False):
+        blockers.append("classifier-sync-not-ready")
+    if status.get("rbacSyncEnabled", False) and not status.get("rbacSyncReady", False):
+        blockers.append("rbac-sync-not-ready")
+    if status.get("orchestrationSyncEnabled", False) and not status.get("orchestrationSyncReady", False):
+        blockers.append("orchestration-sync-not-ready")
+    if status.get("authBarrierEnabled", False) and not status.get("authBarrierReady", False):
+        blockers.append("auth-barrier-not-ready")
+    if status.get("codeDeployEnabled", False) and not status.get("codeDeployReady", False):
+        blockers.append("code-deploy-not-ready")
+    return blockers
+
+
 def probe(mode):
     status_path = default_status_path()
     max_age_seconds = env_int("CONDUCTOR_RELAY_STATUS_MAX_AGE_SECONDS", 60)
@@ -1230,11 +1259,14 @@ class K8sApi:
         }
         self.context = ssl.create_default_context(cafile="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
 
-    def request(self, method, path, payload=None, expected=None):
+    def request(self, method, path, payload=None, expected=None, content_type="application/json"):
+        headers = dict(self.headers)
+        if payload is not None:
+            headers["Content-Type"] = content_type
         status, body = http_request_json(
             method,
             f"{self.base_url}{path}",
-            headers=self.headers,
+            headers=headers,
             payload=payload,
             context=self.context,
         )
@@ -1249,6 +1281,28 @@ class K8sApi:
         path = f"/api/v1/namespaces/{namespace}/secrets/{name}"
         status, data = self.request("GET", path, expected={200, 404})
         return data if status == 200 else None
+
+    def get_pod(self, pod_name, namespace=None):
+        namespace = namespace or self.namespace
+        path = f"/api/v1/namespaces/{namespace}/pods/{pod_name}"
+        status, data = self.request("GET", path, expected={200, 404})
+        return data if status == 200 else None
+
+    def patch_pod_metadata(self, pod_name, *, labels=None, annotations=None):
+        metadata = {}
+        if labels is not None:
+            metadata["labels"] = labels
+        if annotations is not None:
+            metadata["annotations"] = annotations
+        if not metadata:
+            return
+        self.request(
+            "PATCH",
+            f"/api/v1/namespaces/{self.namespace}/pods/{pod_name}",
+            payload={"metadata": metadata},
+            expected={200},
+            content_type="application/merge-patch+json",
+        )
 
 
 class RelayRuntime:
@@ -1594,6 +1648,17 @@ class RelayRuntime:
         self.auth_barrier_api_thread = None
         self.auth_barrier_start_error = ""
         self.auth_barrier_last_error = ""
+        self.frontdoor_status_enabled = env_bool(
+            "CONDUCTOR_RELAY_FRONTDOOR_STATUS_ENABLED",
+            self.relay_role == "control-plane",
+        )
+        self.frontdoor_status_publish_interval = env_int(
+            "CONDUCTOR_RELAY_FRONTDOOR_STATUS_PUBLISH_INTERVAL_SECONDS",
+            5,
+        )
+        self.next_frontdoor_status_publish = 0
+        self.last_frontdoor_status_annotations = None
+        self.frontdoor_status_publish_error = ""
 
         self.status = {
             "participant": self.pod_name,
@@ -1709,6 +1774,11 @@ class RelayRuntime:
                 self.auth_barrier_wait_timeout_seconds if self.auth_barrier_enabled else 0
             ),
             "authBarrierLastError": "",
+            "frontDoorEligible": not self.frontdoor_status_enabled,
+            "frontDoorBlockers": [],
+            "frontDoorReason": "disabled" if not self.frontdoor_status_enabled else "",
+            "frontDoorStatusPublishedAt": 0,
+            "frontDoorStatusPublishError": "",
             "caSyncEnabled": self.ca_sync_enabled,
             "caSyncReady": not self.ca_sync_enabled,
             "caSyncDir": self.ca_sync_dir if self.ca_sync_enabled else "",
@@ -1754,12 +1824,72 @@ class RelayRuntime:
         with self.lock:
             return dict(self.status)
 
+    def refresh_frontdoor_summary(self):
+        if not self.frontdoor_status_enabled:
+            self.set_status(
+                frontDoorEligible=True,
+                frontDoorBlockers=[],
+                frontDoorReason="disabled",
+            )
+            return
+
+        status = self.snapshot_status()
+        blockers = relay_frontdoor_blockers(status)
+        eligible = not blockers
+        self.set_status(
+            frontDoorEligible=eligible,
+            frontDoorBlockers=blockers,
+            frontDoorReason="eligible" if eligible else ",".join(blockers),
+        )
+
     def write_status(self):
         status = self.snapshot_status()
         status["lastUpdatedAt"] = int(time.time())
         with self.lock:
             self.status["lastUpdatedAt"] = status["lastUpdatedAt"]
         write_text_file(self.status_path, json.dumps(status, indent=2, sort_keys=True) + "\n")
+
+    def publish_frontdoor_status(self, force=False):
+        if not self.frontdoor_status_enabled:
+            return
+
+        now = int(time.time())
+        status = self.snapshot_status()
+        blockers = status.get("frontDoorBlockers") or []
+        reason = (status.get("frontDoorReason") or "").strip() or (
+            "eligible" if status.get("frontDoorEligible", False) else ",".join(blockers)
+        )
+        annotations = {
+            FRONTDOOR_ELIGIBLE_ANNOTATION: "true" if status.get("frontDoorEligible", False) else "false",
+            FRONTDOOR_BLOCKERS_ANNOTATION: ",".join(blockers) if blockers else "ready",
+            FRONTDOOR_REASON_ANNOTATION: reason,
+            FRONTDOOR_UPDATED_AT_ANNOTATION: str(now),
+        }
+
+        should_publish = (
+            force
+            or self.last_frontdoor_status_annotations != annotations
+            or now >= self.next_frontdoor_status_publish
+        )
+        if not should_publish:
+            return
+
+        try:
+            self.k8s.patch_pod_metadata(self.pod_name, annotations=annotations)
+            self.last_frontdoor_status_annotations = dict(annotations)
+            self.next_frontdoor_status_publish = now + self.frontdoor_status_publish_interval
+            if self.frontdoor_status_publish_error:
+                log("Front door status publication recovered")
+                self.frontdoor_status_publish_error = ""
+            self.set_status(
+                frontDoorStatusPublishedAt=now,
+                frontDoorStatusPublishError="",
+            )
+        except Exception as error:
+            if str(error) != self.frontdoor_status_publish_error:
+                log(f"Front door status publication failed: {error}")
+                self.frontdoor_status_publish_error = str(error)
+            self.set_status(frontDoorStatusPublishError=str(error))
 
     @staticmethod
     def default_code_deploy_state(environment):
@@ -4995,6 +5125,38 @@ class RelayRuntime:
             fresh_statuses.append(status)
         return fresh_statuses
 
+    @staticmethod
+    def auth_barrier_peer_pod_ready(pod):
+        status = (pod or {}).get("status") or {}
+        for condition in status.get("conditions") or []:
+            if condition.get("type") == "Ready":
+                return condition.get("status") == "True"
+        return False
+
+    def peer_frontdoor_eligible(self, participant_name):
+        try:
+            pod = self.k8s.get_pod(participant_name)
+        except Exception:
+            return False
+        if not pod:
+            return False
+
+        metadata = pod.get("metadata") or {}
+        annotations = metadata.get("annotations") or {}
+        if metadata.get("deletionTimestamp"):
+            return False
+        if not self.auth_barrier_peer_pod_ready(pod):
+            return False
+        if annotations.get(FRONTDOOR_ELIGIBLE_ANNOTATION) != "true":
+            return False
+
+        updated_at = int(annotations.get(FRONTDOOR_UPDATED_AT_ANNOTATION) or 0)
+        if updated_at <= 0:
+            return False
+        if int(time.time()) - updated_at > self.peer_status_max_age:
+            return False
+        return True
+
     def auth_barrier_target_peers(self):
         peers = []
         for status in self.fresh_peer_statuses():
@@ -5004,6 +5166,8 @@ class RelayRuntime:
             if status.get("role") != "control-plane":
                 continue
             if not relay_status_ready(status):
+                continue
+            if not self.peer_frontdoor_eligible(participant):
                 continue
             peers.append({
                 "participant": participant,
@@ -6549,6 +6713,8 @@ class RelayRuntime:
                 self.refresh_code_deploy_summary()
                 log(f"Code deploy status refresh failed: {error}")
 
+            self.refresh_frontdoor_summary()
+
             try:
                 self.refresh_onboarding(force=self.connection is None or not self.connection.is_open)
                 if self.connection is not None and self.connection.is_open:
@@ -6572,6 +6738,12 @@ class RelayRuntime:
             self.refresh_ca_peer_counts()
             self.set_status(lastError=last_error)
             self.write_status()
+            try:
+                self.publish_frontdoor_status()
+            except KeyboardInterrupt:
+                raise
+            except Exception as error:
+                log(f"Front door status publish loop failed: {error}")
 
 
 def main():

@@ -201,6 +201,7 @@ The current implementation:
 - projects the managed `pe-orchestrator` and `pe-inventory` database domain through Fabric and replays it onto peer control-plane replicas
 - reserves per-replica sequence residues so replicated inserts do not collide when both replicas create local jobs
 - routes compiler PCP brokers, Bolt/orchestrator clients, console traffic, and compiler file-sync through selector-backed `service/pe` so one healthy control-plane replica owns those stable-backend surfaces at a time
+- publishes per-pod front-door eligibility and blocker annotations from Relay so `service/pe` promotion is driven by convergence state instead of Pod readiness alone
 - keeps Gateway as the transport and health boundary on `8142` and `8143`
 - treats `pe-inventory` as persisted connection inventory for saved targets and transport parameters, not as the source of truth for live PCP-connected certnames
 
@@ -211,6 +212,7 @@ That means:
 - `service/pe` currently uses selector-backed stable routing for those surfaces until they are replica-safe
 - an empty `pe-inventory` database during certname-driven PCP execution is currently expected
 - broader PCP mediation and any remaining inventory surfaces beyond saved connection records remain open follow-up
+- repo helpers now expose that state directly: `scripts/pe-frontdoor-status.sh` shows the current backend and blockers, and `scripts/validate-pe-failover.sh` exercises a live cutover
 
 ## Non-Goals
 

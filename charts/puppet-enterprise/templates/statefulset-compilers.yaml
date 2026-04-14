@@ -213,7 +213,7 @@ spec:
             failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
           livenessProbe:
             exec:
-              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "puppetserver"]
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "compiler-puppetserver-live"]
             timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}

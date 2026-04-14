@@ -44,6 +44,7 @@ For the deeper runtime and operator model, see:
 - `agent-image/`: validation agent image
 - `charts/`: Helm charts for PE, the Conductor foundation, and the validation agent
 - `docs/`: runtime notes and legacy service mapping
+- `scripts/`: operator helpers for front-door status and failover validation
 
 ## Prerequisites
 
@@ -81,6 +82,13 @@ default Makefile workflow:
 
 ```bash
 make check-current-state PE_VERSION=2025.9.0
+```
+
+For live operator validation against a deployed release:
+
+```bash
+make pe-frontdoor-status
+make validate-pe-failover
 ```
 
 ## Build
@@ -184,12 +192,15 @@ This project is intentionally conservative right now:
 - when `conductor.relay.classifierSync.enabled=true`, control-plane relays replicate the managed user-visible classifier domain under `All Nodes`, including the `All Environments` subtree and `PE Patch Management`, while leaving PE-owned local infrastructure groups like `PE Infrastructure` out of the sync domain
 - when `conductor.gateway.enabled=true`, control-plane pods front PCP and orchestration traffic through a Gateway sidecar that proxies local `8142/8143` listeners, publishes Gateway status into Fabric, and removes disconnected or unhealthy control-plane replicas from service routing
 - when the control plane has more than one replica, `service/pe` now uses selector-backed stable routing for PCP broker and orchestration traffic instead of exposing a separate sticky service; live validation now covers task execution, plan execution, and selector failover between `pe` replicas
+- selector promotion is now gated by Relay-published front-door eligibility instead of raw Pod readiness alone, and each `pe` pod publishes its current eligibility and blocker set as pod annotations
 - when `conductor.relay.rbacSync.enabled=true`, control-plane relays replicate PE RBAC and local-auth managed state through Fabric, share console token-signing and SAML material, and intentionally treat per-replica login activity such as `last_login` as non-authoritative
 - compiler capacity can scale horizontally behind `service/pe-compiler`
 - centralized `puppet-code deploy` remains the code rollout entrypoint
 - separate Helm releases are independent sandboxes, not synchronization peers
 - active-active HA work is Conductor-aligned: Fabric, Relay, Gateway, and Warden
 - when the control plane has more than one replica, the chart now deliberately routes the web console, compiler file-sync, and orchestration traffic through selector-backed `service/pe` instead of splitting those same surfaces onto a second control-plane service; CA, classification, code-deploy intent, and RBAC/local-auth state still converge underneath that stable-backend boundary
+- `scripts/pe-frontdoor-status.sh` shows the selected `service/pe` backend plus per-pod eligibility, blocker, and selector state
+- `scripts/validate-pe-failover.sh` exercises the current failover story end to end: console login page reachability, code deploy, task run, plan run, agent run, active backend deletion, and post-cutover revalidation
 - the repo does not yet deliver full active-active PE replication
 - the current Relay implementation now captures selected PuppetDB submit-only commands, replays facts and reports to the control-plane role, and intentionally keeps full catalogs local-only
 - classifier HA currently covers that filtered managed domain rather than a dedicated user subtree; PE-owned local classifier groups still remain locally owned on each control-plane replica
