@@ -54,6 +54,17 @@ def split_pem_blocks(value, begin_marker, end_marker):
     return blocks
 
 
+def unique_blocks(blocks):
+    seen = set()
+    result = []
+    for block in blocks:
+        if not block or block in seen:
+            continue
+        seen.add(block)
+        result.append(block)
+    return result
+
+
 def write_text(path, content):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(content, encoding="utf-8")
@@ -371,35 +382,79 @@ def main():
 
     next_serial = int(root_material["nextSerial"].strip() or initial_serial)
     root_updated = False
+    existing_intermediate_certs = []
+    existing_intermediate_crls = []
+    existing_bundle = k8s.get_secret(bundle_secret_name, namespace=namespace)
+    if existing_bundle is not None:
+        data = existing_bundle.get("data", {})
+        existing_intermediate_certs.extend(
+            split_pem_blocks(
+                b64decode_text(data.get("intermediates.pem", "")),
+                "-----BEGIN CERTIFICATE-----",
+                "-----END CERTIFICATE-----",
+            )
+        )
+        existing_intermediate_crls.extend(
+            split_pem_blocks(
+                b64decode_text(data.get("intermediate-crls.pem", "")),
+                "-----BEGIN X509 CRL-----",
+                "-----END X509 CRL-----",
+            )
+        )
 
+    existing_secrets = {}
     for ordinal in range(replica_count):
         pod_name = control_plane_pod_name(statefulset_name, ordinal)
-        certname = control_plane_certname(pod_name, headless_service, namespace)
         secret_name = control_plane_ca_secret_name(pod_name)
-        if k8s.get_secret(secret_name, namespace=namespace) is not None:
+        secret = k8s.get_secret(secret_name, namespace=namespace)
+        if secret is None:
             continue
+        data = secret.get("data", {})
+        tls_crt = b64decode_text(data["tls.crt"])
+        crl_chain = b64decode_text(data["crl.pem"])
+        crls = split_pem_blocks(crl_chain, "-----BEGIN X509 CRL-----", "-----END X509 CRL-----")
+        existing_secrets[pod_name] = {
+            "secretName": secret_name,
+            "tls.crt": tls_crt,
+            "tls.key": b64decode_text(data["tls.key"]),
+            "ca.crt": b64decode_text(data.get("ca.crt", data["tls.crt"])),
+            "crl.pem": crl_chain,
+            "first.crl": crls[0] if crls else "",
+        }
+        existing_intermediate_certs.append(tls_crt)
+        if crls:
+            existing_intermediate_crls.append(crls[0])
 
-        log(f"Generating intermediate CA Secret {namespace}/{secret_name} for {certname}")
-        intermediate = generate_intermediate_material(
+    canonical_pod_name = control_plane_pod_name(statefulset_name, 0)
+    canonical = existing_secrets.get(canonical_pod_name)
+    if canonical is None:
+        canonical_secret_name = control_plane_ca_secret_name(canonical_pod_name)
+        canonical_certname = control_plane_certname(canonical_pod_name, headless_service, namespace)
+        log(
+            f"Generating release-scoped intermediate CA Secret {namespace}/{canonical_secret_name} "
+            f"for {canonical_certname}"
+        )
+        generated = generate_intermediate_material(
             root_material["root.crt"],
             root_material["root.key"],
             root_material["root.crl"],
-            f"Puppet Enterprise CA: {pod_name}",
+            f"Puppet Enterprise CA: {canonical_pod_name}",
             intermediate_duration_days,
             key_size,
             next_serial,
         )
-        k8s.upsert_secret(
-            secret_name,
-            intermediate,
-            labels={"pe-k8s.puppet.com/control-plane-ca": "intermediate"},
-            annotations={
-                "pe-k8s.puppet.com/statefulset": statefulset_name,
-                "pe-k8s.puppet.com/pod-name": pod_name,
-                "pe-k8s.puppet.com/certname": certname,
-            },
-            namespace=namespace,
-        )
+        canonical = {
+            "secretName": canonical_secret_name,
+            "tls.crt": generated["tls.crt"],
+            "tls.key": generated["tls.key"],
+            "ca.crt": generated["ca.crt"],
+            "crl.pem": generated["crl.pem"],
+            "first.crl": split_pem_blocks(
+                generated["crl.pem"],
+                "-----BEGIN X509 CRL-----",
+                "-----END X509 CRL-----",
+            )[0],
+        }
         next_serial += 1
         root_updated = True
 
@@ -413,22 +468,31 @@ def main():
             namespace=namespace,
         )
 
-    intermediate_certs = []
-    intermediate_crls = []
     for ordinal in range(replica_count):
         pod_name = control_plane_pod_name(statefulset_name, ordinal)
+        certname = control_plane_certname(pod_name, headless_service, namespace)
         secret_name = control_plane_ca_secret_name(pod_name)
-        secret = k8s.get_secret(secret_name, namespace=namespace)
-        if secret is None:
-            raise RuntimeError(f"control-plane CA Secret {namespace}/{secret_name} is missing")
-        data = secret.get("data", {})
-        intermediate_certs.append(b64decode_text(data["tls.crt"]))
-        crl_chain = b64decode_text(data["crl.pem"])
-        crls = split_pem_blocks(crl_chain, "-----BEGIN X509 CRL-----", "-----END X509 CRL-----")
-        if not crls:
-            raise RuntimeError(f"control-plane CA Secret {namespace}/{secret_name} is missing X509 CRLs")
-        intermediate_crls.append(crls[0])
+        k8s.upsert_secret(
+            secret_name,
+            {
+                "tls.crt": canonical["tls.crt"],
+                "tls.key": canonical["tls.key"],
+                "ca.crt": canonical["ca.crt"],
+                "crl.pem": canonical["crl.pem"],
+            },
+            labels={"pe-k8s.puppet.com/control-plane-ca": "intermediate"},
+            annotations={
+                "pe-k8s.puppet.com/statefulset": statefulset_name,
+                "pe-k8s.puppet.com/pod-name": pod_name,
+                "pe-k8s.puppet.com/certname": certname,
+                "pe-k8s.puppet.com/release-scoped-ca": "true",
+                "pe-k8s.puppet.com/canonical-pod-name": canonical_pod_name,
+            },
+            namespace=namespace,
+        )
 
+    intermediate_certs = unique_blocks([canonical["tls.crt"], *existing_intermediate_certs])
+    intermediate_crls = unique_blocks([canonical["first.crl"], *existing_intermediate_crls])
     aggregate_bundle = "".join(intermediate_certs) + root_material["root.crt"]
     aggregate_crl_chain = "".join(intermediate_crls) + root_material["root.crl"]
     k8s.upsert_secret(

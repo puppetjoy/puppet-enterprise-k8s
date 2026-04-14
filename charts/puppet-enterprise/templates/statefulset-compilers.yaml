@@ -65,8 +65,10 @@ spec:
               value: {{ include "pe.identity" . | quote }}
             - name: PE_COMPILER_ORCHESTRATION_SERVICE
               value: {{ include "pe.identity" . | quote }}
-            - name: PE_COMPILER_PE_CERTNAME
-              value: {{ include "pe.certname" . | quote }}
+            - name: PE_COMPILER_PE_SERVER_CERTNAME
+              value: {{ include "pe.identity" . | quote }}
+            - name: PE_COMPILER_PE_CERTNAMES
+              value: {{ include "pe.controlPlaneCertnamesCsv" . | quote }}
             - name: PE_COMPILER_PUPPETDB_HOST
               value: {{ include "pe.identity" . | quote }}
             - name: PE_COMPILER_PCP_BROKER_HOST
@@ -80,6 +82,10 @@ spec:
             {{- if eq .Values.controlPlane.ca.provider "releaseRoot" }}
             - name: PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME
               value: {{ include "pe.controlPlaneCaBundleSecretName" . | quote }}
+            {{- end }}
+            {{- if .Values.conductor.enabled }}
+            - name: PE_CONTROL_PLANE_RUNTIME_TRUST_BUNDLE_SECRET_NAME
+              value: {{ include "pe.conductorTrustBundleSecretName" . | quote }}
             {{- end }}
           resources:
 {{ toYaml .Values.compilers.resources.bootstrap | indent 12 }}
@@ -194,6 +200,14 @@ spec:
               value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled .Values.conductor.relay.commandProxy.enabled) | quote }}
             - name: PE_K8S_RELAY_COMMAND_PROXY_PORT
               value: {{ .Values.conductor.relay.commandProxy.port | quote }}
+            {{- if eq .Values.controlPlane.ca.provider "releaseRoot" }}
+            - name: PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME
+              value: {{ include "pe.controlPlaneCaBundleSecretName" . | quote }}
+            {{- end }}
+            {{- if .Values.conductor.enabled }}
+            - name: PE_CONTROL_PLANE_RUNTIME_TRUST_BUNDLE_SECRET_NAME
+              value: {{ include "pe.conductorTrustBundleSecretName" . | quote }}
+            {{- end }}
           ports:
             - name: puppetserver
               containerPort: 8140

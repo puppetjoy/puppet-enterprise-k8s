@@ -41,6 +41,22 @@ false
 {{- end -}}
 {{- end -}}
 
+{{- define "pe.sanitizeFragment" -}}
+{{- $clean := regexReplaceAll "[^a-z0-9-]+" (lower (toString .)) "-" -}}
+{{- $clean = trimAll "-" $clean -}}
+{{- if $clean -}}
+{{- $clean -}}
+{{- else -}}
+default
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.conductorTrustBundleSecretName" -}}
+{{- $prefix := include "pe.sanitizeFragment" .Values.conductor.resourcePrefix -}}
+{{- $segment := include "pe.sanitizeFragment" .Values.conductor.segmentName -}}
+{{- printf "%s-%s-trust-bundle" $prefix $segment | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{- define "pe.controlPlanePodNameForIndex" -}}
 {{- $root := .root -}}
 {{- $index := int .index -}}

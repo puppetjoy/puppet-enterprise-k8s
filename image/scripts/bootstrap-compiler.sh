@@ -11,7 +11,8 @@ PE_COMPILER_NAMESPACE="${PE_COMPILER_NAMESPACE:-default}"
 PE_COMPILER_HEADLESS_SERVICE="${PE_COMPILER_HEADLESS_SERVICE:-}"
 PE_COMPILER_PE_SERVICE="${PE_COMPILER_PE_SERVICE:-pe}"
 PE_COMPILER_ORCHESTRATION_SERVICE="${PE_COMPILER_ORCHESTRATION_SERVICE:-${PE_COMPILER_PE_SERVICE}}"
-PE_COMPILER_PE_CERTNAME="${PE_COMPILER_PE_CERTNAME:-${PE_COMPILER_PE_SERVICE}}"
+PE_COMPILER_PE_SERVER_CERTNAME="${PE_COMPILER_PE_SERVER_CERTNAME:-${PE_COMPILER_PE_SERVICE}}"
+PE_COMPILER_PE_CERTNAMES="${PE_COMPILER_PE_CERTNAMES:-${PE_COMPILER_PE_SERVER_CERTNAME}}"
 PE_COMPILER_PUPPETDB_HOST="${PE_COMPILER_PUPPETDB_HOST:-${PE_COMPILER_PE_SERVICE}}"
 PE_COMPILER_PCP_BROKER_HOST="${PE_COMPILER_PCP_BROKER_HOST:-}"
 PE_COMPILER_POSTGRESQL_HOST="${PE_COMPILER_POSTGRESQL_HOST:-}"
@@ -23,6 +24,10 @@ PE_COMPILER_APPLY_RETRY_SECONDS="${PE_COMPILER_APPLY_RETRY_SECONDS:-10}"
 PE_COMPILER_BOOTSTRAP_DIR="${PE_COMPILER_BOOTSTRAP_DIR:-/etc/puppetlabs/pe-k8s-compiler}"
 PE_COMPILER_MANIFEST_PATH="${PE_COMPILER_MANIFEST_PATH:-${PE_COMPILER_BOOTSTRAP_DIR}/bootstrap.pp}"
 PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME="${PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME:-}"
+PE_CONTROL_PLANE_RUNTIME_TRUST_BUNDLE_SECRET_NAME="${PE_CONTROL_PLANE_RUNTIME_TRUST_BUNDLE_SECRET_NAME:-}"
+PE_COMPILER_PE_PACKAGE_REPO_VERSION="${PE_COMPILER_PE_PACKAGE_REPO_VERSION:-${PE_VERSION:-current}}"
+PE_COMPILER_PE_PACKAGE_REPO_BASEURL="${PE_COMPILER_PE_PACKAGE_REPO_BASEURL:-https://${PE_COMPILER_PE_SERVICE}:8140/packages/current/puppet_enterprise}"
+PE_COMPILER_PE_PACKAGE_GPGKEY_URL="${PE_COMPILER_PE_PACKAGE_GPGKEY_URL:-https://${PE_COMPILER_PE_SERVICE}:8140/packages/GPG-KEY-puppet}"
 
 compiler_certname() {
     if [ -n "${PE_COMPILER_CERTNAME}" ]; then
@@ -48,6 +53,28 @@ compiler_postgresql_host() {
     fi
 
     compiler_certname
+}
+
+compiler_pe_certnames_puppet_array() {
+    local raw cert rendered=""
+    local -a certnames=()
+
+    IFS=',' read -r -a certnames <<< "${PE_COMPILER_PE_CERTNAMES}"
+
+    for raw in "${certnames[@]}"; do
+        cert="$(printf '%s' "${raw}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [ -n "${cert}" ] || continue
+        if [ -n "${rendered}" ]; then
+            rendered="${rendered}, "
+        fi
+        rendered="${rendered}'${cert}'"
+    done
+
+    if [ -z "${rendered}" ]; then
+        rendered="'${PE_COMPILER_PE_SERVER_CERTNAME}'"
+    fi
+
+    printf '%s\n' "${rendered}"
 }
 
 wait_for_pe() {
@@ -135,23 +162,33 @@ bootstrap_compiler_ssl() {
 
 sync_control_plane_ca_bundle() {
     local bundle_secret_name="${PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME:-}"
+    local runtime_bundle_secret_name="${PE_CONTROL_PLANE_RUNTIME_TRUST_BUNDLE_SECRET_NAME:-}"
     local deadline
 
-    [ -n "${bundle_secret_name}" ] || return 0
+    [ -n "${bundle_secret_name}" ] || [ -n "${runtime_bundle_secret_name}" ] || return 0
 
     (
         set -euo pipefail
 
-        local bundle_dir
+        local bundle_dir source_secret_name
         bundle_dir="$(mktemp -d /tmp/pe-k8s-compiler-ca-bundle.XXXXXX)"
         trap 'rm -rf "${bundle_dir}"' EXIT
 
         deadline=$((SECONDS + PE_COMPILER_CERT_WAIT_TIMEOUT_SECONDS))
         while [ "${SECONDS}" -lt "${deadline}" ]; do
-            if k8s_secret_data_field "${PE_COMPILER_NAMESPACE}" "${bundle_secret_name}" ca.pem > "${bundle_dir}/ca.pem"; then
+            source_secret_name="$(
+                select_first_present_secret \
+                    "${PE_COMPILER_NAMESPACE}" \
+                    "${runtime_bundle_secret_name}" \
+                    "${bundle_secret_name}" \
+                    || true
+            )"
+            if [ -n "${source_secret_name}" ] \
+                && k8s_secret_data_field "${PE_COMPILER_NAMESPACE}" "${source_secret_name}" ca.pem > "${bundle_dir}/ca.pem"
+            then
                 ensure_dir /etc/puppetlabs/puppet/ssl/certs
                 ensure_dir /etc/puppetlabs/puppetserver/ca
-                if k8s_secret_data_field "${PE_COMPILER_NAMESPACE}" "${bundle_secret_name}" crl.pem > "${bundle_dir}/crl.pem"; then
+                if k8s_secret_data_field "${PE_COMPILER_NAMESPACE}" "${source_secret_name}" crl.pem > "${bundle_dir}/crl.pem"; then
                     install -o pe-puppet -g pe-puppet -m 0644 \
                         "${bundle_dir}/crl.pem" \
                         /etc/puppetlabs/puppet/ssl/crl.pem
@@ -169,21 +206,38 @@ sync_control_plane_ca_bundle() {
                 install -o pe-puppet -g pe-puppet -m 0640 \
                     "${bundle_dir}/ca.pem" \
                     /etc/puppetlabs/puppetserver/ca/ca_crt.pem
-                log "Synchronized compiler trust bundle from Secret ${PE_COMPILER_NAMESPACE}/${bundle_secret_name}"
+                log "Synchronized compiler trust bundle from Secret ${PE_COMPILER_NAMESPACE}/${source_secret_name}"
                 return 0
             fi
             sleep 5
         done
 
-        log "Timed out waiting for compiler trust bundle Secret ${PE_COMPILER_NAMESPACE}/${bundle_secret_name}"
+        log "Timed out waiting for compiler trust bundle Secret in ${PE_COMPILER_NAMESPACE}"
         return 1
     )
 }
 
+write_pe_package_repo() {
+    local repo_file="/etc/yum.repos.d/puppet_enterprise.repo"
+    cat > "${repo_file}" <<EOF
+[puppet_enterprise]
+name=Puppet, Inc. PE Packages \$releasever - \$basearch
+baseurl=${PE_COMPILER_PE_PACKAGE_REPO_BASEURL}
+enabled=True
+gpgcheck=1
+gpgkey=${PE_COMPILER_PE_PACKAGE_GPGKEY_URL}
+proxy=
+sslcacert=/etc/puppetlabs/puppet/ssl/certs/ca.pem
+EOF
+    log "Wrote compiler package repo ${repo_file} without client-certificate auth"
+}
+
 write_compiler_manifest() {
-    local certname database_host
+    local certname database_host pe_certnames_puppet_array pe_package_repo_version
     certname="$(compiler_certname)"
     database_host="$(compiler_postgresql_host)"
+    pe_certnames_puppet_array="$(compiler_pe_certnames_puppet_array)"
+    pe_package_repo_version="${PE_COMPILER_PE_PACKAGE_REPO_VERSION}"
 
     cat > "${PE_COMPILER_MANIFEST_PATH}" <<EOF
 class { 'puppet_enterprise':
@@ -194,16 +248,21 @@ class { 'puppet_enterprise':
   pcp_broker_host            => '${PE_COMPILER_PCP_BROKER_HOST}',
 }
 
+class { 'puppet_enterprise::packages':
+  installing => true,
+  pe_ver     => '${pe_package_repo_version}',
+}
+
 class { 'puppet_enterprise::profile::master':
   ca_host                     => '${PE_COMPILER_PE_SERVICE}',
   ca_port                     => 8140,
   certname                    => '${certname}',
   classifier_host             => '${PE_COMPILER_PE_SERVICE}',
-  classifier_client_certname  => '${PE_COMPILER_PE_CERTNAME}',
+  classifier_client_certname  => '${PE_COMPILER_PE_SERVER_CERTNAME}',
   console_host                => '${PE_COMPILER_PE_SERVICE}',
-  console_server_certname     => '${PE_COMPILER_PE_CERTNAME}',
-  console_client_certname     => '${PE_COMPILER_PE_CERTNAME}',
-  master_of_masters_certname  => '${PE_COMPILER_PE_CERTNAME}',
+  console_server_certname     => '${PE_COMPILER_PE_SERVER_CERTNAME}',
+  console_client_certname     => '${PE_COMPILER_PE_SERVER_CERTNAME}',
+  master_of_masters_certname  => '${PE_COMPILER_PE_SERVER_CERTNAME}',
   file_sync_enabled           => true,
   code_manager_auto_configure => false,
   puppetdb_host               => ['${certname}', '${PE_COMPILER_PUPPETDB_HOST}'],
@@ -235,7 +294,7 @@ class { 'puppet_enterprise::profile::puppetdb':
       sync_interval_minutes => ${PE_COMPILER_PUPPETDB_SYNC_INTERVAL_MINUTES},
     }
   ],
-  sync_allowlist  => ['${PE_COMPILER_PE_CERTNAME}'],
+  sync_allowlist  => [${pe_certnames_puppet_array}],
   require         => Class['puppet_enterprise::profile::database'],
 }
 
@@ -295,6 +354,7 @@ main() {
     write_compiler_identity
     bootstrap_compiler_ssl
     sync_control_plane_ca_bundle
+    write_pe_package_repo
     write_compiler_manifest
     run_compiler_apply
     export_runtime_rootfs_artifacts

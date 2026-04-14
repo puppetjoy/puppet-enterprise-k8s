@@ -208,8 +208,106 @@ control_plane_ca_uses_seed_secret() {
     [ "${PE_CONTROL_PLANE_CA_PROVIDER}" = "releaseRoot" ]
 }
 
+release_root_ca_secret_matches_local_identity() {
+    control_plane_ca_uses_seed_secret || return 0
+
+    local secret_name
+    local local_cert_path=/etc/puppetlabs/puppetserver/ca/ca_crt.pem
+    local local_key_path=/etc/puppetlabs/puppetserver/ca/ca_key.pem
+
+    [ -f "${local_cert_path}" ] || return 1
+    [ -f "${local_key_path}" ] || return 1
+
+    secret_name="$(control_plane_ca_secret_name)"
+
+    (
+        set -euo pipefail
+
+        local compare_dir local_cert_fingerprint local_key_modulus secret_cert_fingerprint secret_key_modulus
+        compare_dir="$(mktemp -d /tmp/pe-k8s-control-plane-ca-compare.XXXXXX)"
+        trap 'rm -rf "${compare_dir}"' EXIT
+
+        wait_for_secret_data_field_file \
+            "$(control_plane_namespace)" \
+            "${secret_name}" \
+            tls.crt \
+            "${compare_dir}/secret.crt"
+        wait_for_secret_data_field_file \
+            "$(control_plane_namespace)" \
+            "${secret_name}" \
+            tls.key \
+            "${compare_dir}/secret.key"
+
+        python3 - "${local_cert_path}" "${compare_dir}/local-first.crt" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+source_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+text = source_path.read_text(encoding="utf-8")
+match = re.search(
+    r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----\s*",
+    text,
+    re.S,
+)
+if match is None:
+    raise SystemExit(1)
+output_path.write_text(match.group(0), encoding="utf-8")
+PY
+
+        local_cert_fingerprint="$(
+            openssl x509 -in "${compare_dir}/local-first.crt" -noout -fingerprint -sha256 \
+                | awk -F= '{print $2}'
+        )"
+        secret_cert_fingerprint="$(
+            openssl x509 -in "${compare_dir}/secret.crt" -noout -fingerprint -sha256 \
+                | awk -F= '{print $2}'
+        )"
+        local_key_modulus="$(
+            openssl rsa -in "${local_key_path}" -noout -modulus 2>/dev/null | sha256sum | awk '{print $1}'
+        )"
+        secret_key_modulus="$(
+            openssl rsa -in "${compare_dir}/secret.key" -noout -modulus 2>/dev/null | sha256sum | awk '{print $1}'
+        )"
+
+        [ "${local_cert_fingerprint}" = "${secret_cert_fingerprint}" ] \
+            && [ "${local_key_modulus}" = "${secret_key_modulus}" ]
+    )
+}
+
 control_plane_ca_imported() {
-    [ -f /etc/puppetlabs/puppetserver/ca/ca_crt.pem ] && [ -f /etc/puppetlabs/puppetserver/ca/ca_key.pem ]
+    [ -f /etc/puppetlabs/puppetserver/ca/ca_crt.pem ] && [ -f /etc/puppetlabs/puppetserver/ca/ca_key.pem ] || return 1
+
+    if control_plane_ca_uses_seed_secret; then
+        release_root_ca_secret_matches_local_identity
+        return $?
+    fi
+
+    return 0
+}
+
+clear_control_plane_ca_import_paths() {
+    local certname
+
+    certname="$(control_plane_certname)"
+    remove_pe_host_identity_material "${certname}"
+
+    rm -f \
+        /etc/puppetlabs/puppetserver/ca/ca_crt.pem \
+        /etc/puppetlabs/puppetserver/ca/ca_key.pem \
+        /etc/puppetlabs/puppetserver/ca/ca_pub.pem \
+        /etc/puppetlabs/puppetserver/ca/ca_crl.pem \
+        /etc/puppetlabs/puppetserver/ca/infra_crl.pem \
+        /etc/puppetlabs/puppetserver/ca/inventory.txt \
+        /etc/puppetlabs/puppetserver/ca/infra_inventory.txt \
+        /etc/puppetlabs/puppetserver/ca/infra_serials \
+        /etc/puppetlabs/puppetserver/ca/serial \
+        /etc/puppetlabs/puppet/ssl/ca/ca_crt.pem \
+        /etc/puppetlabs/puppet/ssl/ca/ca_key.pem \
+        /etc/puppetlabs/puppet/ssl/ca/ca_pub.pem \
+        /etc/puppetlabs/puppet/ssl/crl.pem \
+        /etc/puppetlabs/puppet/ssl/certs/ca.pem
 }
 
 wait_for_secret_data_field_file() {
@@ -394,6 +492,9 @@ import_control_plane_ca_from_seed_secret() {
         return 0
     fi
 
+    log "Preparing local CA paths for seeded control-plane CA import"
+    clear_control_plane_ca_import_paths
+
     control_plane_ca_secret_name="$(control_plane_ca_secret_name)"
     certname="$(control_plane_certname)"
     subject_alt_names="$(control_plane_dns_alt_names_csv)"
@@ -476,6 +577,9 @@ sync_control_plane_ca_bundle_from_seed_secret() {
             install -o pe-puppet -g pe-puppet -m 0644 \
                 "${bundle_dir}/crl.pem" \
                 /etc/puppetlabs/puppet/ssl/crl.pem
+            install -o pe-puppet -g pe-puppet -m 0644 \
+                "${bundle_dir}/crl.pem" \
+                "$(control_plane_hostcrl_path)"
             install -o pe-puppet -g pe-puppet -m 0640 \
                 "${bundle_dir}/crl.pem" \
                 /etc/puppetlabs/puppetserver/ca/ca_crl.pem
@@ -654,6 +758,7 @@ run_install_sequence() {
     trap 'if [ -n "${wrapper_pid:-}" ]; then kill "${wrapper_pid}" 2>/dev/null || true; wait "${wrapper_pid}" 2>/dev/null || true; fi' RETURN
 
     run_installer_prep
+    copy_exported_sysconfig_into_rootfs
     import_control_plane_ca
     install_service_control_wrappers
 
@@ -672,8 +777,8 @@ run_install_sequence() {
 
 refresh_existing_install_state() {
     install_service_control_wrappers
-    import_control_plane_ca
     copy_exported_sysconfig_into_rootfs
+    import_control_plane_ca
     ensure_postgresql_server_bin_alternatives
     ensure_control_plane_host_certificate
     sync_puppetdb_integration_settings

@@ -195,6 +195,14 @@ spec:
               value: {{ printf "https://%s:%v%s" (include "pe.identity" .) .Values.conductor.relay.codeDeploy.hook.listenPort .Values.conductor.relay.codeDeploy.hook.path | quote }}
             - name: PE_K8S_CODE_DEPLOY_HOOK_USE_CLIENT_SSL
               value: {{ ternary "true" "false" .Values.conductor.relay.codeDeploy.hook.useClientSsl | quote }}
+            {{- if eq .Values.controlPlane.ca.provider "releaseRoot" }}
+            - name: PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME
+              value: {{ include "pe.controlPlaneCaBundleSecretName" . | quote }}
+            {{- end }}
+            {{- if .Values.conductor.enabled }}
+            - name: PE_CONTROL_PLANE_RUNTIME_TRUST_BUNDLE_SECRET_NAME
+              value: {{ include "pe.conductorTrustBundleSecretName" . | quote }}
+            {{- end }}
           ports:
             - name: puppetserver
               containerPort: 8140

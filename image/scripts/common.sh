@@ -185,6 +185,22 @@ sys.stdout.write(base64.b64decode(data.encode("ascii")).decode("utf-8"))
 PY
 }
 
+select_first_present_secret() {
+    local namespace="$1"
+    shift
+
+    local secret_name
+    for secret_name in "$@"; do
+        [ -n "${secret_name}" ] || continue
+        if k8s_api_get_optional "/api/v1/namespaces/${namespace}/secrets/${secret_name}" >/dev/null 2>&1; then
+            printf '%s\n' "${secret_name}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 job_completion_state() {
     local namespace="$1"
     local job_name="$2"
@@ -277,6 +293,35 @@ import sys
 
 print(json.dumps(sys.argv[1]))
 PY
+}
+
+write_first_pem_block() {
+    local source_path="$1"
+    local label="$2"
+    local output_path="$3"
+
+    python3 - "${source_path}" "${label}" "${output_path}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+source_path = Path(sys.argv[1])
+label = sys.argv[2]
+output_path = Path(sys.argv[3])
+text = source_path.read_text(encoding="utf-8")
+pattern = re.compile(
+    rf"-----BEGIN {re.escape(label)}-----\s*.*?-----END {re.escape(label)}-----\s*",
+    re.S,
+)
+match = pattern.search(text)
+if match is None:
+    raise SystemExit(1)
+output_path.write_text(match.group(0).strip() + "\n", encoding="utf-8")
+PY
+}
+
+control_plane_hostcrl_path() {
+    printf '%s\n' "${PE_CONTROL_PLANE_HOSTCRL_PATH:-/etc/puppetlabs/puppet/ssl/crl-chain.pem}"
 }
 
 remote_pe_service() {
@@ -987,6 +1032,55 @@ ensure_postgresql_server_bin_alternatives() {
 
         ln -sfn "${source}" "${target}"
     done
+}
+
+postgresql_data_dir() {
+    printf '%s\n' "${PGDATA:-/opt/puppetlabs/server/data/postgresql/14/data}"
+}
+
+postgresql_port() {
+    printf '%s\n' "${PGPORT:-5432}"
+}
+
+postgresql_run_dir() {
+    printf '%s\n' "${PGSOCKETDIR:-/var/run/puppetlabs/postgresql14}"
+}
+
+clear_stale_postgresql_state() {
+    local data_dir="${1:-$(postgresql_data_dir)}"
+    local port="${2:-$(postgresql_port)}"
+    local run_dir="${3:-$(postgresql_run_dir)}"
+    local pid_file="${data_dir}/postmaster.pid"
+    local pid=""
+    local status=""
+
+    [ -f "${pid_file}" ] || return 0
+
+    if /opt/puppetlabs/server/apps/postgresql/14/bin/pg_isready -h 127.0.0.1 -p "${port}" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    pid="$(sed -n '1p' "${pid_file}" 2>/dev/null | tr -d '[:space:]')"
+    status="$(sed -n '8p' "${pid_file}" 2>/dev/null | tr -d '[:space:]')"
+    if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+        if [ "${status}" = "stopping" ]; then
+            log "Observed PostgreSQL pid ${pid} stuck in stopping state; clearing stale runtime state"
+            kill -TERM "${pid}" 2>/dev/null || true
+            sleep 2
+        else
+            return 0
+        fi
+    fi
+
+    if /opt/puppetlabs/server/apps/postgresql/14/bin/pg_isready -h 127.0.0.1 -p "${port}" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    rm -f \
+        "${pid_file}" \
+        "${run_dir}/.s.PGSQL.${port}" \
+        "${run_dir}/.s.PGSQL.${port}.lock"
+    log "Removed stale PostgreSQL state from ${data_dir}"
 }
 
 export_runtime_rootfs_artifacts() {

@@ -288,10 +288,76 @@ service_pid() {
     cat "${pid_file}"
 }
 
+service_pid_cmdline() {
+    local pid="$1"
+    tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true
+}
+
+service_pid_matches() {
+    local service_name pid cmdline bin
+    service_name="$(canonical_service_name "$1")"
+    pid="$2"
+
+    kill -0 "${pid}" 2>/dev/null || return 1
+    cmdline="$(service_pid_cmdline "${pid}")"
+    [ -n "${cmdline}" ] || return 1
+
+    case "${service_name}" in
+        pe-postgresql)
+            case "${cmdline}" in
+                *"/apps/postgresql/14/bin/postgres "*|*" postgres -D "*)
+                    return 0
+                    ;;
+            esac
+            ;;
+        pe-nginx)
+            case "${cmdline}" in
+                *"/server/bin/nginx "*|*" nginx -g daemon off;"*)
+                    return 0
+                    ;;
+            esac
+            ;;
+        pe-bolt-server)
+            case "${cmdline}" in
+                *"/apps/bolt-server/bin/puma "*|*"pe_bolt_server_config.rb"*)
+                    return 0
+                    ;;
+            esac
+            ;;
+        pe-ace-server)
+            case "${cmdline}" in
+                *"/apps/ace-server/bin/puma "*|*"transport_tasks_config.rb"*)
+                    return 0
+                    ;;
+            esac
+            ;;
+        puppet|pxp-agent)
+            return 0
+            ;;
+        *)
+            bin="$(generic_service_bin "${service_name}" 2>/dev/null || true)"
+            [ -n "${bin}" ] || return 1
+            case "${cmdline}" in
+                *"${bin}"*)
+                    return 0
+                    ;;
+            esac
+            ;;
+    esac
+
+    return 1
+}
+
 service_active() {
-    local pid
-    pid="$(service_pid "$1")" || return 1
-    kill -0 "${pid}" 2>/dev/null
+    local service_name pid pid_file
+    service_name="$(canonical_service_name "$1")"
+    pid_file="$(service_pid_file "${service_name}")"
+    pid="$(service_pid "${service_name}")" || return 1
+    if service_pid_matches "${service_name}" "${pid}"; then
+        return 0
+    fi
+    rm -f "${pid_file}"
+    return 1
 }
 
 launch_special_service() {
@@ -302,6 +368,7 @@ launch_special_service() {
             ;;
         pe-postgresql)
             ensure_dir /var/log/puppetlabs/postgresql/14
+            clear_stale_postgresql_state
             prepare_user_env pe-postgres
             exec runuser --preserve-environment -u pe-postgres -- \
                 /opt/puppetlabs/server/apps/postgresql/14/bin/postgres \
@@ -401,6 +468,11 @@ stop_service() {
         rm -f "${pid_file}"
         return 0
     }
+
+    if ! service_pid_matches "${service_name}" "${pid}"; then
+        rm -f "${pid_file}"
+        return 0
+    fi
 
     kill "${pid}" 2>/dev/null || true
     for _ in 1 2 3 4 5; do

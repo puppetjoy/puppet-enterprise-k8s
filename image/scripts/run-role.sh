@@ -122,6 +122,330 @@ wait_for_postgresql() {
     return 1
 }
 
+CONTROL_PLANE_CA_BUNDLE_SYNC_PID=""
+PUPPETSERVER_CHILD_PID=""
+
+stop_control_plane_ca_bundle_sync_loop() {
+    [ -n "${CONTROL_PLANE_CA_BUNDLE_SYNC_PID}" ] || return 0
+    if kill -0 "${CONTROL_PLANE_CA_BUNDLE_SYNC_PID}" 2>/dev/null; then
+        kill "${CONTROL_PLANE_CA_BUNDLE_SYNC_PID}" 2>/dev/null || true
+    fi
+    CONTROL_PLANE_CA_BUNDLE_SYNC_PID=""
+}
+
+control_plane_ca_bundle_target_matches() {
+    local path="$1"
+    local source_path="$2"
+    local mode="$3"
+    local owner_group="$4"
+    local actual=""
+
+    [ -f "${path}" ] || return 1
+    [ "$(sha256sum "${source_path}" | awk '{print $1}')" = "$(sha256sum "${path}" | awk '{print $1}')" ] || return 1
+
+    actual="$(stat -c '%U:%G %a' "${path}" 2>/dev/null || true)"
+    [ "${actual}" = "${owner_group} ${mode}" ]
+}
+
+merge_control_plane_crl_bundle() {
+    local output_path="$1"
+    shift
+
+    python3 - "$output_path" "$@" <<'PY'
+import hashlib
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+from cryptography import x509
+
+
+def sha256_text(value):
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def normalize_datetime(value):
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def datetime_sort_value(value):
+    value = normalize_datetime(value)
+    return int(value.timestamp()) if value is not None else 0
+
+
+def split_pem_blocks(content, label):
+    pattern = re.compile(
+        rf"-----BEGIN {re.escape(label)}-----\s*.*?-----END {re.escape(label)}-----\s*",
+        re.DOTALL,
+    )
+    blocks = []
+    for match in pattern.finditer(content or ""):
+        block = match.group(0).strip()
+        if block:
+            blocks.append(block + "\n")
+    return blocks
+
+
+selected = {}
+for raw_path in sys.argv[2:]:
+    if not raw_path:
+        continue
+    path = Path(raw_path)
+    if not path.is_file():
+        continue
+    content = path.read_text(encoding="utf-8")
+    for block in split_pem_blocks(content, "X509 CRL"):
+        crl = x509.load_pem_x509_crl(block.encode("utf-8"))
+        issuer = crl.issuer.rfc4514_string()
+        try:
+            crl_number = crl.extensions.get_extension_for_class(x509.CRLNumber).value.crl_number
+        except x509.ExtensionNotFound:
+            crl_number = 0
+        sort_key = (
+            crl_number,
+            datetime_sort_value(getattr(crl, "next_update", None)),
+            datetime_sort_value(getattr(crl, "last_update", None)),
+            sha256_text(block),
+        )
+        current = selected.get(issuer)
+        if current is None or sort_key > current[0]:
+            selected[issuer] = (sort_key, block)
+
+Path(sys.argv[1]).write_text(
+    "".join(selected[issuer][1] for issuer in sorted(selected)),
+    encoding="utf-8",
+)
+PY
+}
+
+sync_control_plane_ca_bundle_from_dir() {
+    local bundle_dir="$1"
+
+    ensure_dir /etc/puppetlabs/puppet/ssl/certs
+    ensure_dir /etc/puppetlabs/puppetserver/ca
+    install -o pe-puppet -g pe-puppet -m 0644 \
+        "${bundle_dir}/ca.pem" \
+        /etc/puppetlabs/puppet/ssl/certs/ca.pem
+    install -o pe-puppet -g pe-puppet -m 0640 \
+        "${bundle_dir}/ca.pem" \
+        /etc/puppetlabs/puppetserver/ca/ca_crt.pem
+    install -o pe-puppet -g pe-puppet -m 0644 \
+        "${bundle_dir}/crl.pem" \
+        /etc/puppetlabs/puppet/ssl/crl.pem
+    install -o pe-puppet -g pe-puppet -m 0644 \
+        "${bundle_dir}/crl.pem" \
+        "$(control_plane_hostcrl_path)"
+    install -o pe-puppet -g pe-puppet -m 0640 \
+        "${bundle_dir}/crl.pem" \
+        /etc/puppetlabs/puppetserver/ca/ca_crl.pem
+    install -o pe-puppet -g pe-puppet -m 0640 \
+        "${bundle_dir}/crl.pem" \
+        /etc/puppetlabs/puppetserver/ca/infra_crl.pem
+}
+
+sync_control_plane_trust_bundle_runtime_from_dir() {
+    local bundle_dir="$1"
+    local crl_path="${2:-${bundle_dir}/crl.pem}"
+
+    ensure_dir /etc/puppetlabs/puppet/ssl/certs
+    install -o pe-puppet -g pe-puppet -m 0644 \
+        "${bundle_dir}/ca.pem" \
+        /etc/puppetlabs/puppet/ssl/certs/ca.pem
+    install -o pe-puppet -g pe-puppet -m 0640 \
+        "${bundle_dir}/ca.pem" \
+        /etc/puppetlabs/puppetserver/ca/ca_crt.pem
+    install -o pe-puppet -g pe-puppet -m 0644 \
+        "${crl_path}" \
+        /etc/puppetlabs/puppet/ssl/crl.pem
+    install -o pe-puppet -g pe-puppet -m 0644 \
+        "${crl_path}" \
+        "$(control_plane_hostcrl_path)"
+}
+
+sync_control_plane_ca_bundle_once() {
+    local bundle_secret_name="${PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME:-}"
+    local runtime_bundle_secret_name="${PE_CONTROL_PLANE_RUNTIME_TRUST_BUNDLE_SECRET_NAME:-}"
+
+    [ -n "${bundle_secret_name}" ] || [ -n "${runtime_bundle_secret_name}" ] || return 0
+
+    (
+        set -euo pipefail
+
+        local namespace bundle_dir source_secret_name
+        namespace="$(k8s_namespace)"
+        source_secret_name="$(
+            select_first_present_secret \
+                "${namespace}" \
+                "${runtime_bundle_secret_name}" \
+                "${bundle_secret_name}" \
+                || true
+        )"
+        [ -n "${source_secret_name}" ] || return 0
+        bundle_dir="$(mktemp -d /tmp/pe-k8s-control-plane-ca-once.XXXXXX)"
+        trap 'rm -rf "${bundle_dir}"' EXIT
+
+        k8s_secret_data_field "${namespace}" "${source_secret_name}" ca.pem > "${bundle_dir}/ca.pem"
+        k8s_secret_data_field "${namespace}" "${source_secret_name}" crl.pem > "${bundle_dir}/crl.pem"
+        sync_control_plane_ca_bundle_from_dir "${bundle_dir}"
+    )
+}
+
+sync_control_plane_hostcrl_setting() {
+    local puppet_bin=/opt/puppetlabs/bin/puppet
+    local puppet_conf=/etc/puppetlabs/puppet/puppet.conf
+
+    [ -x "${puppet_bin}" ] || return 0
+    [ -f "${puppet_conf}" ] || return 0
+
+    "${puppet_bin}" config set hostcrl "$(control_plane_hostcrl_path)" --section server >/dev/null
+}
+
+start_control_plane_ca_bundle_sync_loop() {
+    local bundle_secret_name="${PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME:-}"
+    local runtime_bundle_secret_name="${PE_CONTROL_PLANE_RUNTIME_TRUST_BUNDLE_SECRET_NAME:-}"
+    local poll_seconds="${PE_CONTROL_PLANE_CA_BUNDLE_POLL_SECONDS:-5}"
+
+    [ -n "${bundle_secret_name}" ] || [ -n "${runtime_bundle_secret_name}" ] || return 0
+
+    (
+        set -euo pipefail
+
+        local namespace bundle_dir fingerprint=""
+        local current_fingerprint=""
+        local runtime_crl_path
+        local active_secret_name=""
+        local source_secret_name=""
+
+        namespace="$(k8s_namespace)"
+        bundle_dir="$(mktemp -d /tmp/pe-k8s-control-plane-ca.XXXXXX)"
+        runtime_crl_path="${bundle_dir}/runtime-crl.pem"
+        trap 'rm -rf "${bundle_dir}"' EXIT
+
+        while true; do
+            source_secret_name="$(
+                select_first_present_secret \
+                    "${namespace}" \
+                    "${runtime_bundle_secret_name}" \
+                    "${bundle_secret_name}" \
+                    || true
+            )"
+            if [ -n "${source_secret_name}" ] \
+                && k8s_secret_data_field "${namespace}" "${source_secret_name}" ca.pem > "${bundle_dir}/ca.pem" \
+                && k8s_secret_data_field "${namespace}" "${source_secret_name}" crl.pem > "${bundle_dir}/crl.pem"
+            then
+                local needs_sync=0
+
+                merge_control_plane_crl_bundle \
+                    "${runtime_crl_path}" \
+                    "${bundle_dir}/crl.pem" \
+                    /etc/puppetlabs/puppetserver/ca/ca_crl.pem \
+                    /etc/puppetlabs/puppetserver/ca/infra_crl.pem
+
+                current_fingerprint="$(
+                    {
+                        printf '%s\n' "${source_secret_name}"
+                        cat "${bundle_dir}/ca.pem" "${runtime_crl_path}"
+                    } | sha256sum | awk '{print $1}'
+                )"
+                if [ "${current_fingerprint}" != "${fingerprint}" ]; then
+                    needs_sync=1
+                fi
+                if [ "${source_secret_name}" != "${active_secret_name}" ]; then
+                    needs_sync=1
+                fi
+                if ! control_plane_ca_bundle_target_matches \
+                    /etc/puppetlabs/puppet/ssl/certs/ca.pem \
+                    "${bundle_dir}/ca.pem" \
+                    644 \
+                    pe-puppet:pe-puppet
+                then
+                    needs_sync=1
+                fi
+                if ! control_plane_ca_bundle_target_matches \
+                    /etc/puppetlabs/puppetserver/ca/ca_crt.pem \
+                    "${bundle_dir}/ca.pem" \
+                    640 \
+                    pe-puppet:pe-puppet
+                then
+                    needs_sync=1
+                fi
+                if ! control_plane_ca_bundle_target_matches \
+                    /etc/puppetlabs/puppet/ssl/crl.pem \
+                    "${runtime_crl_path}" \
+                    644 \
+                    pe-puppet:pe-puppet
+                then
+                    needs_sync=1
+                fi
+                if ! control_plane_ca_bundle_target_matches \
+                    "$(control_plane_hostcrl_path)" \
+                    "${runtime_crl_path}" \
+                    644 \
+                    pe-puppet:pe-puppet
+                then
+                    needs_sync=1
+                fi
+                if [ "${needs_sync}" -eq 1 ]; then
+                    sync_control_plane_trust_bundle_runtime_from_dir "${bundle_dir}" "${runtime_crl_path}"
+                    fingerprint="${current_fingerprint}"
+                    active_secret_name="${source_secret_name}"
+                    log "Synchronized control-plane trust bundle from Secret ${namespace}/${source_secret_name}"
+                fi
+            fi
+            sleep "${poll_seconds}"
+        done
+    ) &
+
+    CONTROL_PLANE_CA_BUNDLE_SYNC_PID=$!
+}
+
+stop_puppetserver_child() {
+    local signal="${1:-TERM}"
+
+    [ -n "${PUPPETSERVER_CHILD_PID}" ] || return 0
+    if kill -0 "${PUPPETSERVER_CHILD_PID}" 2>/dev/null; then
+        kill "-${signal}" "${PUPPETSERVER_CHILD_PID}" 2>/dev/null || true
+        wait "${PUPPETSERVER_CHILD_PID}" 2>/dev/null || true
+    fi
+    PUPPETSERVER_CHILD_PID=""
+}
+
+start_puppetserver_child() {
+    if [ "$(id -u)" -eq 0 ]; then
+        prepare_user_env pe-puppet
+        runuser --preserve-environment -u pe-puppet -- \
+            /opt/puppetlabs/server/apps/puppetserver/bin/puppetserver \
+            foreground &
+    else
+        /opt/puppetlabs/server/apps/puppetserver/bin/puppetserver \
+            foreground &
+    fi
+
+    PUPPETSERVER_CHILD_PID=$!
+}
+
+run_puppetserver_supervised() {
+    local rc
+
+    trap 'stop_control_plane_ca_bundle_sync_loop; stop_puppetserver_child TERM; exit 143' TERM INT
+
+    sync_control_plane_ca_bundle_once
+    sync_control_plane_hostcrl_setting
+    start_control_plane_ca_bundle_sync_loop
+    start_puppetserver_child
+
+    wait "${PUPPETSERVER_CHILD_PID}"
+    rc=$?
+    PUPPETSERVER_CHILD_PID=""
+    stop_control_plane_ca_bundle_sync_loop
+    return "${rc}"
+}
+
 orchestration_secret_fingerprint() {
     local path
     local summary=""
@@ -201,6 +525,7 @@ case "${role}" in
         PGDATA="${PGDATA:-/opt/puppetlabs/server/data/postgresql/14/data}"
         PGPORT="${PGPORT:-5432}"
         ensure_dir /var/log/puppetlabs/postgresql/14
+        clear_stale_postgresql_state "${PGDATA}" "${PGPORT}"
         exec_as_user pe-postgres \
             /opt/puppetlabs/server/apps/postgresql/14/bin/postgres \
             -D "${PGDATA}" \
@@ -214,9 +539,7 @@ case "${role}" in
             foreground
         ;;
     puppetserver)
-        exec_as_user pe-puppet \
-            /opt/puppetlabs/server/apps/puppetserver/bin/puppetserver \
-            foreground
+        run_puppetserver_supervised
         ;;
     nginx)
         patch_nginx_ingress_redirects

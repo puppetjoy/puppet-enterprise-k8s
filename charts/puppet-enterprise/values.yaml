@@ -223,7 +223,7 @@ conductor:
     resources: {}
   controlPlaneTrust:
     caPath: /etc/puppetlabs/puppet/ssl/certs/ca.pem
-    crlPath: /etc/puppetlabs/puppet/ssl/crl.pem
+    crlPath: /etc/puppetlabs/puppet/ssl/crl-chain.pem
 
 installer:
   forceReinstall: false
