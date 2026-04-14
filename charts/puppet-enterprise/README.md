@@ -1,0 +1,75 @@
+# puppet-enterprise Chart
+
+This chart installs the main Puppet Enterprise runtime for this proof of
+concept.
+
+It is intentionally Kubernetes-first:
+
+- PE is installed into per-replica PVCs
+- the control plane runs as a `StatefulSet`
+- compilers are optional and separate
+- multi-replica `pe` uses one stable `service/pe` backend at a time
+- Conductor integration is optional and controlled by values
+
+## Before You Install
+
+This chart assumes the operator has already:
+
+- built and pushed a runtime image from a licensed PE installer tarball
+- created a repo-local values file
+- created any required Secrets, such as the r10k deploy key and optional PE
+  license Secret
+
+Typical install path:
+
+```bash
+helm upgrade --install pe charts/puppet-enterprise \
+  --namespace puppet \
+  --create-namespace \
+  -f local/values-pe.yaml
+```
+
+## Key Values
+
+Use `helm show values charts/puppet-enterprise` for the full value set. The
+most important values are:
+
+| Value | Purpose |
+| --- | --- |
+| `image.repository` / `image.tag` | Runtime image to deploy |
+| `network.technicalHostname` | External technical hostname for the control plane |
+| `network.compilerHostname` | External compiler hostname |
+| `peConfig.consoleAdminPassword` | Initial PE admin password |
+| `codeManager.*` | Enable and configure Code Manager |
+| `license.secretName` | Existing Secret containing `license.txt` |
+| `controlPlane.replicaCount` | Number of `pe` control-plane replicas |
+| `controlPlane.ca.provider` | Control-plane CA mode |
+| `controlPlane.resources.*` | Per-container control-plane resources |
+| `compilers.enabled` | Enable the compiler pool |
+| `compilers.replicaCount` | Number of compiler replicas |
+| `compilers.resources.*` | Per-container compiler resources |
+| `storage.*` | Control-plane PVC sizing and storage classes |
+| `conductor.enabled` | Enable participant onboarding and trust integration |
+| `conductor.relay.*` | Enable replicated control-plane state and front-door gating |
+| `conductor.gateway.*` | Enable Gateway for PCP/orchestration traffic |
+| `services.pe.*` | Control-plane Service type and optional load balancer IP |
+| `services.compilers.*` | Compiler Service type and optional load balancer IP |
+| `ingress.*` | Console ingress exposure |
+
+## Operational Notes
+
+- `service/pe` is the control-plane front door.
+- `service/pe-compiler` is the compiler pool front door.
+- In multi-replica mode, the chart currently favors stable-backend HA for
+  `service/pe` over arbitrary pooled routing.
+- This chart does not ship tracked environment-specific defaults. Operators are
+  expected to supply their own cluster profile in local values files.
+
+## After Install
+
+Useful repo-level validation commands:
+
+```bash
+make pe-frontdoor-status
+make validate-pe-failover
+```

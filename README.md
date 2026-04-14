@@ -1,97 +1,101 @@
 # Puppet Enterprise on Kubernetes
 
-This repo runs Puppet Enterprise on Kubernetes by installing PE into persistent volumes and then starting PE services as Kubernetes workloads. It is the Kubernetes follow-on to the earlier container proof of concept.
+This repository runs Puppet Enterprise on Kubernetes without shared storage. It
+keeps the PE installation model intact: the operator supplies a licensed PE
+installer tarball, the chart installs PE onto per-replica persistent volumes,
+and the runtime containers start the PE services from that installed state.
+
+This is still development work. The current focus is to make the system
+rebuildable, operable, and testable in Kubernetes with clear validation
+tooling.
+
+## Current Capabilities
+
+- PE can be installed into Kubernetes workloads without redistributing the PE
+  software in Git.
+- A single Helm release can act as the HA domain for replicated `pe`
+  control-plane replicas and a separate compiler pool.
+- The design does not depend on shared RWX storage.
+- `service/pe` can act as the stable control-plane front door with automatic
+  failover and standby re-entry.
+- Compilers can absorb catalog load separately from the PE control plane, which
+  keeps the scaling story close to familiar PE deployments.
+- CA operations, code deployment, orchestration, and agent traffic can all be
+  exercised through live validation tooling.
+
+## Current Topology
+
+```mermaid
+flowchart LR
+  Browser["Browser / Operator"] --> Ingress["Ingress / DNS"]
+  Ingress --> PeSvc["service/pe\nstable control-plane front door"]
+  Agent["Puppet Agents"] --> CompilerSvc["service/pe-compiler"]
+
+  PeSvc --> Pe0["pe-0\ncontrol plane"]
+  PeSvc --> Pe1["pe-1\neligible standby"]
+
+  CompilerSvc --> C0["pe-compiler-0"]
+  CompilerSvc --> C1["pe-compiler-1"]
+
+  Hub["Conductor Hub + Warden"] -. Fabric .- Pe0
+  Hub -. Fabric .- Pe1
+  Hub -. Fabric .- C0
+  Hub -. Fabric .- C1
+```
+
+Today, multi-replica control planes use one active `service/pe` backend at a
+time. That is a deliberate HA choice, not an accident. The compiler pool is
+still where most catalog load should land.
 
 ## Current State
 
-- Development and validation project, not production-ready
-- Builds a PE runtime image from the official installer tarball
-- Installs PE with Helm and preserves the install result on non-shared per-replica PVCs
-- Runs PostgreSQL, PuppetDB, the non-compiler Puppet Server, and PE edge/API services in a stateful `pe` control-plane pod set
-- Supports an optional compiler pool with per-replica non-shared PVCs, local PostgreSQL/PuppetDB, file-sync/PuppetDB-based readiness, compiler-side PCP brokers, and an internal file-sync service selector for multi-replica control planes
-- Supports optional Conductor participants on the control-plane and compiler pods via Warden-issued onboarding bundles, release trust bundles, participant readiness, and a separate Fabric hub
-- Supports an optional Conductor Relay sidecar that publishes local health into Fabric, records peer Relay status snapshots, replays selected PuppetDB submit-only commands, and converges replicated control-plane state such as classification, RBAC/local-auth, code-deploy intent, and managed orchestration data
-- Supports multiple release-scoped PE instances in one cluster for isolated development and validation
-- Uses `service/pe` as the single control-plane front door, with selector-backed stable routing when a multi-replica control plane needs one backend for console, file-sync, and orchestration traffic
-- Treats one Helm release, not multiple separate releases, as the future active-active replication domain
-- Keeps compilers attached to one owning PE instance; compilers are not a replication mesh
-- Supports optional ingress exposure, Code Manager configuration, and a validation `puppet-agent` chart with explicit certificate signing
-- Still evolving toward a Conductor-aligned active-active control plane, broader control-plane state convergence, and hardening
+- Rebuild from repo workflows with a user-supplied installer tarball and
+  repo-local values/secrets
+- Per-replica PE control planes with stable identity and non-shared storage
+- Separate compiler pool on non-shared storage
+- Conductor-based trust distribution and participant onboarding
+- Front-door status reporting and automatic failover between `pe` replicas
+- CA enroll, sign, revoke, clean, and CRL pickup through failover
+- Code Manager deploy convergence across `pe` replicas
+- Shared classification convergence for the managed user-visible domain
+- RBAC and local-auth convergence across `pe` replicas
+- Orchestration task and plan execution across failover
 
-## How It Relates To Traditional PE
+## Current Limits
 
-This is not a systemd container port. Each `pe` control-plane replica installs PE onto its own PVC set, then runs the PE services as foreground containers inside a StatefulSet pod. `service/pe` is the technical front door for control-plane traffic, and in a multi-replica control plane it can be pinned to one healthy `pe` replica at a time when that traffic still needs a stable backend. An optional `service/pe-compiler` can expose the compiler pool separately.
+- Not a production-ready reference architecture
+- Not a shared-storage design
+- Not a compiler-to-compiler replication design
+- Not a promise of perfectly pooled browser UX across replicas
+- Not a generic chart bundle with tracked cluster-specific defaults
 
-Internally, each control-plane replica installs PE against its own stable pod certname on the headless service. The shared `service/pe` address is preserved as a front door and certificate SAN, not as the replica's install identity.
+## Build, Deploy, Validate
 
-When the control plane has more than one replica, `service/pe` can use
-selector-backed stable routing so compiler file-sync, console, and
-PCP/orchestration traffic share one healthy control-plane replica at a time.
-This is a tactical safeguard for the current implementation, not a statement
-that only one control-plane replica is active.
+### 1. Prepare Local Inputs
 
-For the deeper runtime and operator model, see:
-
-- [docs/runtime-model.md](docs/runtime-model.md)
-- [docs/conductor-architecture.md](docs/conductor-architecture.md)
-- [docs/legacy-service-mapping.md](docs/legacy-service-mapping.md)
-- [docs/replication-roadmap.md](docs/replication-roadmap.md)
-
-## Repository Layout
-
-- `image/`: PE runtime image and entrypoint scripts
-- `conductor-image/`: Warden, participant, and Relay image for the Conductor foundation slice
-- `agent-image/`: validation agent image
-- `charts/`: Helm charts for PE, the Conductor foundation, and the validation agent
-- `docs/`: runtime notes and legacy service mapping
-- `scripts/`: operator helpers for front-door status and failover validation
-
-## Prerequisites
+You need:
 
 - `podman` or another compatible OCI builder
 - `helm`
-- `kubectl` pointed at your cluster
-- access to a container registry for the built images
-- a PE installer tarball available on the machine running the image build
+- `kubectl`
+- write access to a container registry
+- a PE installer tarball available locally
 
-Depending on your environment, you may also need:
-
-- `local/license.txt`
-- `local/keys/id-control_repo.ed25519` if you enable Code Manager with an SSH deploy key
-
-## Local Configuration
-
-Cluster-specific settings belong in ignored local files, not in tracked defaults:
+Repo-local operator inputs typically live in:
 
 - `local/values-pe.yaml`
 - `local/values-agent.yaml`
 - `local/values-conductor.yaml`
+- `local/keys/id-control_repo.ed25519`
+- `local/license.txt` if you need to load a PE license from a Secret
 
-Typical overrides include:
-
-- image repositories and tags
-- storage classes
-- affinity and tolerations
-- `controlPlane.resources.*` and `compilers.resources.*` container resources
-- ingress class, host, and TLS annotations
-- PE and compiler technical hostnames
-- Code Manager settings and secret references
-
-The helper target below validates the repo-local artifact layout used by the
-default Makefile workflow:
+Validate that local state before building:
 
 ```bash
 make check-current-state PE_VERSION=2025.9.0
 ```
 
-For live operator validation against a deployed release:
-
-```bash
-make pe-frontdoor-status
-make validate-pe-failover
-```
-
-## Build
+### 2. Build And Push Images
 
 Build the PE runtime image:
 
@@ -102,111 +106,92 @@ make build-k8s-runtime \
   PE_INSTALLER_TAR_PATH=/absolute/path/to/puppet-enterprise-2025.9.0-el-9-x86_64.tar.gz
 ```
 
-`PE_INSTALLER_TAR_PATH` is the real build input. The Makefile stages that
-archive into the image build context before invoking `podman build`.
-
-If you do not set `PE_INSTALLER_TAR_PATH`, the Makefile defaults to the
-repo-local convention:
-
-```text
-installers/puppet-enterprise-2025.9.0-el-9-x86_64.tar.gz
-```
-
-That path is a convenience for local development, not a required repository
-layout for user-supplied installer artifacts.
-
-Push the runtime image if needed:
+Push it:
 
 ```bash
 CONTAINER_ENGINE=podman \
 make push-k8s-runtime \
-  PE_VERSION=2025.9.0
+  PE_VERSION=2025.9.0 \
+  K8S_RUNTIME_IMAGE_NAME=registry.example.test/pe-k8s-runtime
 ```
 
-Build and push the validation agent image:
+Build and push the validation agent and Conductor images the same way:
 
 ```bash
-CONTAINER_ENGINE=podman \
-make build-k8s-agent \
-  K8S_AGENT_IMAGE_VERSION=0.1.1
+CONTAINER_ENGINE=podman make build-k8s-agent K8S_AGENT_IMAGE_VERSION=<tag>
+CONTAINER_ENGINE=podman make push-k8s-agent \
+  K8S_AGENT_IMAGE_NAME=registry.example.test/pe-k8s-agent \
+  K8S_AGENT_IMAGE_VERSION=<tag>
 
-CONTAINER_ENGINE=podman \
-make push-k8s-agent \
-  K8S_AGENT_IMAGE_VERSION=0.1.1
+CONTAINER_ENGINE=podman make build-conductor CONDUCTOR_IMAGE_VERSION=<tag>
+CONTAINER_ENGINE=podman make push-conductor \
+  CONDUCTOR_IMAGE_NAME=registry.example.test/pe-k8s-conductor \
+  CONDUCTOR_IMAGE_VERSION=<tag>
 ```
 
-Override `K8S_RUNTIME_IMAGE_NAME` or `K8S_AGENT_IMAGE_NAME` if you want to publish to a different registry or repository.
+`PE_INSTALLER_TAR_PATH` is the actual runtime-image build input. The default
+`installers/...` path is only a local Makefile convention.
 
-Build and push the Conductor image:
+### 3. Deploy
 
 ```bash
-CONTAINER_ENGINE=podman \
-make build-conductor \
-  CONDUCTOR_IMAGE_VERSION=0.1.0
-
-CONTAINER_ENGINE=podman \
-make push-conductor \
-  CONDUCTOR_IMAGE_VERSION=0.1.0
+make deploy-conductor
+make deploy-pe
+make deploy-agent
 ```
 
-## Deploy
+These targets deploy from the repo-local values files. They do not provide a
+tracked cluster profile for you.
 
-Render the PE chart locally:
+### 4. Validate
+
+Check the selected `service/pe` backend and standby eligibility:
 
 ```bash
-helm template pe charts/puppet-enterprise -f local/values-pe.yaml
+make pe-frontdoor-status
 ```
 
-Deploy PE with the Makefile helpers:
+Run the live HA validation:
 
-1. Put your cluster-specific overrides in `local/values-pe.yaml`.
-2. If you use Code Manager with an SSH deploy key, populate `local/keys/id-control_repo.ed25519` and run `make create-r10k-secret`.
-3. If you need a PE license Secret, populate `local/license.txt`, run `make create-license-secret`, and reference that Secret from `local/values-pe.yaml`.
-4. Run `make deploy-pe`.
+```bash
+make validate-stack
+```
 
-Deploy the validation agent:
+`validate-stack` currently runs:
 
-1. Put agent-specific overrides in `local/values-agent.yaml`.
-2. Run `make deploy-agent`.
+- `scripts/pe-frontdoor-status.sh`
+- `scripts/validate-pe-failover.sh`
 
-Deploy the Conductor foundation slice:
+The failover harness covers console reachability, code deploy, task/plan
+execution, agent runs, fresh enrollment/signing, front-door failover,
+revoke/clean, CRL pickup, revoked-cert rejection, and standby re-entry.
 
-1. Put Conductor-specific overrides in `local/values-conductor.yaml`.
-2. Run `make deploy-conductor`.
+## Documentation Map
 
-If you want the PE and compiler pods to join Fabric, also set matching `conductor.*`
-values in `local/values-pe.yaml` and redeploy the PE chart.
+- [Solution Overview](docs/solution-overview.md)
+  Public-facing architecture, current capabilities, and current limitations.
+- [Validation Matrix](docs/validation-matrix.md)
+  Behaviors and the commands that validate them.
+- [Runtime Model](docs/runtime-model.md)
+  Lower-level implementation details for contributors.
+- [Conductor Architecture](docs/conductor-architecture.md)
+  How Fabric, Warden, Relay, and Gateway map onto this repo.
+- [Replication Roadmap](docs/replication-roadmap.md)
+  Engineering roadmap for what is still ahead.
+- [Legacy Service Mapping](docs/legacy-service-mapping.md)
+  Background from the earlier container work.
 
-The validation agent chart is optional. It exists to exercise certificate issuance, catalog compilation, reporting, and Code Manager changes against a real `puppet-agent` run.
-By default it can also render a signer Job that signs the test-node certificate against the in-cluster PE CA.
+## Helm Charts
 
-## What To Expect
+- [charts/puppet-enterprise/README.md](charts/puppet-enterprise/README.md)
+- [charts/puppet-agent/README.md](charts/puppet-agent/README.md)
+- [charts/conductor-foundation/README.md](charts/conductor-foundation/README.md)
 
-This project is intentionally conservative right now:
+## Repository Layout
 
-- each PE instance and compiler replica owns its own non-shared PVCs
-- the control plane now has stable per-replica identity and storage, but active-active control-plane synchronization is still in development
-- the current Conductor foundation slice can onboard the `pe` control-plane pods and attached compiler pods into Fabric, then assemble and distribute a release trust bundle
-- when Conductor is enabled, pod readiness can follow onboarding, Fabric connectivity, and trust-bundle installation so `service/pe` and `service/pe-compiler` stop routing to stale or disconnected participants
-- when `conductor.relay.enabled=true`, control-plane and compiler pods also publish Relay status into Fabric, can gate readiness on participant trust plus local PuppetDB health, and can replay selected PuppetDB command traffic through Fabric
-- when `conductor.relay.classifierSync.enabled=true`, control-plane relays replicate the managed user-visible classifier domain under `All Nodes`, including the `All Environments` subtree and `PE Patch Management`, while leaving PE-owned local infrastructure groups like `PE Infrastructure` out of the sync domain
-- when `conductor.gateway.enabled=true`, control-plane pods front PCP and orchestration traffic through a Gateway sidecar that proxies local `8142/8143` listeners, publishes Gateway status into Fabric, and removes disconnected or unhealthy control-plane replicas from service routing
-- when the control plane has more than one replica, `service/pe` now uses selector-backed stable routing for PCP broker and orchestration traffic instead of exposing a separate sticky service; live validation now covers task execution, plan execution, and selector failover between `pe` replicas
-- selector promotion is now gated by Relay-published front-door eligibility instead of raw Pod readiness alone, and each `pe` pod publishes its current eligibility and blocker set as pod annotations
-- when `conductor.relay.rbacSync.enabled=true`, control-plane relays replicate PE RBAC and local-auth managed state through Fabric, share console token-signing and SAML material, and intentionally treat per-replica login activity such as `last_login` as non-authoritative
-- compiler capacity can scale horizontally behind `service/pe-compiler`
-- centralized `puppet-code deploy` remains the code rollout entrypoint
-- separate Helm releases are independent sandboxes, not synchronization peers
-- active-active HA work is Conductor-aligned: Fabric, Relay, Gateway, and Warden
-- when the control plane has more than one replica, the chart now deliberately routes the web console, compiler file-sync, and orchestration traffic through selector-backed `service/pe` instead of splitting those same surfaces onto a second control-plane service; CA, classification, code-deploy intent, and RBAC/local-auth state still converge underneath that stable-backend boundary
-- `scripts/pe-frontdoor-status.sh` shows the selected `service/pe` backend plus per-pod eligibility, blocker, and selector state
-- `scripts/validate-pe-failover.sh` exercises the current failover story end to end: console login page reachability, code deploy, task run, plan run, agent run, active backend deletion, and post-cutover revalidation
-- the repo does not yet deliver full active-active PE replication
-- the current Relay implementation now captures selected PuppetDB submit-only commands, replays facts and reports to the control-plane role, and intentionally keeps full catalogs local-only
-- classifier HA currently covers that filtered managed domain rather than a dedicated user subtree; PE-owned local classifier groups still remain locally owned on each control-plane replica
-- the current Gateway and Relay implementation now covers sticky PCP/orchestration routing, managed orchestration job-state convergence, and broker failover between control-plane replicas; `pe-inventory` now appears to back saved connection inventory rather than live PCP broker presence, so broader PCP mediation is still ahead
-- code rollout across Workers remains operator-initiated through Code Manager; later Fabric work may propagate deploy intent and convergence state between Workers
-- charts provide generic defaults, not a ready-made cluster profile
-- operators are expected to supply environment-specific values locally
-
-If you are evaluating whether this model is a fit, start with the runtime model doc and the legacy service mapping before planning production use.
+- `image/`: PE runtime image and entrypoint/runtime scripts
+- `agent-image/`: validation agent image
+- `conductor-image/`: participant, relay, gateway, and Warden images
+- `charts/`: Helm charts
+- `scripts/`: operator helpers and validation tooling
+- `docs/`: architecture, roadmap, and implementation notes

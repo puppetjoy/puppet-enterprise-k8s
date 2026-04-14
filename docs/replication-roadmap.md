@@ -1,6 +1,14 @@
 # Replication Roadmap
 
-This repo is moving toward a Conductor-aligned active-active PE architecture. The goal is not shared storage and not ad hoc PE-to-PE reconciliation. The goal is a queue-backed control plane with explicit trust, membership, and health boundaries.
+This is the engineering roadmap for what still needs to happen after the
+current proof points. It is intentionally more forward-looking and contributor-
+oriented than the top-level [README](../README.md) or
+[solution overview](solution-overview.md).
+
+This repo is moving toward a Conductor-aligned active-active PE architecture.
+The goal is not shared storage and not ad hoc PE-to-PE reconciliation. The
+goal is a queue-backed control plane with explicit trust, membership, and
+health boundaries.
 
 ## Baseline
 

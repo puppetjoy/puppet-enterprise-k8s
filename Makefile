@@ -1,4 +1,4 @@
-.PHONY: help build-k8s-runtime build-k8s-agent build-conductor push-k8s-runtime push-k8s-agent push-conductor check-current-state create-r10k-secret create-license-secret deploy-pe deploy-agent deploy-conductor deploy lint pe-frontdoor-status validate-pe-failover
+.PHONY: help build-k8s-runtime build-k8s-agent build-conductor push-k8s-runtime push-k8s-agent push-conductor check-current-state create-r10k-secret create-license-secret deploy-pe deploy-agent deploy-conductor deploy lint pe-frontdoor-status validate-pe-failover validate-stack validate-proofs
 
 CONTAINER_ENGINE ?= podman
 PE_VERSION ?=
@@ -54,6 +54,9 @@ help:
 	@echo "  license: $(PE_LICENSE_PATH) (optional)"
 	@echo ""
 	@echo "Validation targets:"
+	@echo "  make pe-frontdoor-status"
+	@echo "  make validate-pe-failover"
+	@echo "  make validate-stack"
 	@echo "  make lint"
 
 build-k8s-runtime:
@@ -232,3 +235,9 @@ pe-frontdoor-status:
 
 validate-pe-failover:
 	@PE_NAMESPACE="$(PE_NAMESPACE)" PE_RELEASE="$(PE_RELEASE)" ./scripts/validate-pe-failover.sh
+
+validate-stack:
+	@PE_NAMESPACE="$(PE_NAMESPACE)" PE_RELEASE="$(PE_RELEASE)" ./scripts/validate-stack.sh
+
+validate-proofs:
+	@$(MAKE) validate-stack PE_NAMESPACE="$(PE_NAMESPACE)" PE_RELEASE="$(PE_RELEASE)"
