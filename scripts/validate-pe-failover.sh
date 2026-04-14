@@ -31,6 +31,12 @@ active_frontdoor_pod() {
     | sed '/^$/d' | head -n1
 }
 
+pod_frontdoor_eligible() {
+  local pod="$1"
+  kubectl -n "$namespace" get pod "$pod" \
+    -o jsonpath='{.metadata.annotations.pe-k8s\.puppet\.com/frontdoor-eligible}' 2>/dev/null
+}
+
 wait_for_frontdoor() {
   local previous="${1:-}"
   local deadline=$((SECONDS + wait_seconds))
@@ -46,6 +52,28 @@ wait_for_frontdoor() {
     sleep 2
   done
   echo "timed out waiting for service/${frontdoor_service} failover" >&2
+  return 1
+}
+
+wait_for_standby_reentry() {
+  local pod="$1"
+  local deadline=$((SECONDS + wait_seconds))
+  local current_active=""
+  local eligible=""
+
+  while (( SECONDS < deadline )); do
+    if kubectl -n "$namespace" get pod "$pod" >/dev/null 2>&1; then
+      eligible="$(pod_frontdoor_eligible "$pod" || true)"
+      current_active="$(active_frontdoor_pod || true)"
+      if [[ "${eligible}" == "true" && "${current_active}" != "${pod}" ]]; then
+        wait_for_pod_ready "$pod"
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+
+  echo "timed out waiting for standby re-entry on ${pod}" >&2
   return 1
 }
 
@@ -696,5 +724,9 @@ new_active="$(wait_for_frontdoor "$initial_active")"
 echo "[info] new active backend: ${new_active}"
 run_checks "$new_active" "$certname" post-failover
 run_ca_revocation_check "$new_active" "$initial_active"
+
+echo "[check] standby re-entry for ${initial_active}"
+wait_for_standby_reentry "$initial_active"
+echo "[ok] standby re-entry completed"
 
 echo "[ok] failover validation completed"

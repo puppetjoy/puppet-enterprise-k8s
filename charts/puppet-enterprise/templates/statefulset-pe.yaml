@@ -313,7 +313,7 @@ spec:
             failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
           livenessProbe:
             exec:
-              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "console-services"]
+              command: ["/usr/local/bin/pe-k8s-entrypoint", "probe", "console-services-live"]
             timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}

@@ -30,6 +30,51 @@ curl_with_local_role_cert() {
         "$@"
 }
 
+console_services_internal_ready() {
+    local local_status
+
+    local_status="$(curl -sk https://127.0.0.1:4433/status/v1/services?level=debug)"
+    python3 - "${local_status}" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+
+def require_running(name):
+    service = payload.get(name) or {}
+    if service.get("state") != "running":
+        raise SystemExit(1)
+    return service.get("status") or {}
+
+activity_status = require_running("activity-service")
+if not activity_status.get("db_up"):
+    raise SystemExit(1)
+if ((activity_status.get("db_pool") or {}).get("state")) != "ready":
+    raise SystemExit(1)
+
+classifier_status = require_running("classifier-service")
+if not classifier_status.get("db_up"):
+    raise SystemExit(1)
+if ((classifier_status.get("db_pool") or {}).get("state")) != "ready":
+    raise SystemExit(1)
+if not classifier_status.get("rbac_up"):
+    raise SystemExit(1)
+if not classifier_status.get("activity_up"):
+    raise SystemExit(1)
+
+rbac_status = require_running("rbac-service")
+if not rbac_status.get("db_up"):
+    raise SystemExit(1)
+if ((rbac_status.get("db_pool") or {}).get("state")) != "ready":
+    raise SystemExit(1)
+if not rbac_status.get("activity_up"):
+    raise SystemExit(1)
+
+require_running("status-service")
+require_running("pe-console")
+PY
+}
+
 compiler_puppetserver_local_ready() {
     local local_status pcp_broker_port
 
@@ -197,6 +242,9 @@ case "${role}" in
         ;;
     console-services)
         exec curl -skf https://127.0.0.1:4433/status/v1/services/status-service
+        ;;
+    console-services-live)
+        console_services_internal_ready
         ;;
     orchestration-services)
         exec curl -skf https://127.0.0.1:8143/status/v1/services/status-service
