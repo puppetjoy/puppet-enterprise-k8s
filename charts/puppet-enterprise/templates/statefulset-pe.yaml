@@ -380,6 +380,8 @@ spec:
           env:
             - name: PE_K8S_ORCHESTRATION_SERVICE_HOST
               value: {{ include "pe.identity" . | quote }}
+            - name: PE_K8S_CONTROL_PLANE_CERTNAMES
+              value: {{ include "pe.controlPlaneCertnamesCsv" . | quote }}
           ports:
             - name: bolt-svc
               containerPort: 62658
@@ -411,6 +413,8 @@ spec:
           env:
             - name: PE_K8S_ORCHESTRATION_SERVICE_HOST
               value: {{ include "pe.identity" . | quote }}
+            - name: PE_K8S_CONTROL_PLANE_CERTNAMES
+              value: {{ include "pe.controlPlaneCertnamesCsv" . | quote }}
           ports:
             - name: ace-svc
               containerPort: 44633

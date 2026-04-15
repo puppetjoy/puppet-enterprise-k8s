@@ -978,6 +978,192 @@ PY
     fi
 }
 
+patch_compiler_environment_auth_allowlist() {
+    local auth_conf_path="${PE_K8S_COMPILER_AUTH_CONF_PATH:-/etc/puppetlabs/puppetserver/conf.d/auth.conf}"
+    local control_plane_certnames_csv="${PE_K8S_CONTROL_PLANE_CERTNAMES:-}"
+    local compiler_certnames_csv="${PE_K8S_COMPILER_CERTNAMES:-}"
+    local pe_service_certname="${PE_K8S_COMPILER_PE_SERVICE:-${PE_COMPILER_PE_SERVICE:-}}"
+
+    [ -f "${auth_conf_path}" ] || return 0
+
+    python3 - \
+        "${auth_conf_path}" \
+        "${pe_service_certname}" \
+        "${control_plane_certnames_csv}" \
+        "${compiler_certnames_csv}" <<'PY'
+from pathlib import Path
+import json
+import re
+import sys
+
+auth_conf_path = Path(sys.argv[1])
+pe_service_certname = sys.argv[2].strip()
+control_plane_certnames_csv = sys.argv[3].strip()
+compiler_certnames_csv = sys.argv[4].strip()
+
+
+def ordered_certnames():
+    values = []
+    for raw_group in (pe_service_certname, control_plane_certnames_csv, compiler_certnames_csv):
+        for raw in raw_group.split(","):
+            cert = raw.strip()
+            if cert and cert not in values:
+                values.append(cert)
+    return values
+
+
+def rewritten_allow_lines(indent, include_rbac, certnames):
+    rendered = [f'{indent}"allow": [\n']
+    inner = indent + "    "
+    for cert in certnames:
+        rendered.append(f"{inner}{json.dumps(cert)},\n")
+    if include_rbac:
+        rendered.extend(
+            [
+                inner + "{\n",
+                inner + '    "rbac": {\n',
+                inner + '        "permission": "puppetserver:compile_catalog:*"\n',
+                inner + "    }\n",
+                inner + "}\n",
+            ]
+        )
+    else:
+        if rendered:
+            rendered[-1] = rendered[-1].rstrip(",\n") + "\n"
+    rendered.append(f"{indent}],\n")
+    return rendered
+
+
+def update_rule_block(block_lines, rule_name, certnames):
+    if rule_name not in {
+        "puppetlabs environment",
+        "puppetlabs environment classes",
+        "puppetlabs environment transports",
+    }:
+        return block_lines
+
+    allow_start = None
+    for index, line in enumerate(block_lines):
+        if re.match(r'^\s*"allow":', line):
+            allow_start = index
+            break
+
+    if allow_start is None:
+        return block_lines
+
+    allow_end = allow_start
+    if "[" in block_lines[allow_start]:
+        while allow_end < len(block_lines):
+            if re.search(r'^\s*\],\s*$', block_lines[allow_end]):
+                break
+            allow_end += 1
+
+    indent = re.match(r'^(\s*)', block_lines[allow_start]).group(1)
+    include_rbac = rule_name == "puppetlabs environment"
+    return (
+        block_lines[:allow_start]
+        + rewritten_allow_lines(indent, include_rbac, certnames)
+        + block_lines[allow_end + 1 :]
+    )
+
+
+certnames = ordered_certnames()
+if not certnames:
+    raise SystemExit(0)
+
+lines = auth_conf_path.read_text(encoding="utf-8").splitlines(keepends=True)
+updated = []
+i = 0
+changed = False
+while i < len(lines):
+    line = lines[i]
+    if re.match(r'^\s*\{\s*$', line):
+        depth = 1
+        j = i + 1
+        while j < len(lines) and depth > 0:
+            depth += lines[j].count("{")
+            depth -= lines[j].count("}")
+            j += 1
+        block = lines[i:j]
+        block_text = "".join(block)
+        match = re.search(r'"name": "([^"]+)"', block_text)
+        if match:
+            rewritten = update_rule_block(block, match.group(1), certnames)
+            if rewritten != block:
+                changed = True
+            updated.extend(rewritten)
+        else:
+            updated.extend(block)
+        i = j
+        continue
+
+    updated.append(line)
+    i += 1
+
+if changed:
+    auth_conf_path.write_text("".join(updated), encoding="utf-8")
+    print("updated")
+else:
+    print("unchanged")
+PY
+}
+
+patch_peer_service_allowlist() {
+    local config_path="$1"
+    local control_plane_certnames_csv="${PE_K8S_CONTROL_PLANE_CERTNAMES:-}"
+
+    [ -f "${config_path}" ] || return 0
+    [ -n "${control_plane_certnames_csv}" ] || return 0
+
+    python3 - "${config_path}" "${control_plane_certnames_csv}" <<'PY'
+from pathlib import Path
+import json
+import re
+import sys
+
+config_path = Path(sys.argv[1])
+control_plane_certnames_csv = sys.argv[2].strip()
+
+certnames = []
+for raw in control_plane_certnames_csv.split(","):
+    cert = raw.strip()
+    if cert and cert not in certnames:
+        certnames.append(cert)
+
+if not certnames:
+    raise SystemExit(0)
+
+lines = config_path.read_text(encoding="utf-8").splitlines(keepends=True)
+start = None
+end = None
+for index, line in enumerate(lines):
+    if re.match(r'^\s*allowlist:\s*\[\s*$', line):
+        start = index
+        continue
+    if start is not None and re.match(r'^\s*\]\s*$', line):
+        end = index
+        break
+
+if start is None or end is None:
+    raise SystemExit(0)
+
+indent = re.match(r'^(\s*)', lines[start]).group(1)
+inner = indent + "    "
+rendered = [f"{indent}allowlist: [\n"]
+for index, cert in enumerate(certnames):
+    suffix = "," if index < len(certnames) - 1 else ""
+    rendered.append(f"{inner}{json.dumps(cert)}{suffix}\n")
+rendered.append(f"{indent}]\n")
+
+updated = lines[:start] + rendered + lines[end + 1 :]
+if updated != lines:
+    config_path.write_text("".join(updated), encoding="utf-8")
+    print("updated")
+else:
+    print("unchanged")
+PY
+}
+
 sync_console_service_alert_config() {
     local enabled="${PE_K8S_CONSOLE_SERVICE_ALERT_SYNC_ENABLED:-false}"
     local console_conf_path="${PE_K8S_CONSOLE_CONF_PATH:-/etc/puppetlabs/console-services/conf.d/console.conf}"

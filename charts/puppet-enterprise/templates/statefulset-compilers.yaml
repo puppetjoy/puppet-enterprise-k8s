@@ -190,6 +190,10 @@ spec:
               value: "true"
             - name: PE_K8S_COMPILER_PE_SERVICE
               value: {{ include "pe.identity" . | quote }}
+            - name: PE_K8S_CONTROL_PLANE_CERTNAMES
+              value: {{ include "pe.controlPlaneCertnamesCsv" . | quote }}
+            - name: PE_K8S_COMPILER_CERTNAMES
+              value: {{ include "pe.compilerCertnamesCsv" . | quote }}
             - name: PE_K8S_COMPILER_FILE_SYNC_SERVICE
               value: {{ include "pe.identity" . | quote }}
             - name: PE_K8S_COMPILER_PUPPETDB_SYNC_MAX_AGE_SECONDS

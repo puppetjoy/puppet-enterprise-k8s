@@ -465,6 +465,7 @@ run_puppetserver_supervised() {
 
     sync_control_plane_ca_bundle_once
     sync_control_plane_hostcrl_setting
+    patch_compiler_environment_auth_allowlist
     start_services_conf_sync_loop
     start_control_plane_ca_bundle_sync_loop
     start_puppetserver_child
@@ -580,6 +581,32 @@ stop_console_services_child() {
     CONSOLE_SERVICES_CHILD_PID=""
 }
 
+wait_for_local_tcp_ports_to_close() {
+    local timeout_seconds="${1:-30}"
+    shift
+
+    [ "$#" -gt 0 ] || return 0
+
+    local deadline port listening
+    deadline=$((SECONDS + timeout_seconds))
+
+    while [ "${SECONDS}" -lt "${deadline}" ]; do
+        listening=0
+        for port in "$@"; do
+            if ss -lnt "( sport = :${port} )" 2>/dev/null | tail -n +2 | grep -q .; then
+                listening=1
+                break
+            fi
+        done
+
+        [ "${listening}" -eq 0 ] && return 0
+        sleep 1
+    done
+
+    log "Timed out waiting for local TCP ports to close: $*"
+    return 1
+}
+
 start_console_services_child() {
     if [ "$(id -u)" -eq 0 ]; then
         prepare_user_env pe-console-services
@@ -603,6 +630,7 @@ run_console_services_supervised() {
     while true; do
         prepare_console_services_config
         expected_fingerprint="$(console_services_config_fingerprint)"
+        wait_for_local_tcp_ports_to_close 30 4433 4440 || true
         start_console_services_child
 
         while kill -0 "${CONSOLE_SERVICES_CHILD_PID}" 2>/dev/null; do
@@ -612,6 +640,7 @@ run_console_services_supervised() {
             if [ "${current_fingerprint}" != "${expected_fingerprint}" ]; then
                 log "Detected console service-alert configuration change; restarting console-services"
                 stop_console_services_child TERM
+                wait_for_local_tcp_ports_to_close 30 4433 4440 || true
                 break
             fi
         done
@@ -673,6 +702,7 @@ case "${role}" in
         ;;
     bolt-server)
         sync_orchestration_service_urls
+        patch_peer_service_allowlist /etc/puppetlabs/bolt-server/conf.d/bolt-server.conf
         export GEM_PATH=/opt/puppetlabs/server/apps/bolt-server/lib/ruby/gems/3.2.0
         export GEM_HOME=/opt/puppetlabs/server/apps/bolt-server/lib/ruby/gems/3.2.0
         export APP_ENV=production
@@ -682,6 +712,7 @@ case "${role}" in
             -e production
         ;;
     ace-server)
+        patch_peer_service_allowlist /etc/puppetlabs/ace-server/conf.d/ace-server.conf
         export GEM_PATH=/opt/puppetlabs/server/apps/ace-server/lib/ruby:/opt/puppetlabs/server/apps/bolt-server/lib/ruby:/opt/puppetlabs/server/apps/bolt-server/lib/ruby/gems/3.2.0
         export GEM_HOME=/opt/puppetlabs/server/apps/ace-server/lib/ruby:/opt/puppetlabs/server/apps/bolt-server/lib/ruby:/opt/puppetlabs/server/apps/bolt-server/lib/ruby/gems/3.2.0
         export APP_ENV=production
