@@ -124,6 +124,7 @@ wait_for_postgresql() {
 
 CONTROL_PLANE_CA_BUNDLE_SYNC_PID=""
 PUPPETSERVER_CHILD_PID=""
+SERVICES_CONF_SYNC_PID=""
 
 stop_control_plane_ca_bundle_sync_loop() {
     [ -n "${CONTROL_PLANE_CA_BUNDLE_SYNC_PID}" ] || return 0
@@ -131,6 +132,34 @@ stop_control_plane_ca_bundle_sync_loop() {
         kill "${CONTROL_PLANE_CA_BUNDLE_SYNC_PID}" 2>/dev/null || true
     fi
     CONTROL_PLANE_CA_BUNDLE_SYNC_PID=""
+}
+
+stop_services_conf_sync_loop() {
+    [ -n "${SERVICES_CONF_SYNC_PID}" ] || return 0
+    if kill -0 "${SERVICES_CONF_SYNC_PID}" 2>/dev/null; then
+        kill "${SERVICES_CONF_SYNC_PID}" 2>/dev/null || true
+    fi
+    SERVICES_CONF_SYNC_PID=""
+}
+
+start_services_conf_sync_loop() {
+    local enabled="${PE_K8S_SERVICES_CONF_SYNC_ENABLED:-false}"
+    local poll_seconds="${PE_K8S_SERVICES_CONF_SYNC_INTERVAL_SECONDS:-15}"
+
+    [ "${enabled}" = "true" ] || return 0
+
+    sync_control_plane_services_conf
+
+    (
+        set -euo pipefail
+
+        while true; do
+            sync_control_plane_services_conf || log "services.conf sync failed"
+            sleep "${poll_seconds}"
+        done
+    ) &
+
+    SERVICES_CONF_SYNC_PID=$!
 }
 
 control_plane_ca_bundle_target_matches() {
@@ -432,16 +461,18 @@ start_puppetserver_child() {
 run_puppetserver_supervised() {
     local rc
 
-    trap 'stop_control_plane_ca_bundle_sync_loop; stop_puppetserver_child TERM; exit 143' TERM INT
+    trap 'stop_services_conf_sync_loop; stop_control_plane_ca_bundle_sync_loop; stop_puppetserver_child TERM; exit 143' TERM INT
 
     sync_control_plane_ca_bundle_once
     sync_control_plane_hostcrl_setting
+    start_services_conf_sync_loop
     start_control_plane_ca_bundle_sync_loop
     start_puppetserver_child
 
     wait "${PUPPETSERVER_CHILD_PID}"
     rc=$?
     PUPPETSERVER_CHILD_PID=""
+    stop_services_conf_sync_loop
     stop_control_plane_ca_bundle_sync_loop
     return "${rc}"
 }
@@ -465,6 +496,7 @@ orchestration_secret_fingerprint() {
 }
 
 ORCHESTRATION_CHILD_PID=""
+CONSOLE_SERVICES_CHILD_PID=""
 
 stop_orchestration_child() {
     local signal="${1:-TERM}"
@@ -520,6 +552,81 @@ run_orchestration_services_supervised() {
     done
 }
 
+console_services_config_fingerprint() {
+    local path="${PE_K8S_CONSOLE_CONF_PATH:-/etc/puppetlabs/console-services/conf.d/console.conf}"
+
+    if [ -f "${path}" ]; then
+        sha256sum "${path}" | awk '{print $1}'
+    else
+        printf 'missing\n'
+    fi
+}
+
+prepare_console_services_config() {
+    patch_conductor_console_auth_barrier_ports
+    sync_conductor_console_auth_shared_state
+    sync_orchestration_service_urls
+    sync_console_service_alert_config
+}
+
+stop_console_services_child() {
+    local signal="${1:-TERM}"
+
+    [ -n "${CONSOLE_SERVICES_CHILD_PID}" ] || return 0
+    if kill -0 "${CONSOLE_SERVICES_CHILD_PID}" 2>/dev/null; then
+        kill "-${signal}" "${CONSOLE_SERVICES_CHILD_PID}" 2>/dev/null || true
+        wait "${CONSOLE_SERVICES_CHILD_PID}" 2>/dev/null || true
+    fi
+    CONSOLE_SERVICES_CHILD_PID=""
+}
+
+start_console_services_child() {
+    if [ "$(id -u)" -eq 0 ]; then
+        prepare_user_env pe-console-services
+        runuser --preserve-environment -u pe-console-services -- \
+            /opt/puppetlabs/server/apps/console-services/bin/console-services \
+            foreground &
+    else
+        /opt/puppetlabs/server/apps/console-services/bin/console-services \
+            foreground &
+    fi
+    CONSOLE_SERVICES_CHILD_PID=$!
+}
+
+run_console_services_supervised() {
+    local expected_fingerprint current_fingerprint poll_seconds rc
+
+    poll_seconds="${PE_K8S_CONSOLE_SERVICE_ALERT_SYNC_INTERVAL_SECONDS:-15}"
+
+    trap 'stop_console_services_child TERM; exit 143' TERM INT
+
+    while true; do
+        prepare_console_services_config
+        expected_fingerprint="$(console_services_config_fingerprint)"
+        start_console_services_child
+
+        while kill -0 "${CONSOLE_SERVICES_CHILD_PID}" 2>/dev/null; do
+            sleep "${poll_seconds}"
+            prepare_console_services_config
+            current_fingerprint="$(console_services_config_fingerprint)"
+            if [ "${current_fingerprint}" != "${expected_fingerprint}" ]; then
+                log "Detected console service-alert configuration change; restarting console-services"
+                stop_console_services_child TERM
+                break
+            fi
+        done
+
+        if [ -n "${CONSOLE_SERVICES_CHILD_PID}" ]; then
+            wait "${CONSOLE_SERVICES_CHILD_PID}"
+            rc=$?
+            CONSOLE_SERVICES_CHILD_PID=""
+            return "${rc}"
+        fi
+
+        sleep 1
+    done
+}
+
 case "${role}" in
     postgresql)
         PGDATA="${PGDATA:-/opt/puppetlabs/server/data/postgresql/14/data}"
@@ -548,12 +655,7 @@ case "${role}" in
             -c /etc/puppetlabs/nginx/nginx.conf
         ;;
     console-services)
-        patch_conductor_console_auth_barrier_ports
-        sync_conductor_console_auth_shared_state
-        sync_orchestration_service_urls
-        exec_as_user pe-console-services \
-            /opt/puppetlabs/server/apps/console-services/bin/console-services \
-            foreground
+        run_console_services_supervised
         ;;
     orchestration-services)
         sync_control_plane_ca_bundle_once

@@ -185,6 +185,14 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "puppetserver"]
           env:
+            - name: PE_K8S_SERVICES_CONF_SYNC_ENABLED
+              value: "true"
+            - name: PE_K8S_RELEASE_NAME
+              value: {{ .Release.Name | quote }}
+            - name: PE_K8S_CONTROL_PLANE_HEADLESS_SERVICE
+              value: {{ include "pe.controlPlaneHeadlessServiceName" . | quote }}
+            - name: PE_K8S_COMPILER_HEADLESS_SERVICE
+              value: {{ include "pe.compilerHeadlessServiceName" . | quote }}
             - name: PE_K8S_RELAY_COMMAND_PROXY_ENABLED
               value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled .Values.conductor.relay.commandProxy.enabled) | quote }}
             - name: PE_K8S_RELAY_COMMAND_PROXY_PORT
@@ -292,6 +300,14 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/usr/local/bin/pe-k8s-entrypoint", "run-role", "console-services"]
           env:
+            - name: PE_K8S_CONSOLE_SERVICE_ALERT_SYNC_ENABLED
+              value: "true"
+            - name: PE_K8S_RELEASE_NAME
+              value: {{ .Release.Name | quote }}
+            - name: PE_K8S_CONTROL_PLANE_HEADLESS_SERVICE
+              value: {{ include "pe.controlPlaneHeadlessServiceName" . | quote }}
+            - name: PE_K8S_COMPILER_HEADLESS_SERVICE
+              value: {{ include "pe.compilerHeadlessServiceName" . | quote }}
             - name: PE_K8S_CONDUCTOR_RBAC_SYNC_ENABLED
               value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled .Values.conductor.relay.rbacSync.enabled) | quote }}
             - name: PE_K8S_ORCHESTRATION_SERVICE_HOST

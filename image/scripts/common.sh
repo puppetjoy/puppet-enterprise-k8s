@@ -324,6 +324,318 @@ control_plane_hostcrl_path() {
     printf '%s\n' "${PE_CONTROL_PLANE_HOSTCRL_PATH:-/etc/puppetlabs/puppet/ssl/crl-chain.pem}"
 }
 
+urlencode() {
+    python3 - "$1" <<'PY'
+from urllib.parse import quote
+import sys
+
+print(quote(sys.argv[1], safe=""))
+PY
+}
+
+current_pod_name() {
+    printf '%s\n' "${PE_CONTROL_PLANE_POD_NAME:-${HOSTNAME:-}}"
+}
+
+current_release_name() {
+    local namespace="${1:-$(k8s_namespace)}"
+    local pod_name="${2:-$(current_pod_name)}"
+    local payload
+
+    if [ -n "${PE_K8S_RELEASE_NAME:-}" ]; then
+        printf '%s\n' "${PE_K8S_RELEASE_NAME}"
+        return 0
+    fi
+
+    payload="$(k8s_api_get "/api/v1/namespaces/${namespace}/pods/${pod_name}")" || return 1
+
+    python3 - "${payload}" <<'PY'
+import json
+import sys
+
+pod = json.loads(sys.argv[1])
+labels = (pod.get("metadata") or {}).get("labels") or {}
+release = (labels.get("app.kubernetes.io/instance") or "").strip()
+if not release:
+    raise SystemExit(1)
+print(release)
+PY
+}
+
+sync_control_plane_services_conf() {
+    local enabled="${PE_K8S_SERVICES_CONF_SYNC_ENABLED:-false}"
+    local services_conf_path="${PE_K8S_SERVICES_CONF_PATH:-/etc/puppetlabs/client-tools/services.conf}"
+    local namespace pod_name release control_plane_headless_service compiler_headless_service
+    local control_plane_selector compiler_selector
+    local control_plane_json compiler_json
+
+    [ "${enabled}" = "true" ] || return 0
+
+    namespace="$(k8s_namespace)"
+    pod_name="$(current_pod_name)"
+    release="$(current_release_name "${namespace}" "${pod_name}")" || {
+        log "Unable to determine Helm release name for services.conf sync"
+        return 1
+    }
+
+    control_plane_headless_service="${PE_K8S_CONTROL_PLANE_HEADLESS_SERVICE:-${release}-headless}"
+    compiler_headless_service="${PE_K8S_COMPILER_HEADLESS_SERVICE:-${release}-compiler-headless}"
+
+    control_plane_selector="$(urlencode "app.kubernetes.io/instance=${release},app.kubernetes.io/component=pe-services")"
+    compiler_selector="$(urlencode "app.kubernetes.io/instance=${release},app.kubernetes.io/component=compiler")"
+
+    control_plane_json="$(mktemp)"
+    compiler_json="$(mktemp)"
+    trap 'rm -f "${control_plane_json}" "${compiler_json}"' RETURN
+
+    k8s_api_get "/api/v1/namespaces/${namespace}/pods?labelSelector=${control_plane_selector}" > "${control_plane_json}"
+    if ! k8s_api_get_optional "/api/v1/namespaces/${namespace}/pods?labelSelector=${compiler_selector}" > "${compiler_json}"; then
+        printf '{"items":[]}\n' > "${compiler_json}"
+    fi
+
+    local sync_result
+
+    sync_result="$(
+        python3 - \
+        "${services_conf_path}" \
+        "${namespace}" \
+        "${control_plane_headless_service}" \
+        "${compiler_headless_service}" \
+        "${control_plane_json}" \
+        "${compiler_json}" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+services_conf_path = Path(sys.argv[1])
+namespace = sys.argv[2]
+control_plane_headless_service = sys.argv[3]
+compiler_headless_service = sys.argv[4]
+control_plane_json_path = Path(sys.argv[5])
+compiler_json_path = Path(sys.argv[6])
+
+control_plane_payload = json.loads(control_plane_json_path.read_text(encoding="utf-8"))
+compiler_payload = json.loads(compiler_json_path.read_text(encoding="utf-8"))
+
+
+def sorted_running_pods(payload):
+    pods = []
+    for item in payload.get("items") or []:
+        metadata = item.get("metadata") or {}
+        status = item.get("status") or {}
+        if metadata.get("deletionTimestamp"):
+            continue
+        if status.get("phase") != "Running":
+            continue
+        pods.append(item)
+
+    def sort_key(item):
+        metadata = item.get("metadata") or {}
+        labels = metadata.get("labels") or {}
+        index = labels.get("apps.kubernetes.io/pod-index")
+        try:
+            return (0, int(index))
+        except (TypeError, ValueError):
+            return (1, metadata.get("name") or "")
+
+    return sorted(pods, key=sort_key)
+
+
+def certname_for_pod(pod_name, headless_service_name):
+    return f"{pod_name}.{headless_service_name}.{namespace}.svc.cluster.local"
+
+
+def pod_name(item):
+    return ((item.get("metadata") or {}).get("name") or "").strip()
+
+
+def active_primary_name(control_plane_pods):
+    for item in control_plane_pods:
+        labels = (item.get("metadata") or {}).get("labels") or {}
+        if (labels.get("pe-k8s.puppet.com/frontdoor-active") or "").strip().lower() == "true":
+            return pod_name(item)
+
+    for item in control_plane_pods:
+        annotations = (item.get("metadata") or {}).get("annotations") or {}
+        if (annotations.get("pe-k8s.puppet.com/frontdoor-eligible") or "").strip().lower() == "true":
+            return pod_name(item)
+
+    if control_plane_pods:
+        return pod_name(control_plane_pods[0])
+
+    return ""
+
+
+def service_url(protocol, certname, port, prefix):
+    prefix = (prefix or "").strip("/")
+    if prefix:
+        return f"{protocol}://{certname}:{port}/{prefix}"
+    return f"{protocol}://{certname}:{port}/"
+
+
+def pod_ip(item):
+    return ((item.get("status") or {}).get("podIP") or "").strip()
+
+
+def postgresql_service(certname, primary, status_host=None):
+    status_target = status_host or certname
+    return {
+        "type": "postgresql",
+        "url": service_url("postgresql", certname, 5432, ""),
+        "server": certname,
+        "port": 5432,
+        "prefix": "",
+        # PE's PostgreSQL status helper treats nodes named as primary/replica as
+        # pglogical participants and emits replication warnings. Our control-plane
+        # PostgreSQL instances are independent, so use the pod IP for the status
+        # transport to force standalone liveness checks while preserving the real
+        # certname for display and service identity.
+        "status_url": service_url("postgresql", status_target, 5432, ""),
+        "status_prefix": "",
+        "status_key": "pe-postgresql",
+        "node_certname": certname,
+        "display_name": "PostgreSQL",
+        "primary": primary,
+        "database_configs": {
+            "activity": {"database": "pe-activity", "user": "pe-activity"},
+            "classifier": {"database": "pe-classifier", "user": "pe-classifier"},
+            "inventory": {"database": "pe-inventory", "user": "pe-inventory"},
+            "orchestrator": {"database": "pe-orchestrator", "user": "pe-orchestrator"},
+            "rbac": {"database": "pe-rbac", "user": "pe-rbac"},
+            "pe-hac": {"database": "pe-hac", "user": "pe-hac"},
+            "pe-patching": {"database": "pe-patching", "user": "pe-patching"},
+            "pe-infra-assistant": {"database": "pe-infra-assistant", "user": "pe-infra-assistant"},
+            "pe-workflow": {"database": "pe-workflow", "user": "pe-workflow"},
+        },
+        "certs_dir": "/opt/puppetlabs/server/data/postgresql/14/data/certs",
+    }
+
+
+CONTROL_PLANE_SERVICE_DEFS = [
+    {"type": "master", "port": 8140, "prefix": "", "status_key": "pe-master", "display_name": "Puppet Server"},
+    {"type": "file-sync-storage", "port": 8140, "prefix": "", "status_key": "file-sync-storage-service", "display_name": "File Sync Storage Service"},
+    {"type": "file-sync-client", "port": 8140, "prefix": "", "status_key": "file-sync-client-service", "display_name": "File Sync Client Service"},
+    {"type": "code-manager", "port": 8170, "prefix": "", "status_port": 8140, "status_key": "code-manager-service", "display_name": "Code Manager"},
+    {"type": "puppetdb", "port": 8081, "prefix": "pdb", "status_key": "puppetdb-status", "display_name": "PuppetDB"},
+    {"type": "orchestrator", "port": 8143, "prefix": "orchestrator", "status_key": "orchestrator-service", "display_name": "Orchestrator"},
+    {"type": "pcp-broker", "port": 8142, "prefix": "pcp", "status_port": 8143, "status_key": "broker-service", "display_name": "PCP Broker", "protocol": "wss", "status_protocol": "https"},
+    {"type": "pcp-broker", "port": 8142, "prefix": "pcp2", "status_port": 8143, "status_key": "broker-service", "display_name": "PCP Broker v2", "protocol": "wss", "status_protocol": "https"},
+    {"type": "classifier", "port": 4433, "prefix": "classifier-api", "status_key": "classifier-service", "display_name": "Classifier"},
+    {"type": "rbac", "port": 4433, "prefix": "rbac-api", "status_key": "rbac-service", "display_name": "RBAC"},
+    {"type": "activity", "port": 4433, "prefix": "activity-api", "status_key": "activity-service", "display_name": "Activity Service"},
+    {"type": "pe-host-action-collector", "port": 8147, "prefix": "", "status_key": "pe-host-action-collector", "display_name": "PE Host Action Collector Service"},
+    {"type": "bolt", "port": 62658, "prefix": "", "status_prefix": "admin/status", "status_key": "bolt-server", "display_name": "Bolt Service"},
+    {"type": "ace", "port": 44633, "prefix": "", "status_prefix": "admin/status", "status_key": "ace-server", "display_name": "Agentless Catalog Executor Service"},
+]
+
+COMPILER_SERVICE_DEFS = [
+    {"type": "master", "port": 8140, "prefix": "", "status_key": "pe-master", "display_name": "Puppet Server"},
+    {"type": "file-sync-client", "port": 8140, "prefix": "", "status_key": "file-sync-client-service", "display_name": "File Sync Client Service"},
+    {"type": "puppetdb", "port": 8081, "prefix": "pdb", "status_key": "puppetdb-status", "display_name": "PuppetDB"},
+    {"type": "pcp-broker", "port": 8142, "prefix": "pcp", "status_port": 8140, "status_key": "broker-service", "display_name": "PCP Broker", "protocol": "wss", "status_protocol": "https"},
+    {"type": "pcp-broker", "port": 8142, "prefix": "pcp2", "status_port": 8140, "status_key": "broker-service", "display_name": "PCP Broker v2", "protocol": "wss", "status_protocol": "https"},
+]
+
+
+def service_entry(certname, primary, definition):
+    protocol = definition.get("protocol") or "https"
+    status_protocol = definition.get("status_protocol") or protocol
+    port = int(definition["port"])
+    status_port = int(definition.get("status_port") or port)
+    prefix = definition.get("prefix") or ""
+    status_prefix = definition.get("status_prefix")
+    if status_prefix is None:
+        status_prefix = "status/v1/services"
+
+    return {
+        "type": definition["type"],
+        "url": service_url(protocol, certname, port, prefix),
+        "server": certname,
+        "port": port,
+        "prefix": prefix,
+        "status_url": service_url(status_protocol, certname, status_port, status_prefix),
+        "status_prefix": status_prefix,
+        "status_key": definition["status_key"],
+        "node_certname": certname,
+        "display_name": definition["display_name"],
+        "primary": primary,
+    }
+
+
+control_plane_pods = sorted_running_pods(control_plane_payload)
+compiler_pods = sorted_running_pods(compiler_payload)
+
+if not control_plane_pods:
+    raise SystemExit("no running control-plane pods found for services.conf sync")
+
+primary_name = active_primary_name(control_plane_pods)
+
+nodes = []
+services = []
+
+for item in control_plane_pods:
+    name = pod_name(item)
+    certname = certname_for_pod(name, control_plane_headless_service)
+    status_host = pod_ip(item) or certname
+    primary = name == primary_name
+    nodes.append(
+        {
+            "role": "primary_master" if primary else "primary_master_replica",
+            "display_name": "Primary" if primary else "Replica",
+            "certname": certname,
+            "order": 1 if primary else 2,
+        }
+    )
+    services.append(postgresql_service(certname, primary, status_host=status_host))
+    for definition in CONTROL_PLANE_SERVICE_DEFS:
+        services.append(service_entry(certname, primary, definition))
+
+for item in compiler_pods:
+    name = pod_name(item)
+    certname = certname_for_pod(name, compiler_headless_service)
+    nodes.append(
+        {
+            "role": "compiler",
+            "display_name": "Compiler",
+            "certname": certname,
+            "order": 4,
+        }
+    )
+    services.append(postgresql_service(certname, False))
+    for definition in COMPILER_SERVICE_DEFS:
+        services.append(service_entry(certname, False, definition))
+
+document = {
+    "services": services,
+    "nodes": nodes,
+    "certs": {
+        "ca-cert": "/etc/puppetlabs/puppet/ssl/certs/ca.pem",
+    },
+}
+
+rendered = json.dumps(document, indent=2, sort_keys=False) + "\n"
+current = services_conf_path.read_text(encoding="utf-8") if services_conf_path.exists() else ""
+
+if current == rendered:
+    print("unchanged")
+else:
+    services_conf_path.write_text(rendered, encoding="utf-8")
+    print("updated")
+PY
+    )"
+
+    chown root:root "${services_conf_path}"
+    chmod 0444 "${services_conf_path}"
+
+    if [ "${sync_result}" = "updated" ]; then
+        log "Updated ${services_conf_path} from Kubernetes topology"
+    fi
+
+    trap - RETURN
+    rm -f "${control_plane_json}" "${compiler_json}"
+    return 0
+}
+
 remote_pe_service() {
     local service="${1:-${PE_REMOTE_SERVICE:-${PE_COMPILER_PE_SERVICE:-${PE_SIGN_PE_SERVICE:-pe}}}}"
     printf '%s\n' "${service}"
@@ -666,6 +978,156 @@ PY
     fi
 }
 
+sync_console_service_alert_config() {
+    local enabled="${PE_K8S_CONSOLE_SERVICE_ALERT_SYNC_ENABLED:-false}"
+    local console_conf_path="${PE_K8S_CONSOLE_CONF_PATH:-/etc/puppetlabs/console-services/conf.d/console.conf}"
+    local namespace pod_name release control_plane_headless_service compiler_headless_service
+    local control_plane_selector compiler_selector
+    local control_plane_json compiler_json
+
+    [ "${enabled}" = "true" ] || return 0
+
+    if [ ! -f "${console_conf_path}" ]; then
+        log "console.conf missing; skipping console service-alert sync"
+        return 0
+    fi
+
+    namespace="$(k8s_namespace)"
+    pod_name="$(current_pod_name)"
+    release="$(current_release_name "${namespace}" "${pod_name}")" || {
+        log "Unable to determine Helm release name for console service-alert sync"
+        return 1
+    }
+
+    control_plane_headless_service="${PE_K8S_CONTROL_PLANE_HEADLESS_SERVICE:-${release}-headless}"
+    compiler_headless_service="${PE_K8S_COMPILER_HEADLESS_SERVICE:-${release}-compiler-headless}"
+
+    control_plane_selector="$(urlencode "app.kubernetes.io/instance=${release},app.kubernetes.io/component=pe-services")"
+    compiler_selector="$(urlencode "app.kubernetes.io/instance=${release},app.kubernetes.io/component=compiler")"
+
+    control_plane_json="$(mktemp)"
+    compiler_json="$(mktemp)"
+    trap 'rm -f "${control_plane_json}" "${compiler_json}"' RETURN
+
+    k8s_api_get "/api/v1/namespaces/${namespace}/pods?labelSelector=${control_plane_selector}" > "${control_plane_json}"
+    if ! k8s_api_get_optional "/api/v1/namespaces/${namespace}/pods?labelSelector=${compiler_selector}" > "${compiler_json}"; then
+        printf '{"items":[]}\n' > "${compiler_json}"
+    fi
+
+    local sync_result
+
+    sync_result="$(
+        python3 - \
+        "${console_conf_path}" \
+        "${namespace}" \
+        "${control_plane_headless_service}" \
+        "${compiler_headless_service}" \
+        "${control_plane_json}" \
+        "${compiler_json}" <<'PY'
+from pathlib import Path
+import json
+import re
+import sys
+
+console_conf_path = Path(sys.argv[1])
+namespace = sys.argv[2]
+control_plane_headless_service = sys.argv[3]
+compiler_headless_service = sys.argv[4]
+control_plane_json_path = Path(sys.argv[5])
+compiler_json_path = Path(sys.argv[6])
+
+control_plane_payload = json.loads(control_plane_json_path.read_text(encoding="utf-8"))
+compiler_payload = json.loads(compiler_json_path.read_text(encoding="utf-8"))
+
+
+def sorted_running_pods(payload):
+    pods = []
+    for item in payload.get("items") or []:
+        metadata = item.get("metadata") or {}
+        status = item.get("status") or {}
+        if metadata.get("deletionTimestamp"):
+            continue
+        if status.get("phase") != "Running":
+            continue
+        pods.append(item)
+
+    def sort_key(item):
+        metadata = item.get("metadata") or {}
+        labels = metadata.get("labels") or {}
+        index = labels.get("apps.kubernetes.io/pod-index")
+        try:
+            return (0, int(index))
+        except (TypeError, ValueError):
+            return (1, metadata.get("name") or "")
+
+    return sorted(pods, key=sort_key)
+
+
+def certname_for_pod(pod_name, headless_service_name):
+    return f"{pod_name}.{headless_service_name}.{namespace}.svc.cluster.local"
+
+
+def pod_name(item):
+    return ((item.get("metadata") or {}).get("name") or "").strip()
+
+
+control_plane_pods = sorted_running_pods(control_plane_payload)
+compiler_pods = sorted_running_pods(compiler_payload)
+
+if not control_plane_pods:
+    raise SystemExit("no running control-plane pods found for console service-alert sync")
+
+entries = []
+
+for item in control_plane_pods:
+    certname = certname_for_pod(pod_name(item), control_plane_headless_service)
+    entries.extend([
+        {"type": "activity", "url": f"https://{certname}:4433"},
+        {"type": "classifier", "url": f"https://{certname}:4433"},
+        {"type": "rbac", "url": f"https://{certname}:4433"},
+        {"type": "master", "url": f"https://{certname}:8140"},
+        {"type": "code-manager", "url": f"https://{certname}:8140"},
+        {"type": "puppetdb", "url": f"https://{certname}:8081"},
+        {"type": "orchestrator", "url": f"https://{certname}:8143"},
+    ])
+
+for item in compiler_pods:
+    certname = certname_for_pod(pod_name(item), compiler_headless_service)
+    entries.append({"type": "master", "url": f"https://{certname}:8140"})
+
+service_alert_lines = ["  service-alert: ["]
+for index, entry in enumerate(entries):
+    suffix = "," if index < len(entries) - 1 else ""
+    service_alert_lines.append(
+        "    { type: \"%s\", url: \"%s\" }%s"
+        % (entry["type"], entry["url"], suffix)
+    )
+service_alert_lines.append("  ]")
+service_alert_block = "\n".join(service_alert_lines)
+
+text = console_conf_path.read_text(encoding="utf-8")
+pattern = r'^\s*service-alert:\s*\[[\s\S]*?\]\s*(?=\n\s*service-alert-timeout\s*:)'
+updated, count = re.subn(pattern, service_alert_block, text, count=1, flags=re.MULTILINE)
+if count != 1:
+    raise SystemExit(f"unable to update service-alert block in {console_conf_path}")
+
+if updated != text:
+    console_conf_path.write_text(updated, encoding="utf-8")
+    print("updated")
+else:
+    print("unchanged")
+PY
+    )"
+
+    if [ "${sync_result}" = "updated" ]; then
+        log "Updated ${console_conf_path} service-alert configuration from Kubernetes topology"
+    fi
+
+    trap - RETURN
+    rm -f "${control_plane_json}" "${compiler_json}"
+    return 0
+}
+
 sync_orchestration_listener_ssl_material() {
     local webserver_conf_path=/etc/puppetlabs/orchestration-services/conf.d/webserver.conf
     local orchestrator_conf_path=/etc/puppetlabs/orchestration-services/conf.d/orchestrator.conf
@@ -1004,6 +1466,7 @@ ensure_postgresql_server_bin_alternatives() {
         createdb \
         initdb \
         pg_ctl \
+        pg_isready \
         pg_dump \
         pg_restore
     do
@@ -1021,6 +1484,9 @@ ensure_postgresql_server_bin_alternatives() {
                 ;;
             pg_ctl)
                 target="${alternatives_dir}/pe-postgresql-server-pg_ctl"
+                ;;
+            pg_isready)
+                target="${alternatives_dir}/pe-postgresql-pg_isready"
                 ;;
             pg_dump)
                 target="${alternatives_dir}/pe-postgresql-pg_dump"
