@@ -1935,10 +1935,27 @@ patch_nginx_ingress_redirects() {
     python3 - <<'PY'
 from pathlib import Path
 
-location_block = """location = /rbac-api/v1/auth/token
+token_location_block = """location = /rbac-api/v1/auth/token
 {
 proxy_pass https://127.0.0.1:4444;
 proxy_redirect https://127.0.0.1:4444 /;
+proxy_read_timeout 120;
+proxy_set_header X-SSL-Subject $ssl_client_s_dn;
+proxy_set_header X-Client-DN $ssl_client_s_dn;
+proxy_set_header X-Client-Verify $ssl_client_verify;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-Proto https;
+}
+"""
+
+ui_timeout_logout_location_block = """location = /auth/logout
+{
+if ($arg_ls = ui) {
+return 302 https://$host/auth/login$is_args$args;
+}
+proxy_pass http://localhost:4430;
+proxy_redirect http://localhost:4430 /;
 proxy_read_timeout 120;
 proxy_set_header X-SSL-Subject $ssl_client_s_dn;
 proxy_set_header X-Client-DN $ssl_client_s_dn;
@@ -1956,8 +1973,13 @@ if proxy_conf_path.is_file():
         marker = "location /\n{"
         if marker not in text:
             raise SystemExit(f"unable to locate nginx location block in {proxy_conf_path}")
-        text = text.replace(marker, f"{location_block}\n{marker}", 1)
-        proxy_conf_path.write_text(text, encoding="utf-8")
+        text = text.replace(marker, f"{token_location_block}\n{marker}", 1)
+    if "location = /auth/logout" not in text:
+        marker = "location /\n{"
+        if marker not in text:
+            raise SystemExit(f"unable to locate nginx location block in {proxy_conf_path}")
+        text = text.replace(marker, f"{ui_timeout_logout_location_block}\n{marker}", 1)
+    proxy_conf_path.write_text(text, encoding="utf-8")
 PY
 
     path=/etc/puppetlabs/nginx/conf.d/proxy.conf
@@ -1984,6 +2006,19 @@ server {
   location = /rbac-api/v1/auth/token {
     proxy_pass https://127.0.0.1:4444;
     proxy_redirect https://127.0.0.1:4444 /;
+    proxy_read_timeout 120;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+  }
+
+  location = /auth/logout {
+    if ($arg_ls = ui) {
+      return 302 https://$host/auth/login$is_args$args;
+    }
+
+    proxy_pass http://localhost:4430;
+    proxy_redirect http://localhost:4430 /;
     proxy_read_timeout 120;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header Host $host;
