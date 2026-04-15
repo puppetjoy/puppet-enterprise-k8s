@@ -333,6 +333,8 @@ spec:
               value: {{ .Values.conductor.participant.statusMaxAgeSeconds | quote }}
             - name: CONDUCTOR_RELAY_COMMAND_PROXY_ENABLED
               value: {{ ternary "true" "false" .Values.conductor.relay.commandProxy.enabled | quote }}
+            - name: CONDUCTOR_RELAY_COMMAND_PROXY_BIND_HOST
+              value: {{ .Values.conductor.relay.commandProxy.bindHost | quote }}
             - name: CONDUCTOR_RELAY_COMMAND_PROXY_PORT
               value: {{ .Values.conductor.relay.commandProxy.port | quote }}
             - name: CONDUCTOR_RELAY_COMMAND_TARGET_ROLES
