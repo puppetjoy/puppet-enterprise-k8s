@@ -202,10 +202,18 @@ if pe_fs.get("state") != "running":
 
 pe_repo = (((pe_fs.get("status") or {}).get("repos") or {}).get("puppet-code") or {})
 
-def latest_commit(repo):
-    return (((repo.get("latest_commit") or {}).get("commit")) or "")
+def repo_convergence_token(repo):
+    latest = repo.get("latest_commit") or {}
+    message = (latest.get("message") or "").strip()
+    signature_match = re.search(r"deploy signature:\s*'([^']+)'", message)
+    if signature_match:
+        return f"deploy:{signature_match.group(1)}"
+    commit = (latest.get("commit") or "").strip()
+    if commit:
+        return f"commit:{commit}"
+    return ""
 
-if latest_commit(local_repo) != latest_commit(pe_repo):
+if repo_convergence_token(local_repo) != repo_convergence_token(pe_repo):
     raise SystemExit(1)
 
 pe_submodules = pe_repo.get("submodules") or {}
@@ -214,7 +222,7 @@ for name, repo in pe_submodules.items():
     local_submodule = local_submodules.get(name) or {}
     if local_submodule.get("status") != "ok":
         raise SystemExit(1)
-    if latest_commit(local_submodule) != latest_commit(repo):
+    if repo_convergence_token(local_submodule) != repo_convergence_token(repo):
         raise SystemExit(1)
 PY
 }
