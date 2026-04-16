@@ -1,0 +1,87 @@
+# Copy to local/values-pe.yaml and edit for your environment.
+# Replace image repositories and tags with the runtime and conductor images
+# you actually built and pushed.
+
+image:
+  repository: registry.example.test/pe-k8s-runtime
+  tag: "2025.9.0-k8s131"
+
+network:
+  technicalHostname: pe.example.test
+  compilerHostname: pe-compiler.example.test
+
+codeManager:
+  enabled: true
+  r10kRemote: git@example.test:puppet/control-repo.git
+  r10kPrivateKeySecretName: pe-r10k-deploy-key
+  r10kKnownHosts:
+    - name: example.test
+      type: ssh-ed25519
+      key: REPLACE_WITH_HOST_KEY
+
+installer:
+  forceReinstall: false
+
+controlPlane:
+  replicaCount: 2
+  ca:
+    provider: releaseRoot
+
+conductor:
+  enabled: true
+  namespace: puppet
+  resourcePrefix: conductor
+  segmentName: production
+  participant:
+    image:
+      repository: registry.example.test/pe-k8s-conductor
+      tag: "0.1.47"
+  relay:
+    enabled: true
+    caSync:
+      enabled: true
+    commandProxy:
+      enabled: true
+    codeDeploy:
+      enabled: true
+    classifierSync:
+      enabled: true
+    rbacSync:
+      enabled: true
+    orchestrationSync:
+      enabled: true
+  gateway:
+    enabled: true
+
+services:
+  pe:
+    type: LoadBalancer
+  compilers:
+    type: LoadBalancer
+
+storage:
+  etc:
+    storageClassName: CHANGE_ME
+  opt:
+    storageClassName: CHANGE_ME
+  runtime:
+    storageClassName: CHANGE_ME
+
+compilers:
+  enabled: true
+  replicaCount: 2
+  storage:
+    etc:
+      storageClassName: CHANGE_ME
+    opt:
+      storageClassName: CHANGE_ME
+    runtime:
+      storageClassName: CHANGE_ME
+
+ingress:
+  enabled: true
+  className: ""
+  annotations: {}
+  host: puppet.example.test
+  tls:
+    secretName: puppet-example-test-tls

@@ -20,6 +20,9 @@ This chart assumes the operator has already:
 - created any required Secrets, such as the r10k deploy key and optional PE
   license Secret
 
+Use `examples/values-pe.example.yaml` as the tracked starting point, then copy
+it to `local/values-pe.yaml` and edit it for your environment.
+
 Typical install path:
 
 ```bash
@@ -64,6 +67,8 @@ most important values are:
   `service/pe` over arbitrary pooled routing.
 - This chart does not ship tracked environment-specific defaults. Operators are
   expected to supply their own cluster profile in local values files.
+- The tracked file `examples/values-pe.example.yaml` is only a starting point,
+  not a ready-to-apply cluster profile.
 
 ## After Install
 

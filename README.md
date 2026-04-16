@@ -89,6 +89,21 @@ Repo-local operator inputs typically live in:
 - `local/keys/id-control_repo.ed25519`
 - `local/license.txt` if you need to load a PE license from a Secret
 
+Tracked starting points are in:
+
+- `examples/values-pe.example.yaml`
+- `examples/values-agent.example.yaml`
+- `examples/values-conductor.example.yaml`
+
+Typical setup:
+
+```bash
+mkdir -p local
+cp examples/values-pe.example.yaml local/values-pe.yaml
+cp examples/values-agent.example.yaml local/values-agent.yaml
+cp examples/values-conductor.example.yaml local/values-conductor.yaml
+```
+
 Validate that local state before building:
 
 ```bash
@@ -142,6 +157,9 @@ make deploy-agent
 
 These targets deploy from the repo-local values files. They do not provide a
 tracked cluster profile for you.
+
+The tracked examples under `examples/` are the starting point for those local
+files.
 
 ### 4. Validate
 

@@ -15,6 +15,10 @@ helm upgrade --install conductor charts/conductor-foundation \
   -f local/values-conductor.yaml
 ```
 
+Use `examples/values-conductor.example.yaml` as the tracked starting point,
+then copy it to `local/values-conductor.yaml` and edit it for your
+environment.
+
 ## Key Values
 
 Use `helm show values charts/conductor-foundation` for the full value set. The

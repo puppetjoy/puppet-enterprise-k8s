@@ -1,0 +1,36 @@
+# Copy to local/values-conductor.yaml and edit for your environment.
+
+hub:
+  auth:
+    username: admin
+    password: change-me
+  persistence:
+    storageClassName: CHANGE_ME
+
+warden:
+  image:
+    repository: registry.example.test/pe-k8s-conductor
+    tag: "0.1.47"
+
+fabric:
+  segments:
+    - name: production
+      vhost: conductor-production
+      pkiDomain: default
+      region: default
+      releaseDomains:
+        - releaseName: pe
+          namespace: puppet
+          workloadSets:
+            - name: compilers
+              enabled: true
+              role: compiler
+              kind: StatefulSet
+              resourceName: pe-compiler
+              participantNamePrefix: pe-compiler
+            - name: control-planes
+              enabled: true
+              role: control-plane
+              kind: StatefulSet
+              resourceName: pe
+              participantNamePrefix: pe

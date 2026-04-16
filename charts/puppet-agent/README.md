@@ -19,6 +19,9 @@ helm upgrade --install test-node charts/puppet-agent \
   -f local/values-agent.yaml
 ```
 
+Use `examples/values-agent.example.yaml` as the tracked starting point, then
+copy it to `local/values-agent.yaml` and edit it for your environment.
+
 ## Key Values
 
 Use `helm show values charts/puppet-agent` for the full value set. The most
