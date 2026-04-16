@@ -1952,7 +1952,9 @@ proxy_set_header X-Forwarded-Proto https;
 ui_timeout_logout_location_block = """location = /auth/logout
 {
 if ($arg_ls = ui) {
-return 302 https://$host/auth/login$is_args$args;
+add_header Set-Cookie "__HOST-pl_ssti=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict";
+add_header Set-Cookie "__HOST-pl_sssi=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict";
+return 302 https://$host/auth/login?redirect=$arg_redirect;
 }
 proxy_pass http://localhost:4430;
 proxy_redirect http://localhost:4430 /;
@@ -2014,7 +2016,9 @@ server {
 
   location = /auth/logout {
     if ($arg_ls = ui) {
-      return 302 https://$host/auth/login$is_args$args;
+      add_header Set-Cookie "__HOST-pl_ssti=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict";
+      add_header Set-Cookie "__HOST-pl_sssi=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict";
+      return 302 https://$host/auth/login?redirect=$arg_redirect;
     }
 
     proxy_pass http://localhost:4430;
