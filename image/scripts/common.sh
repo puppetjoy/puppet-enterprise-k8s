@@ -1949,6 +1949,32 @@ proxy_set_header X-Forwarded-Proto https;
 }
 """
 
+favicon_location_block = """location = /favicon.ico
+{
+proxy_pass http://localhost:4430/auth/favicon.ico;
+proxy_redirect off;
+proxy_read_timeout 120;
+proxy_set_header X-SSL-Subject $ssl_client_s_dn;
+proxy_set_header X-Client-DN $ssl_client_s_dn;
+proxy_set_header X-Client-Verify $ssl_client_verify;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-Proto https;
+}
+"""
+
+proxy_root_location_block = """location /
+{
+proxy_pass http://localhost:4430;
+proxy_redirect http://localhost:4430 /;
+proxy_read_timeout 120;
+proxy_set_header X-SSL-Subject $ssl_client_s_dn;
+proxy_set_header X-Client-DN $ssl_client_s_dn;
+proxy_set_header X-Client-Verify $ssl_client_verify;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+"""
+
 ui_timeout_logout_location_block = """location = /auth/logout
 {
 if ($arg_ls = ui) {
@@ -1968,19 +1994,43 @@ proxy_set_header X-Forwarded-Proto https;
 }
 """
 
+proxy_saml_location_block = """location /saml
+{
+proxy_pass https://0.0.0.0:4431;
+proxy_redirect https://0.0.0.0:4431 /;
+proxy_read_timeout 120;
+proxy_set_header X-SSL-Subject $ssl_client_s_dn;
+proxy_set_header X-Client-DN $ssl_client_s_dn;
+proxy_set_header X-Client-Verify $ssl_client_verify;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header Host $host;
+}
+"""
+
 proxy_conf_path = Path("/etc/puppetlabs/nginx/conf.d/proxy.conf")
 if proxy_conf_path.is_file():
     text = proxy_conf_path.read_text(encoding="utf-8")
-    if "location = /rbac-api/v1/auth/token" not in text:
-        marker = "location /\n{"
-        if marker not in text:
+    marker = "location = /rbac-api/v1/auth/token\n{"
+    if marker in text:
+        prefix = text.split(marker, 1)[0]
+    else:
+        fallback_marker = "location /\n{"
+        if fallback_marker not in text:
             raise SystemExit(f"unable to locate nginx location block in {proxy_conf_path}")
-        text = text.replace(marker, f"{token_location_block}\n{marker}", 1)
-    if "location = /auth/logout" not in text:
-        marker = "location /\n{"
-        if marker not in text:
-            raise SystemExit(f"unable to locate nginx location block in {proxy_conf_path}")
-        text = text.replace(marker, f"{ui_timeout_logout_location_block}\n{marker}", 1)
+        prefix = text.split(fallback_marker, 1)[0]
+    text = (
+        prefix
+        + token_location_block
+        + "\n"
+        + favicon_location_block
+        + "\n"
+        + ui_timeout_logout_location_block
+        + "\n"
+        + proxy_root_location_block
+        + "\n"
+        + proxy_saml_location_block
+        + "\n}\n"
+    )
     proxy_conf_path.write_text(text, encoding="utf-8")
 PY
 
@@ -2008,6 +2058,15 @@ server {
   location = /rbac-api/v1/auth/token {
     proxy_pass https://127.0.0.1:4444;
     proxy_redirect https://127.0.0.1:4444 /;
+    proxy_read_timeout 120;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+  }
+
+  location = /favicon.ico {
+    proxy_pass http://localhost:4430/auth/favicon.ico;
+    proxy_redirect off;
     proxy_read_timeout 120;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header Host $host;
