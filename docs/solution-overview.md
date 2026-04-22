@@ -1,42 +1,42 @@
 # Solution Overview
 
-This document is the high-level technical summary of the current
-implementation. It is intended to be readable by someone evaluating the
-project without having to start in the lower-level runtime docs.
+This is the short technical summary of the current implementation. It is meant
+for readers who want the current architecture and proof points without going
+straight into runtime detail.
 
 ## Scope
 
-Traditional Puppet Enterprise deployments assume a relatively static set of
-hosts, strong service locality, and scaling through attached compilers. The
-current work is focused on a narrower question:
+Traditional Puppet Enterprise deployments assume strong service locality and
+scale outward through attached compilers. This project asks a narrower
+question:
 
-Can PE be rebuilt and run in Kubernetes without shared storage while keeping
-compilers as the main scaling surface?
+Can PE be rebuilt and operated in Kubernetes without shared storage while
+keeping the familiar PE control-plane and compiler shape?
 
-Current status:
+Current answer:
 
 - yes for rebuildability
 - yes for failover-oriented HA
-- partially for broader control-plane state convergence
-- not yet for a perfectly pooled, fully linearizable multi-replica UI
+- yes for Cassandra-backed shared state in the current replicated domains
+- no for a fully pooled, replica-agnostic browser experience
 
 ## Design Constraints
 
-- No shared RWX storage
-- No redistribution of PE software in Git
-- User-supplied installer tarball at image-build time
-- One Helm release is the replication domain
-- Compilers remain the primary scale surface for catalog traffic
-- `service/pe` remains the main control-plane front door
+- no shared RWX storage
+- no redistribution of PE software in Git
+- user-supplied installer tarball at image-build time
+- one Helm release is the HA domain
+- compilers remain the main scale surface for catalog traffic
+- `service/pe` remains the control-plane front door
 
 ## Current Runtime Model
 
-- Each `pe` replica installs PE onto its own PVC set.
-- Each compiler installs its own compiler-local runtime onto its own PVC set.
-- `service/pe` points at one eligible control-plane replica at a time.
-- `service/pe-compiler` exposes the compiler pool for agent-facing traffic.
-- Conductor provides the queue and trust layer for replicated control-plane
-  state.
+- each `pe` replica installs PE onto its own PVC set
+- each compiler installs its own runtime onto its own PVC set
+- `service/pe` points at one eligible control-plane replica at a time
+- `service/pe-compiler` exposes the compiler pool for agent-facing traffic
+- Conductor provides transport, trust, and front-door eligibility
+- Cassandra provides shared state for the replicated control-plane domains
 
 ```mermaid
 flowchart TB
@@ -58,14 +58,16 @@ flowchart TB
     end
   end
 
-  Hub["Conductor Hub"]
-  Warden["Warden"]
+  Hub["Conductor Hub + Warden"]
+  Cassandra["Cassandra"]
 
-  Hub --- Warden
   Hub -. Fabric .- Pe0
   Hub -. Fabric .- Pe1
   Hub -. Fabric .- C0
   Hub -. Fabric .- C1
+
+  Cassandra --- Pe0
+  Cassandra --- Pe1
 ```
 
 ## What Has Been Proven
@@ -73,9 +75,9 @@ flowchart TB
 ### Rebuildability
 
 - The stack can be destroyed and recreated from repo workflows.
-- The rebuild depends on repo-managed charts, scripts, and local values, plus
-  operator-supplied licensed artifacts and secrets.
-- The resulting deployment can pass the live HA harness after rebuild.
+- Rebuild depends on repo-managed charts and scripts plus operator-supplied
+  licensed artifacts and secrets.
+- The rebuilt stack can pass the live validation harness.
 
 ### Control-Plane HA
 
@@ -93,36 +95,26 @@ flowchart TB
 ### Compiler-Oriented Scale Story
 
 - Catalog traffic is served through `service/pe-compiler`.
-- Compiler PCP brokers remain aligned with a traditional PE mental model.
-- The control plane is not being used as the primary scaling surface.
+- Compiler PCP brokers still fit the familiar PE model.
+- The control plane is not being used as the main catalog scale surface.
 
-### Replicated Control-Plane State
+### Shared Control-Plane State
 
-The current replicated state includes:
+The current shared-state model covers:
 
-- filtered user-visible classification
-- the filtered managed classifier graph can move through a Cassandra-backed
-  Conductor shared-state path
-- RBAC and local-auth managed state
-- login-session handoff can move through a Cassandra-backed Conductor store
-  instead of direct peer database writes
-- the remaining managed RBAC graph and normal RBAC tokens can move through the
-  same Cassandra-backed shared-state path
-- persisted orchestration inventory can move through the same Cassandra-backed
-  shared-state path
-- persisted orchestration job and plan state can move through the same
-  Cassandra-backed shared-state path
-- code deployment intent and convergence state
-- managed orchestration data needed for task and plan failover
+- filtered managed classifier graph
+- login-session handoff
+- managed RBAC graph and normal RBAC tokens
+- persisted orchestration inventory connections
+- persisted orchestration job and plan state
 
-The shared-state path for auth and persisted orchestration data is now
-Cassandra-backed Conductor state. That preserves the current `service/pe` /
-`service/pe-compiler` deployment shape without making one `pe` replica
-special.
+These domains now use Cassandra-backed Conductor state instead of peer
+PostgreSQL replay.
 
 ## Current Traffic And Failover Model
 
-The control plane is currently failover-oriented rather than freely pooled.
+The control plane is currently stable-backend HA rather than freely pooled
+multi-replica service.
 
 That means:
 
@@ -130,7 +122,7 @@ That means:
 - another healthy replica can stand by and take over
 - browser and API traffic see one stable backend at a time
 - compilers and agents still use stable service names and do not need to know
-  the selected pod
+  which pod is selected
 
 ```mermaid
 sequenceDiagram
@@ -152,11 +144,10 @@ sequenceDiagram
 
 ## Current Limits
 
-- This is still a development project, not production guidance.
-- `service/pe` is stable-backend HA, not arbitrary pooled active-active UI.
+- This is still a proof of concept, not production guidance.
+- `service/pe` is stable-backend HA, not arbitrary pooled browser traffic.
 - Some PE surfaces still assume strong local identity and locality.
-- The chart values are intentionally generic; operators must supply their own
-  cluster profile.
+- The tracked values files are examples, not ready-made environment profiles.
 
 ## Where To Read Next
 

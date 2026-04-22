@@ -71,9 +71,11 @@ most important values are:
 - `service/pe-compiler` is the compiler pool front door.
 - In multi-replica mode, the chart currently favors stable-backend HA for
   `service/pe` over arbitrary pooled routing.
-- When the shared-state sync domains are enabled, the chart defaults them to
-  the Conductor Cassandra service unless per-domain contact points are set
+- When the replicated shared-state domains are enabled, they use the
+  Conductor Cassandra service by default unless contact points are set
   explicitly.
+- Peer PostgreSQL replay is no longer the normal path for the migrated shared
+  domains.
 - This chart does not ship tracked environment-specific defaults. Operators are
   expected to supply their own cluster profile in local values files.
 - The tracked file `examples/values-pe.example.yaml` is only a starting point,

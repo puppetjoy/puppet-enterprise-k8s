@@ -1,27 +1,35 @@
 # Puppet Enterprise on Kubernetes
 
-This repository runs Puppet Enterprise on Kubernetes without shared storage. It
-keeps the PE installation model intact: the operator supplies a licensed PE
-installer tarball, the chart installs PE onto per-replica persistent volumes,
-and the runtime containers start the PE services from that installed state.
+This repository is a proof of concept for running Puppet Enterprise on
+Kubernetes without shared storage.
 
-This is still development work. The current focus is to make the system
-rebuildable, operable, and testable in Kubernetes with clear validation
-tooling.
+It keeps the licensed PE install flow intact:
 
-## Current Capabilities
+- the operator supplies the PE installer tarball at image build time
+- the chart installs PE onto per-replica persistent volumes
+- the runtime pods start PE services from that installed state
 
-- PE can be installed into Kubernetes workloads without redistributing the PE
-  software in Git.
-- A single Helm release can act as the HA domain for replicated `pe`
-  control-plane replicas and a separate compiler pool.
-- The design does not depend on shared RWX storage.
-- `service/pe` can act as the stable control-plane front door with automatic
-  failover and standby re-entry.
-- Compilers can absorb catalog load separately from the PE control plane, which
-  keeps the scaling story close to familiar PE deployments.
-- CA operations, code deployment, orchestration, and agent traffic can all be
-  exercised through live validation tooling.
+The current goal is not a production-ready reference architecture. The current
+goal is to prove that PE can be rebuilt, failed over, and validated in
+Kubernetes with clear boundaries around what is shared, what is local, and
+what still needs work.
+
+## What This Repo Proves
+
+- PE can be installed and rebuilt in Kubernetes from repo workflows without
+  checking licensed software into Git.
+- A single Helm release can host replicated `pe` control-plane replicas and a
+  separate compiler pool.
+- `service/pe` can provide stable-backend HA with automatic failover and
+  standby re-entry.
+- `service/pe-compiler` can carry catalog traffic separately from the
+  control plane.
+- Conductor provides onboarding, trust distribution, transport, and front-door
+  eligibility signals.
+- Cassandra-backed shared state now carries the replicated control-plane
+  domains that used to rely on peer PostgreSQL replay.
+- The live validation tooling exercises code deploy, orchestration, CA
+  lifecycle, agent traffic, failover, and rebuildability.
 
 ## Current Topology
 
@@ -31,8 +39,8 @@ flowchart LR
   Ingress --> PeSvc["service/pe\nstable control-plane front door"]
   Agent["Puppet Agents"] --> CompilerSvc["service/pe-compiler"]
 
-  PeSvc --> Pe0["pe-0\ncontrol plane"]
-  PeSvc --> Pe1["pe-1\neligible standby"]
+  PeSvc --> Pe0["pe-0\nactive or standby"]
+  PeSvc --> Pe1["pe-1\nactive or standby"]
 
   CompilerSvc --> C0["pe-compiler-0"]
   CompilerSvc --> C1["pe-compiler-1"]
@@ -41,33 +49,37 @@ flowchart LR
   Hub -. Fabric .- Pe1
   Hub -. Fabric .- C0
   Hub -. Fabric .- C1
+
+  Cassandra["Cassandra\nshared control-plane state"] --- Pe0
+  Cassandra --- Pe1
 ```
 
-Today, multi-replica control planes use one active `service/pe` backend at a
-time. That is a deliberate HA choice, not an accident. The compiler pool is
-still where most catalog load should land.
+Multi-replica control planes currently use one selected `service/pe` backend
+at a time. That is the current HA contract. The compiler pool remains the main
+catalog scale surface.
 
-## Current State
+## Current Shared-State Model
 
-- Rebuild from repo workflows with a user-supplied installer tarball and
-  repo-local values/secrets
-- Per-replica PE control planes with stable identity and non-shared storage
-- Separate compiler pool on non-shared storage
-- Conductor-based trust distribution and participant onboarding
-- Front-door status reporting and automatic failover between `pe` replicas
-- CA enroll, sign, revoke, clean, and CRL pickup through failover
-- Code Manager deploy convergence across `pe` replicas
-- Shared classification convergence for the managed user-visible domain
-- RBAC and local-auth convergence across `pe` replicas
-- Orchestration task and plan execution across failover
+These control-plane domains now use Cassandra-backed shared state:
+
+- filtered managed classifier graph
+- login-session handoff
+- managed RBAC graph and normal RBAC tokens
+- persisted orchestration inventory connections
+- persisted orchestration job and plan state
+
+These domains still use other shapes:
+
+- CA and trust: replicated files and trust bundles
+- code deployment: deploy intent and convergence state
+- live PCP broker presence: local runtime state on the active backend
 
 ## Current Limits
 
-- Not a production-ready reference architecture
-- Not a shared-storage design
-- Not a compiler-to-compiler replication design
-- Not a promise of perfectly pooled browser UX across replicas
-- Not a generic chart bundle with tracked cluster-specific defaults
+- This is still a proof of concept, not production guidance.
+- `service/pe` is stable-backend HA, not arbitrary pooled browser traffic.
+- Some PE behavior still depends on a selected control-plane backend.
+- The tracked values files are examples, not complete environment profiles.
 
 ## Build, Deploy, Validate
 
@@ -144,7 +156,7 @@ CONTAINER_ENGINE=podman make push-conductor \
   CONDUCTOR_IMAGE_VERSION=<tag>
 ```
 
-`PE_INSTALLER_TAR_PATH` is the actual runtime-image build input. The default
+`PE_INSTALLER_TAR_PATH` is the real runtime-image build input. The default
 `installers/...` path is only a local Makefile convention.
 
 ### 3. Deploy
@@ -155,11 +167,8 @@ make deploy-pe
 make deploy-agent
 ```
 
-These targets deploy from the repo-local values files. They do not provide a
-tracked cluster profile for you.
-
-The tracked examples under `examples/` are the starting point for those local
-files.
+These targets deploy from repo-local values files under `local/`. The tracked
+files under `examples/` are only the starting point.
 
 ### 4. Validate
 
@@ -169,7 +178,7 @@ Check the selected `service/pe` backend and standby eligibility:
 make pe-frontdoor-status
 ```
 
-Run the live HA validation:
+Run the live validation wrapper:
 
 ```bash
 make validate-stack
@@ -180,26 +189,27 @@ make validate-stack
 - `scripts/pe-frontdoor-status.sh`
 - `scripts/validate-pe-failover.sh`
 
-The failover harness covers console reachability, code deploy, task/plan
-execution, agent runs, fresh enrollment/signing, front-door failover,
-revoke/clean, CRL pickup, revoked-cert rejection, and standby re-entry.
+The failover harness covers console reachability, code deploy, classifier and
+RBAC projection, orchestration, agent runs, fresh enrollment and signing,
+front-door failover, revoke and clean, CRL pickup, revoked-cert rejection,
+Cassandra degradation, and standby re-entry.
 
 ## Documentation Map
 
 - [Solution Overview](docs/solution-overview.md)
-  Public-facing architecture, current capabilities, and current limitations.
+  High-level architecture, proof points, and limits.
 - [Validation Matrix](docs/validation-matrix.md)
-  Behaviors and the commands that validate them.
+  Claims and the commands that validate them.
+- [Shared State Backend](docs/shared-state-backend.md)
+  Cassandra-backed shared-state model and what is still local.
 - [Runtime Model](docs/runtime-model.md)
-  Lower-level implementation details for contributors.
+  Lower-level runtime and implementation detail.
 - [Conductor Architecture](docs/conductor-architecture.md)
   How Fabric, Warden, Relay, and Gateway map onto this repo.
-- [Shared State Backend](docs/shared-state-backend.md)
-  Cassandra-backed shared-state model for replicated control-plane domains.
 - [Replication Roadmap](docs/replication-roadmap.md)
-  Engineering roadmap for what is still ahead.
+  Remaining work and deferred follow-on items.
 - [Legacy Service Mapping](docs/legacy-service-mapping.md)
-  Background from the earlier container work.
+  Historical background from earlier container work.
 
 ## Helm Charts
 
@@ -209,9 +219,9 @@ revoke/clean, CRL pickup, revoked-cert rejection, and standby re-entry.
 
 ## Repository Layout
 
-- `image/`: PE runtime image and entrypoint/runtime scripts
+- `image/`: PE runtime image and runtime scripts
 - `agent-image/`: validation agent image
 - `conductor-image/`: participant, relay, gateway, and Warden images
 - `charts/`: Helm charts
 - `scripts/`: operator helpers and validation tooling
-- `docs/`: architecture, roadmap, and implementation notes
+- `docs/`: architecture and implementation notes

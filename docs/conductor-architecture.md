@@ -1,6 +1,7 @@
 # Conductor Architecture Direction
 
-This repo is pivoting from a single-owner PE-on-Kubernetes baseline toward a Conductor-aligned active-active architecture.
+This repo uses Conductor to build a replicated PE control plane on Kubernetes
+without shared storage.
 
 The important boundary is simple:
 
@@ -19,20 +20,21 @@ The Conductor spec defines two PE roles:
 - SPOG: a PE instance used for management visibility, not for catalog service
 
 In this repo those are logical traffic roles, not Kubernetes deployment shapes
-that we must force into the chart. The current Kubernetes-first goal is still a
+that we must force into the chart. The current Kubernetes-first goal is a
 single release with multiple equivalent `pe` control-plane replicas behind
 `service/pe`, plus a compiler pool behind `service/pe-compiler`.
 
 That means:
 
-- `service/pe` remains the target pooled front door for control-plane traffic
+- `service/pe` remains the control-plane front door
+- one selected `service/pe` backend at a time is the current HA contract
 - permanent pinning of compilers or clients to one specific `pe` replica is not the design goal
 - temporary routing constraints are acceptable only as tactical safety measures while a specific surface is not yet replica-safe
 - SPOG-only replicas are optional future topology, not a required milestone for this repo
 
 Control-plane pods now have stable per-pod identity and can participate in
-Fabric, but active-active control-plane service is still blocked on replicated
-CA and PE-owned state.
+Fabric, but correctness still depends on explicit shared-state and failover
+boundaries rather than arbitrary pooling.
 
 ## Component Mapping
 
@@ -67,7 +69,11 @@ The current foundation slice models that as:
 - one or more release domains inside that segment
 - one or more stable workload sets inside each release domain
 
-Today both the compiler `StatefulSet` and the `pe` control-plane `StatefulSet` fit that model. Warden can already issue onboarding bundles for those workload members, the PE chart can consume them with optional participant sidecars, Warden can assemble a release trust bundle from control-plane CA and CRL sources, and participant readiness can feed service routing. The next control-plane step is not member discovery. It is turning that trust foundation into authoritative CA behaviour and PE-state convergence between the control-plane replicas.
+Today both the compiler `StatefulSet` and the `pe` control-plane `StatefulSet`
+fit that model. Warden can already issue onboarding bundles for those workload
+members, the PE chart can consume them with optional participant sidecars,
+Warden can assemble a release trust bundle from control-plane CA and CRL
+sources, and participant readiness can feed service routing.
 
 ## Relay
 
@@ -123,7 +129,8 @@ The mesh-friendly extension is:
 - Warden surfaces drift and can feed readiness or routing decisions for catalog-serving Workers
 - attached compilers continue to receive code through normal PE file-sync from the release-local control-plane service path
 
-This keeps the supported PE deployment path intact while extending it across the active-active mesh.
+This keeps the supported PE deployment path intact while extending it across
+the replicated control-plane mesh.
 
 The current implementation uses the PE Code Manager deploy signature as the
 cross-Worker convergence token. That value is stable across Workers for the
@@ -145,8 +152,8 @@ The current flow is:
 
 ## Shared Classification
 
-The first PE-owned control-plane state now carried through Fabric is shared
-classification.
+Shared classification now uses the same Conductor shared-state model as the
+other migrated control-plane domains.
 
 The current implementation no longer exposes a Conductor-specific classifier
 root to users. Instead, Relay projects a filtered managed domain from the live
@@ -160,17 +167,23 @@ That managed domain currently:
 - excludes PE-owned local infrastructure roots such as `PE Infrastructure`
 - ignores and retires the legacy `Conductor Shared Classification` root when it is still present and empty
 
-Relay publishes that translated managed domain into Fabric and replays create,
-update, and delete operations on peer replicas against their local anchor IDs.
+Relay now writes that translated managed domain into Cassandra-backed shared
+state and uses Fabric for convergence signals. Peer replicas rebuild their
+local classifier state from that shared graph while preserving their local
+anchor IDs.
+
 That means:
 
 - users can create ordinary node-group hierarchies directly under `All Nodes`
 - the `All Environments` subtree can converge even when installer-created group IDs differ between `pe` replicas
 - installer-created but user-managed containers like `PE Patch Management` remain inside the replicated domain
 - PE-owned infrastructure groups remain local to each control-plane replica
-- the mechanism stays Conductor-aligned because state moves through Fabric rather than through direct PE-to-PE API fanout
-- RBAC and local-auth managed state now converge through Fabric as part of the same PE-owned control-plane domain
-- console sessions and other remaining console-backed writes are still ahead
+- the mechanism stays Conductor-aligned because shared state is carried
+  through Conductor rather than direct PE-to-PE API fanout
+- RBAC, login sessions, and persisted orchestration state now follow the same
+  shared-state pattern
+- console sessions and other remaining console-backed behaviors still depend on
+  the selected `service/pe` backend
 
 ## Shared State Backend
 
@@ -190,18 +203,20 @@ fragile part of the current design: rewriting managed database tables from one
 The architectural commitment is shared state in Cassandra, not a new named
 middle-tier service.
 
-See [Shared State Backend](shared-state-backend.md) for the migration target
-and slice order.
+See [Shared State Backend](shared-state-backend.md) for the current shared-state
+model.
 
 ## Shared RBAC and Local Auth
 
-The next PE-owned control-plane slice now carried through Fabric is RBAC and
-local-auth state.
+RBAC and local-auth state now use the same Cassandra-backed shared-state model
+as the other migrated control-plane domains.
 
 The current implementation:
 
-- shares console token-signing and optional SAML material across `pe` replicas so locally issued auth tokens can validate on peers
-- projects the managed RBAC database domain through Fabric and replays it onto peer control-plane replicas
+- shares console token-signing and optional SAML material across `pe` replicas
+  so locally issued auth tokens can validate on peers
+- projects the managed RBAC database domain through Conductor and rehydrates it
+  into local PE PostgreSQL from Cassandra-backed authority
 - excludes operator and automation token labels with reserved prefixes such as `pe-k8s-conductor-` so local maintenance tokens are not treated as replicated user state
 - intentionally normalizes ephemeral per-replica activity fields such as `subjects.last_login` and token `last_active` so ordinary authentication traffic does not create readiness churn
 
@@ -210,35 +225,25 @@ That means:
 - local-auth users, roles, role bindings, and normal user tokens can converge between `pe` replicas
 - a token issued on one control-plane replica can become valid on its peer without shared storage
 - the replicated RBAC domain remains authoritative enough for readiness while leaving replica-local operator diagnostics outside the convergence token
-- web console sessions remain local to the selected `service/pe` backend and are intentionally kept outside the replicated domain so browser traffic can stay consistent even while replicated state converges asynchronously
+- browser traffic still runs through one selected `service/pe` backend at a
+  time even though the underlying auth state is shared
 
 With the Cassandra backend enabled for `rbacSync`, `rbacTokenSync`, and
 login-session handoff, shared auth-related state can now live on a
 Cassandra-backed Conductor domain while local PE service behaviour stays
 intact.
 
-The first narrow slices of that move were login-session handoff, persisted
-orchestration inventory, and persisted orchestration job and plan state.
-Relay can now use Cassandra as the shared store for `loginsession` records so
-a peer `pe` replica can repopulate its local RBAC session row on demand
-instead of accepting a direct peer database write. Relay can also use
-Cassandra as the durable shared store for `pe-inventory` plus
-`inventoryKeysJson` and for the managed `pe-orchestrator` database plus
-`orchestratorEncryptionStore`, with local PostgreSQL left as the
-execution-local projection. The same pattern now applies to the remaining
-managed RBAC graph and normal RBAC token domain.
+Login-session handoff, the managed RBAC graph, and normal RBAC tokens now all
+follow that model. Local RBAC PostgreSQL remains the execution-local
+projection, not the shared authority.
 
 ## Shared Orchestration State
 
-The next PE-owned control-plane slice now carried through Fabric is managed
-orchestration state.
+Managed orchestration state now follows the same Cassandra-backed shared-state
+pattern.
 
 The current implementation:
 
-- can publish the filtered managed classifier graph into Cassandra as durable
-  shared Conductor state
-- uses Fabric for convergence signals while peer `pe` replicas rehydrate
-  their own local classifier trees from that Cassandra-backed graph projection
 - can publish persisted `pe-inventory` and managed `pe-orchestrator` state into Cassandra as durable shared control-plane state
 - uses Fabric for convergence signals while peer `pe` replicas rehydrate their own local `pe-inventory` and `pe-orchestrator` databases from Cassandra-backed state
 - excludes local-only discovered PCP connections from the shared
@@ -256,14 +261,12 @@ That means:
 - orchestration job and plan state can reconverge after a replica returns
 - `service/pe` currently uses selector-backed stable routing for those surfaces until they are replica-safe
 - an empty `pe-inventory` database during certname-driven PCP execution is currently expected
-- broader PCP mediation and any remaining inventory surfaces beyond saved connection records remain open follow-up
+- broader PCP mediation and any remaining inventory surfaces beyond saved
+  connection records remain open follow-up
 - repo helpers now expose that state directly: `scripts/pe-frontdoor-status.sh` shows the current backend and blockers, and `scripts/validate-pe-failover.sh` exercises a live cutover
 
-Like RBAC replay, any remaining database replay path is transitional. The
-target is to keep durable orchestration state on Cassandra-backed shared
-Conductor domains rather than copying local PostgreSQL rows between `pe`
-replicas. Persisted saved inventory and persisted orchestration job state are
-now on that path; broader auth state is still the larger remaining migration.
+Persisted saved inventory and persisted orchestration job state are now on that
+path. Live discovered PCP connections remain intentionally local.
 
 ## Non-Goals
 
@@ -277,16 +280,12 @@ The repo should not treat these as the HA architecture:
 
 Conductor is the control-plane story. Code deployment should stay rooted in supported PE workflows even when Fabric starts carrying deploy intent and convergence state.
 
-## Immediate Implementation Order
+## Current Follow-On Work
 
-The next credible sequence is now:
+The main follow-on work is now:
 
-1. Fabric and Warden foundation
-2. Relay insertion on the Puppet Server/PuppetDB path
-3. Gateway insertion and sticky orchestration routing on the PCP/orchestrator path
-4. Code deployment convergence across Workers
-5. Shared classification, RBAC/local-auth, and orchestration job-state convergence
-6. Investigation of remaining PCP semantics, saved connection inventory use cases, and reduction of tactical routing exceptions
-7. Worker/SPOG role modelling only if a pooled Kubernetes control plane still needs it
-
-That ordering matters because Relay and Gateway depend on Fabric and Warden for identity, trust, and transport, and code convergence needs both paths in place before control-plane traffic can fail over cleanly.
+1. Cassandra operational hardening, including backup and restore proof
+2. cleanup of any remaining code and docs that still assume the old peer
+   PostgreSQL model
+3. reduction of any remaining selected-backend constraints only where that
+   produces a clearer HA story

@@ -120,14 +120,15 @@ The intended access pattern is:
 - there are no standalone `service/pe-puppetdb` or `service/pe-postgresql` objects in the current model
 - when compilers are enabled, the `classifier-config` Job updates PE's built-in `PE Agent` node group so agent catalogs use the compiler endpoint for `server_list`, `primary_uris`, and `pcp_broker_list`
 - compiler-to-compiler coordination is not a replication mechanism in this chart
-- the long-term goal is that any healthy control-plane replica behind `service/pe` can satisfy compiler-facing control-plane traffic without stable routing
-- if a specific surface temporarily requires routing constraints while convergence work is incomplete, that is a tactical safeguard rather than the target model
-- selector-backed `service/pe` is the current stable-backend safeguard: console, compiler file-sync, and orchestration traffic stay pinned to one healthy control-plane replica until those surfaces are replica-safe behind unfettered `service/pe` routing
+- the current PoC goal is stable-backend HA with equivalent `pe` replicas and shared state behind that boundary
+- if a specific surface later proves safe to pool, that can be relaxed deliberately rather than assumed up front
+- selector-backed `service/pe` is the current stable-backend safeguard: console, compiler file-sync, and orchestration traffic stay pinned to one healthy control-plane replica at a time
 - each `pe` pod publishes front-door eligibility, blockers, and selector state as pod annotations so the active backend and blocked standbys are visible without reading Relay logs
 
 ## Conductor Direction
 
-The active-active direction for this repo is Conductor, not direct PE-to-PE synchronization.
+The HA direction for this repo is Conductor, not direct PE-to-PE
+synchronization.
 
 That keeps the core boundary intact:
 
@@ -147,10 +148,10 @@ The current repo baseline is therefore a prerequisite for Conductor, not the fin
 
 That does not mean the repo is committed to a permanent Worker/SPOG split in
 Kubernetes. In this project, those Conductor terms are best understood as
-logical traffic roles. The preferred end state is still a pooled `service/pe`
-front door backed by equivalent `pe` replicas. A SPOG-only topology is only
-worth introducing later if it solves an actual operational problem that the
-pooled release model cannot solve cleanly.
+logical traffic roles. The current deployment goal is still one stable
+`service/pe` front door backed by equivalent `pe` replicas. A SPOG-only
+topology is only worth introducing later if it solves an actual operational
+problem.
 
 The current Conductor foundation slice is release-topology-driven. Warden expands stable workload sets inside a release, including the `pe` control-plane `StatefulSet` and the compiler `StatefulSet`, into participant identities and onboarding bundles. That is intentionally different from treating separate Helm releases as static peers.
 
@@ -220,7 +221,11 @@ With the Cassandra backend enabled for orchestration and inventory sync,
 local PE PostgreSQL is likewise an execution-local cache or projection rather
 than peer-replayed authority.
 
-That gives the release a real Fabric membership model without shared storage or hard-coded peer lists, and live validation now covers Bolt task execution, plan execution, and selector failover from one control-plane replica to the other. It still does not mean the release is finished as a fully pooled active-active PE control plane.
+That gives the release a real Fabric membership model without shared storage or
+hard-coded peer lists, and live validation now covers Bolt task execution,
+plan execution, and selector failover from one control-plane replica to the
+other. The current service model is still one selected `service/pe` backend at
+a time.
 
 The repo now also carries explicit operator validation helpers:
 
@@ -261,7 +266,11 @@ The deploy key is mounted from the Secret into the `pe` install init container a
 
 If the Git remote hostname needs a Kubernetes-specific override, set `network.hostAliases`. This is useful when the SSH endpoint for the control repo resolves differently inside the cluster than it does on an operator workstation.
 
-Across multiple Workers, the operator entrypoint should remain Code Manager or r10k. The active-active extension is for Fabric to carry signed deploy intent and convergence state so that each Worker still performs its own local Code Manager deploy for the exact requested revision. That keeps code rollout PE-native on each Worker while avoiding direct PE-to-PE synchronization.
+Across multiple Workers, the operator entrypoint should remain Code Manager or
+r10k. The Conductor extension is for Fabric to carry signed deploy intent and
+convergence state so that each Worker still performs its own local Code
+Manager deploy for the exact requested revision. That keeps code rollout
+PE-native on each Worker while avoiding direct PE-to-PE synchronization.
 
 ## Validation Agents
 
@@ -310,7 +319,14 @@ Open design work remains around:
 - ownership and security hardening
 - secrets and certificate rotation
 
-One specific gap used to be that the `pe` workload had no stable per-replica identity or storage. That gap is now closed at the chart/runtime layer: `pe` is a StatefulSet with per-replica PVCs and runtime-rendered identity. Another recent gap was release-internal Fabric membership and trust distribution; that is now present through the optional `conductor-participant` sidecars, Warden-assembled trust bundles, and trust-aware participant readiness. The remaining gap is active-active synchronization of PE-owned state across the control-plane replicas themselves.
+One specific gap used to be that the `pe` workload had no stable per-replica
+identity or storage. That gap is now closed at the chart/runtime layer: `pe`
+is a StatefulSet with per-replica PVCs and runtime-rendered identity. Another
+recent gap was release-internal Fabric membership and trust distribution; that
+is now present through the optional `conductor-participant` sidecars,
+Warden-assembled trust bundles, and trust-aware participant readiness. The
+remaining gaps are mostly operational: Cassandra hardening, backup and restore
+proof, and any additional PE-local surfaces that still complicate failover.
 
 The mapping doc [legacy-service-mapping.md](legacy-service-mapping.md) is the source of truth for the next decomposition steps.
 

@@ -30,6 +30,7 @@ The repo currently exposes these top-level validation commands:
 | Persisted orchestration job history survives replica changes | `make validate-pe-failover` | The harness creates a Puppet job on one `pe` replica and reads it back from another |
 | Fresh enrollment and signing work | `make validate-pe-failover` | A new test agent cert is requested, signed, and used successfully |
 | CA revocation propagates to compilers | `make validate-pe-failover` | The revoked test cert is rejected through `pe-compiler.eyrie` |
+| Shared-state failover survives partial Cassandra loss | `make validate-pe-failover` | The harness degrades the Cassandra cluster, exercises control-plane failover, and then verifies recovery |
 | Standby re-entry is automatic | `make validate-pe-failover` | The failed control-plane pod returns as an eligible standby without manual repair |
 | The full validation run is reproducible from one command | `make validate-stack` | Front-door status prints first, then the HA harness completes |
 
@@ -48,9 +49,10 @@ The current HA harness exercises:
 9. Fresh agent enrollment and signing
 10. Control-plane failover
 11. Post-failover revalidation
-12. Revoke and clean
-13. CRL pickup and revoked-cert rejection
-14. Standby re-entry, then post-failover classifier, RBAC, and job-history visibility
+12. Cassandra degradation, failover under degradation, and member recovery
+13. Revoke and clean
+14. CRL pickup and revoked-cert rejection
+15. Standby re-entry, then post-failover classifier, RBAC, and job-history visibility
 
 ## Notes
 

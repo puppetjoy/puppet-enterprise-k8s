@@ -47,7 +47,7 @@ most important values are:
 - This chart only provides the Conductor foundation layer.
 - PE and compiler pods join that layer from the `puppet-enterprise` chart when
   `conductor.enabled=true`.
-- Cassandra is disabled by default. Enable it when you are ready to move
-  shared Conductor state off peer PostgreSQL replay and onto a shared backend.
+- When enabled, Cassandra is the shared-state backend used by the current
+  replicated control-plane domains in this repo.
 - Segment definitions should match the workload names and namespaces used by
   the PE chart.

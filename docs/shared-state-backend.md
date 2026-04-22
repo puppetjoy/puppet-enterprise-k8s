@@ -1,8 +1,11 @@
 # Shared State Backend
 
-This document defines the shared-state model for replicated `pe`
-control-plane domains. The earlier peer PostgreSQL replay path for shared
-domains has been retired in favor of Cassandra-backed state.
+This document describes the current shared-state model for replicated `pe`
+control-plane domains.
+
+The earlier peer PostgreSQL replay path is no longer the preferred
+architecture. The current direction is Cassandra-backed shared state with local
+PE PostgreSQL left in place as an execution-local projection.
 
 ## Goal
 
@@ -13,13 +16,13 @@ Keep the current Kubernetes deployment shape:
 - no SPOG-only control-plane instance
 - no shared RWX storage
 
-while removing the fragile part of the current implementation:
+while removing the most fragile part of the earlier implementation:
 
 - direct replay of managed PostgreSQL tables between `pe` replicas
 
-## Target Model
+## Current Model
 
-The target Conductor state model has three layers:
+The shared-state model now has three layers:
 
 1. Fabric
    - transport
@@ -28,117 +31,72 @@ The target Conductor state model has three layers:
 
 2. Cassandra
    - durable shared store for Conductor-owned replicated domains
-   - authoritative state shared by all `pe` replicas
+   - authoritative state shared by the `pe` replicas
 
 3. `pe` replicas
    - execution frontends
-   - local caches and local PE service state
+   - local relational projection where PE still expects PostgreSQL
    - no peer-to-peer database authority
 
-## What Moved Off Peer PostgreSQL Replay
+## Current Cassandra-Backed Domains
 
-These domains now use Cassandra-backed shared state instead of peer PostgreSQL
-replay:
+These domains now use Cassandra-backed shared state:
 
-- RBAC and local-auth managed state
-- orchestration job and plan state
-- persisted orchestration inventory connections
+- filtered managed classifier graph
 - login-session handoff
+- managed RBAC graph
+- normal RBAC tokens and shared auth files
+- persisted orchestration inventory connections
+- persisted orchestration job and plan state
 
-The preferred model is Cassandra-backed shared state instead of copying tables
-from one `pe` replica into another.
+For these domains, the active `pe` replica writes shared state into Cassandra
+and peer replicas rehydrate their local PE PostgreSQL state from Cassandra when
+needed.
 
-## Current Runtime Slices
+## Domains That Stay Local Or Use A Different Model
 
-The first runtime slice is login-session handoff for the console auth barrier.
-
-That path now has a Cassandra-backed implementation available:
-
-- local `pe` login still creates the `loginsession` row in the local RBAC database
-- Relay can publish that session record into Cassandra
-- another `pe` replica can rehydrate the same session into its local RBAC
-  database on demand when a browser request arrives with the session cookie
-
-That keeps PE's local session handling intact while removing direct peer
-database writes for that handoff path.
-
-The next runtime slices are persisted orchestration inventory and persisted
-orchestration job and plan state:
-
-- Relay can treat `pe-inventory` plus `inventoryKeysJson` as a separate shared
-  domain
-- the active `pe` replica can publish that snapshot into Cassandra
-- peer replicas can rehydrate their local `pe-inventory` database from
-  Cassandra-backed shared state instead of replaying peer PostgreSQL rows
-- the shared snapshot now excludes local-only discovered PCP connections, so
-  Cassandra carries saved inventory state while live broker-discovered
-  connections stay local to the active backend
-- Relay can also publish the managed `pe-orchestrator` snapshot plus
-  `orchestratorEncryptionStore` into Cassandra
-- peer replicas can rehydrate their local `pe-orchestrator` database from
-  Cassandra-backed shared state instead of replaying peer PostgreSQL rows
-
-The next auth slice is the remaining managed RBAC graph plus normal RBAC
-tokens:
-
-- Relay can treat the managed RBAC database domain as Cassandra-backed shared
-  state
-- reserved operator token prefixes still stay outside that shared domain so
-  local maintenance tokens are not revoked by convergence
-- peer replicas can rehydrate their local RBAC database from Cassandra-backed
-  shared state instead of replaying peer PostgreSQL rows
-- login-session handoff, normal RBAC tokens, and the remaining RBAC graph can
-  now all use the same shared-state model
-
-## What Does Not Need Cassandra
-
-These domains already have a better shape and should stay that way:
+These parts of the system are intentionally not Cassandra-backed:
 
 - CA and trust material
-  - file and bundle convergence, not relational replay
+  - replicated files and trust bundles, not relational state
 - code deployment
   - deploy intent and convergence state
-- live PCP broker sessions
-  - runtime locality, not durable shared authority
+- live PCP broker sessions and discovered PCP connections
+  - runtime-local state on the selected backend
+- service-local diagnostics and activity fields
+  - useful locally, but not authoritative shared state
 
-## Local PostgreSQL Role After Migration
+## Local PostgreSQL After Migration
 
-Local PE PostgreSQL remains useful, but as:
+Local PE PostgreSQL still matters. Its role is now:
 
 - local PE service backing store
-- cache or projection of shared state where PE still expects relational data
+- local projection of shared control-plane state where PE expects relational
+  data
 - restart-time reconstruction target
 
-It should no longer be the cross-replica source of truth for replicated
+It is no longer the intended cross-replica source of truth for the migrated
 domains.
 
-## First Migration Slices
+## Why This Is Simpler
 
-The recommended order is:
+The current model avoids:
 
-1. login-session state
-   - smallest current direct DB sync path
-   - good candidate for a Cassandra-backed Conductor domain
+- direct table replay from one `pe` replica into another
+- sequence-collision management as the main replication mechanism
+- peer PostgreSQL split-brain as the authority model
 
-2. persisted orchestration inventory
-   - saved connections are durable shared state
-   - now available on the Cassandra-backed path
+It keeps the current deployment shape while moving durable shared state into a
+backend that is designed to be shared.
 
-3. persisted orchestration jobs and plans
-   - naturally event- and record-oriented
-   - now available on the Cassandra-backed path
+## Current Follow-On Work
 
-4. classifier shared graph
-   - now available on the Cassandra-backed path for the filtered managed
-     classifier domain rooted at `All Nodes`
+The remaining work in this area is mostly operational:
 
-5. RBAC and local auth
-   - now available on the Cassandra-backed path for the managed RBAC domain,
-     login sessions, and normal RBAC tokens
+- Cassandra auth and TLS
+- backup and restore proof
+- chart hardening and clearer operational defaults
+- removal of any dead code or docs that still assume peer PostgreSQL replay
 
-## Foundation Requirement
-
-The `conductor-foundation` chart now grows the shared-state layer by adding
-optional Cassandra infrastructure. That is the durable backend for the new
-direction. The architectural commitment here is shared state in Cassandra, not
-a new durable middle tier.
+The main architectural move is already in place: Cassandra is now the shared
+backend story for the replicated control-plane domains in this repo.
