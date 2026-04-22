@@ -191,12 +191,19 @@ conductor:
         tokenLabel: pe-k8s-conductor-classifier-sync
     rbacSync:
       enabled: false
+      backend: postgresReplay
       targetRoles:
         - control-plane
       excludedTokenLabelPrefixes:
         - pe-k8s-conductor-
         - pe-k8s-classifier
         - pe-k8s-compiler certificate
+      cassandra:
+        contactPoints: []
+        port: 9042
+        keyspace: conductor_auth
+        table: rbac_state
+        replicationFactor: 3
     rbacTokenSync:
       enabled: false
       targetRoles:

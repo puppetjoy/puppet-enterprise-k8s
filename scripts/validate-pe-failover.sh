@@ -692,6 +692,19 @@ run_job_history_sync_check() {
   return 1
 }
 
+run_rbac_projection_check() {
+  local active_pod="$1"
+  local standby_pod="$2"
+  local phase="$3"
+
+  echo "[check] RBAC user sync ${active_pod} -> ${standby_pod} (${phase})"
+  python3 "$repo_root/scripts/validate-rbac-projection.py" \
+    --namespace "$namespace" \
+    --writer-pod "$active_pod" \
+    --reader-pod "$standby_pod" \
+    --wait-seconds "$wait_seconds"
+}
+
 run_code_deploy_check() {
   local pod="$1"
   local output_file="$tmp_dir/code-deploy-${pod}.log"
@@ -794,7 +807,9 @@ run_orchestration_check() {
 
   echo "[check] task run via ${pod}"
   until run_task_check "$pod" "$certname" >"$task_output"; do
-    if ! grep -q "either disconnected or does not have a connection type" "$task_output"; then
+    if grep -q "Authentication token has been revoked" "$task_output" 2>/dev/null; then
+      :
+    elif ! grep -q "either disconnected or does not have a connection type" "$task_output"; then
       cat "$task_output" >&2
       return 1
     fi
@@ -802,7 +817,11 @@ run_orchestration_check() {
       cat "$task_output" >&2
       return 1
     fi
-    echo "[info] task run attempt ${attempt} is waiting for PCP/orchestration reconnection"
+    if grep -q "Authentication token has been revoked" "$task_output" 2>/dev/null; then
+      echo "[info] task run attempt ${attempt} is waiting for auth stability"
+    else
+      echo "[info] task run attempt ${attempt} is waiting for PCP/orchestration reconnection"
+    fi
     attempt=$((attempt + 1))
     sleep 5
   done
@@ -811,7 +830,9 @@ run_orchestration_check() {
   echo "[check] plan run via ${pod}"
   attempt=1
   until run_plan_check "$pod" "$certname" >"$plan_output"; do
-    if ! grep -q "either disconnected or does not have a connection type" "$plan_output"; then
+    if grep -q "Authentication token has been revoked" "$plan_output" 2>/dev/null; then
+      :
+    elif ! grep -q "either disconnected or does not have a connection type" "$plan_output"; then
       cat "$plan_output" >&2
       return 1
     fi
@@ -819,7 +840,11 @@ run_orchestration_check() {
       cat "$plan_output" >&2
       return 1
     fi
-    echo "[info] plan run attempt ${attempt} is waiting for PCP/orchestration reconnection"
+    if grep -q "Authentication token has been revoked" "$plan_output" 2>/dev/null; then
+      echo "[info] plan run attempt ${attempt} is waiting for auth stability"
+    else
+      echo "[info] plan run attempt ${attempt} is waiting for PCP/orchestration reconnection"
+    fi
     attempt=$((attempt + 1))
     sleep 5
   done
@@ -853,6 +878,7 @@ initial_standby="$(pe_service_pods | grep -vx "$initial_active" | head -n1)"
 echo "[info] initial active backend: ${initial_active}"
 echo "[info] initial standby backend: ${initial_standby}"
 run_checks "$initial_active" "$certname" initial
+run_rbac_projection_check "$initial_active" "$initial_standby" initial
 wait_for_pod_ready "$initial_standby"
 run_job_history_sync_check "$initial_active" "$initial_standby" "$certname" initial
 run_ca_enrollment_check "$initial_active"
@@ -868,6 +894,7 @@ run_ca_revocation_check "$new_active" "$initial_active"
 echo "[check] standby re-entry for ${initial_active}"
 wait_for_standby_reentry "$initial_active"
 echo "[ok] standby re-entry completed"
+run_rbac_projection_check "$new_active" "$initial_active" post-failover
 run_job_history_sync_check "$new_active" "$initial_active" "$certname" post-failover
 
 echo "[ok] failover validation completed"

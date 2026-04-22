@@ -212,11 +212,12 @@ That means:
 - the replicated RBAC domain remains authoritative enough for readiness while leaving replica-local operator diagnostics outside the convergence token
 - web console sessions remain local to the selected `service/pe` backend and are intentionally kept outside the replicated domain so browser traffic can stay consistent even while replicated state converges asynchronously
 
-This is now considered transitional. The target is to move shared auth-related
-state off peer PostgreSQL replay and onto a Cassandra-backed Conductor domain
-while keeping local PE service behaviour intact.
+With the Cassandra backend enabled for `rbacSync`, `rbacTokenSync`, and
+login-session handoff, shared auth-related state can now live on a
+Cassandra-backed Conductor domain while local PE service behaviour stays
+intact.
 
-The first narrow slices of that move are login-session handoff, persisted
+The first narrow slices of that move were login-session handoff, persisted
 orchestration inventory, and persisted orchestration job and plan state.
 Relay can now use Cassandra as the shared store for `loginsession` records so
 a peer `pe` replica can repopulate its local RBAC session row on demand
@@ -224,7 +225,8 @@ instead of accepting a direct peer database write. Relay can also use
 Cassandra as the durable shared store for `pe-inventory` plus
 `inventoryKeysJson` and for the managed `pe-orchestrator` database plus
 `orchestratorEncryptionStore`, with local PostgreSQL left as the
-execution-local projection.
+execution-local projection. The same pattern now applies to the remaining
+managed RBAC graph and normal RBAC token domain.
 
 ## Shared Orchestration State
 

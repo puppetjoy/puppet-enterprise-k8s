@@ -634,10 +634,22 @@ spec:
               value: {{ .Values.conductor.relay.classifierSync.auth.tokenLabel | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_ENABLED
               value: {{ ternary "true" "false" .Values.conductor.relay.rbacSync.enabled | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_SYNC_BACKEND
+              value: {{ .Values.conductor.relay.rbacSync.backend | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_TARGET_ROLES
               value: {{ join "," .Values.conductor.relay.rbacSync.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES
               value: {{ join "," .Values.conductor.relay.rbacSync.excludedTokenLabelPrefixes | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_SYNC_CASSANDRA_CONTACT_POINTS
+              value: {{ join "," .Values.conductor.relay.rbacSync.cassandra.contactPoints | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_SYNC_CASSANDRA_PORT
+              value: {{ .Values.conductor.relay.rbacSync.cassandra.port | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_SYNC_CASSANDRA_KEYSPACE
+              value: {{ .Values.conductor.relay.rbacSync.cassandra.keyspace | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_SYNC_CASSANDRA_TABLE
+              value: {{ .Values.conductor.relay.rbacSync.cassandra.table | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_SYNC_CASSANDRA_REPLICATION_FACTOR
+              value: {{ .Values.conductor.relay.rbacSync.cassandra.replicationFactor | quote }}
             - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_ENABLED
               value: {{ ternary "true" "false" .Values.conductor.relay.rbacTokenSync.enabled | quote }}
             - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_TARGET_ROLES

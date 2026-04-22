@@ -104,6 +104,8 @@ The current replicated state includes:
 - RBAC and local-auth managed state
 - login-session handoff can move through a Cassandra-backed Conductor store
   instead of direct peer database writes
+- the remaining managed RBAC graph and normal RBAC tokens can move through the
+  same Cassandra-backed shared-state path
 - persisted orchestration inventory can move through the same Cassandra-backed
   shared-state path
 - persisted orchestration job and plan state can move through the same
@@ -111,11 +113,11 @@ The current replicated state includes:
 - code deployment intent and convergence state
 - managed orchestration data needed for task and plan failover
 
-The remaining peer PostgreSQL replay is now mainly RBAC and local-auth. That
-is treated as transitional. The intended replacement is a Cassandra-backed
-Conductor shared-state layer that preserves the current `service/pe` /
-`service/pe-compiler` deployment shape without making one `pe` replica
-special.
+The preferred shared-state path for auth and persisted orchestration data is
+now Cassandra-backed Conductor state. Peer PostgreSQL replay remains only as a
+fallback backend, not the target HA model. That preserves the current
+`service/pe` / `service/pe-compiler` deployment shape without making one `pe`
+replica special.
 
 ## Current Traffic And Failover Model
 

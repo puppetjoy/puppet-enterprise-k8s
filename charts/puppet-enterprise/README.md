@@ -54,6 +54,8 @@ most important values are:
 | `storage.*` | Control-plane PVC sizing and storage classes |
 | `conductor.enabled` | Enable participant onboarding and trust integration |
 | `conductor.relay.*` | Enable replicated control-plane state and front-door gating |
+| `conductor.relay.rbacSync.*` | Configure Cassandra-backed sync for the managed RBAC graph |
+| `conductor.relay.rbacTokenSync.*` | Configure Cassandra-backed sync for normal RBAC tokens and shared auth material |
 | `conductor.relay.orchestrationSync.*` | Configure persisted orchestration job-state sync, including the Cassandra backend |
 | `conductor.relay.inventorySync.*` | Enable Cassandra-backed sync for persisted orchestration inventory |
 | `conductor.gateway.*` | Enable Gateway for PCP/orchestration traffic |

@@ -175,7 +175,7 @@ Current status:
 - RBAC and local-auth managed state now converge across `pe` replicas, including cross-replica token validation for normal user tokens
 - managed orchestration job state now converges across `pe` replicas, with matching `pe-orchestrator` row counts after failover and recovery
 - persisted orchestration inventory and managed orchestration job state now have Cassandra-backed shared-state implementations, with peer replicas rehydrating local PostgreSQL from Cassandra-backed authority instead of direct peer table replay
-- RBAC and local-auth are now the main remaining control-plane domains still on transitional peer PostgreSQL replay
+- the managed RBAC graph, login sessions, and normal RBAC tokens now also have Cassandra-backed shared-state implementations, with peer replicas rehydrating local RBAC PostgreSQL from Cassandra-backed authority instead of direct peer table replay
 - console session behaviour and other remaining console-backed writes are still outstanding
 
 ## Explicit Non-Goals

@@ -95,11 +95,14 @@ DEFAULT_RBAC_SYNC_SHARED_SAML_KEY_PATH = (
 DEFAULT_RBAC_SYNC_SHARED_SAML_CERT_PATH = (
     f"{DEFAULT_RBAC_SYNC_SHARED_SECRET_DIR}/saml.cert.pem"
 )
+DEFAULT_RBAC_SYNC_BACKEND = "postgresreplay"
 DEFAULT_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES = [
     "pe-k8s-conductor-",
     "pe-k8s-classifier",
     "pe-k8s-compiler certificate",
 ]
+DEFAULT_RBAC_SYNC_CASSANDRA_KEYSPACE = "conductor_auth"
+DEFAULT_RBAC_SYNC_CASSANDRA_TABLE = "rbac_state"
 DEFAULT_RBAC_TOKEN_SYNC_CASSANDRA_KEYSPACE = "conductor_auth"
 DEFAULT_RBAC_TOKEN_SYNC_CASSANDRA_TABLE = "rbac_token_state"
 RBAC_SYNC_TABLE_NAMES = [
@@ -1533,6 +1536,23 @@ class RelayRuntime:
             default=DEFAULT_RBAC_TARGET_ROLES,
         )
         self.rbac_sync_scope = DEFAULT_RBAC_SYNC_SCOPE
+        raw_rbac_sync_backend = (
+            os.environ.get("CONDUCTOR_RELAY_RBAC_SYNC_BACKEND", "").strip().lower()
+        )
+        normalized_rbac_sync_backend = re.sub(
+            r"[^a-z0-9]+",
+            "",
+            raw_rbac_sync_backend or DEFAULT_RBAC_SYNC_BACKEND,
+        )
+        if normalized_rbac_sync_backend in {"postgres", "postgresreplay"}:
+            self.rbac_sync_backend = "postgresreplay"
+        elif normalized_rbac_sync_backend == "cassandra":
+            self.rbac_sync_backend = "cassandra"
+        else:
+            raise RuntimeError(
+                "unsupported RBAC sync backend: "
+                f"{raw_rbac_sync_backend or DEFAULT_RBAC_SYNC_BACKEND}"
+            )
         self.rbac_sync_state_path = os.path.join(
             self.output_dir,
             DEFAULT_RBAC_SYNC_STATE_FILENAME,
@@ -1572,6 +1592,27 @@ class RelayRuntime:
         self.rbac_sync_excluded_token_label_prefixes = env_csv(
             "CONDUCTOR_RELAY_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES",
             default=DEFAULT_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES,
+        )
+        self.rbac_sync_cassandra_contact_points = env_csv(
+            "CONDUCTOR_RELAY_RBAC_SYNC_CASSANDRA_CONTACT_POINTS",
+        )
+        self.rbac_sync_cassandra_port = env_int(
+            "CONDUCTOR_RELAY_RBAC_SYNC_CASSANDRA_PORT",
+            9042,
+        )
+        self.rbac_sync_cassandra_keyspace = normalize_cassandra_identifier(
+            os.environ.get("CONDUCTOR_RELAY_RBAC_SYNC_CASSANDRA_KEYSPACE", "").strip()
+            or DEFAULT_RBAC_SYNC_CASSANDRA_KEYSPACE,
+            "keyspace",
+        )
+        self.rbac_sync_cassandra_table = normalize_cassandra_identifier(
+            os.environ.get("CONDUCTOR_RELAY_RBAC_SYNC_CASSANDRA_TABLE", "").strip()
+            or DEFAULT_RBAC_SYNC_CASSANDRA_TABLE,
+            "table",
+        )
+        self.rbac_sync_cassandra_replication_factor = env_int(
+            "CONDUCTOR_RELAY_RBAC_SYNC_CASSANDRA_REPLICATION_FACTOR",
+            3,
         )
         self.rbac_token_sync_enabled = env_bool(
             "CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_ENABLED",
@@ -1890,6 +1931,8 @@ class RelayRuntime:
 
         self.command_proxy_server = None
         self.command_proxy_thread = None
+        self.rbac_sync_cassandra_cluster = None
+        self.rbac_sync_cassandra_session = None
         self.rbac_token_sync_cassandra_cluster = None
         self.rbac_token_sync_cassandra_session = None
         self.orchestration_sync_cassandra_cluster = None
@@ -1977,6 +2020,7 @@ class RelayRuntime:
             "classifierSyncLastError": "",
             "rbacSyncEnabled": self.rbac_sync_enabled,
             "rbacSyncReady": not self.rbac_sync_enabled,
+            "rbacSyncBackend": self.rbac_sync_backend if self.rbac_sync_enabled else "",
             "rbacSyncTargetRoles": list(self.rbac_sync_target_roles),
             "rbacSyncScope": self.rbac_sync_scope if self.rbac_sync_enabled else "",
             "rbacSyncExcludedTokenLabelPrefixes": list(self.rbac_sync_excluded_token_label_prefixes),
@@ -2906,6 +2950,7 @@ class RelayRuntime:
         self.status.update(
             {
                 "rbacSyncReady": ready,
+                "rbacSyncBackend": self.rbac_sync_backend,
                 "rbacSyncTargetRoles": list(self.rbac_sync_target_roles),
                 "rbacSyncScope": state.get("scope", ""),
                 "rbacSyncExcludedTokenLabelPrefixes": list(
@@ -3103,6 +3148,9 @@ class RelayRuntime:
 
     def rbac_token_sync_auth_file_names(self):
         return list(RBAC_SYNC_REQUIRED_AUTH_FILES) + list(RBAC_SYNC_OPTIONAL_AUTH_FILES)
+
+    def rbac_sync_uses_cassandra(self):
+        return self.rbac_sync_enabled and self.rbac_sync_backend == "cassandra"
 
     def rbac_sync_conf_text(self):
         if not os.path.isfile(self.rbac_sync_rbac_conf_path):
@@ -3323,6 +3371,17 @@ class RelayRuntime:
         self.merge_rbac_sync_state(**updates)
 
     def build_rbac_state_payload(self, state, published_at):
+        if self.rbac_sync_uses_cassandra():
+            state_payload = {
+                "scope": state.get("scope", self.rbac_sync_scope),
+                "excludedTokenLabelPrefixes": list(self.rbac_sync_excluded_token_label_prefixes),
+                "hash": state.get("hash", ""),
+                "tableCount": int(state.get("tableCount") or 0),
+                "rowCount": int(state.get("rowCount") or 0),
+                "authFileCount": int(state.get("authFileCount") or 0),
+            }
+        else:
+            state_payload = state
         return {
             "apiVersion": "pe-k8s.puppet.com/v1alpha1",
             "kind": "ConductorRelayRbacState",
@@ -3334,7 +3393,7 @@ class RelayRuntime:
                 "segment": self.segment_name,
             },
             "targetRoles": list(self.rbac_sync_target_roles),
-            "state": state,
+            "state": state_payload,
         }
 
     def record_published_rbac_state(self, state, published_at, now):
@@ -3357,6 +3416,122 @@ class RelayRuntime:
             lastError="",
         )
 
+    def ensure_rbac_sync_cassandra_session(self):
+        if not self.rbac_sync_uses_cassandra():
+            raise RuntimeError("RBAC Cassandra backend is not enabled")
+        if not self.rbac_sync_cassandra_contact_points:
+            raise RuntimeError("no Cassandra contact points configured for RBAC sync")
+        if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
+            raise RuntimeError("cassandra-driver is not available in the Conductor image")
+
+        with self.lock:
+            if self.rbac_sync_cassandra_session is not None:
+                return self.rbac_sync_cassandra_session
+
+            cluster = Cluster(
+                contact_points=self.rbac_sync_cassandra_contact_points,
+                port=self.rbac_sync_cassandra_port,
+            )
+            session = cluster.connect()
+            keyspace = self.rbac_sync_cassandra_keyspace
+            table = self.rbac_sync_cassandra_table
+            replication_factor = max(1, self.rbac_sync_cassandra_replication_factor)
+            session.execute(
+                f"""
+                create keyspace if not exists {keyspace}
+                with replication = {{
+                    'class': 'SimpleStrategy',
+                    'replication_factor': {replication_factor}
+                }}
+                """
+            )
+            session.set_keyspace(keyspace)
+            session.execute(
+                f"""
+                create table if not exists {table} (
+                    scope text primary key,
+                    published_at bigint,
+                    origin_participant text,
+                    state_hash text,
+                    payload text
+                )
+                """
+            )
+            self.rbac_sync_cassandra_cluster = cluster
+            self.rbac_sync_cassandra_session = session
+            return session
+
+    def read_shared_rbac_state(self):
+        session = self.ensure_rbac_sync_cassandra_session()
+        statement = SimpleStatement(
+            (
+                f"select scope, published_at, origin_participant, state_hash, payload "
+                f"from {self.rbac_sync_cassandra_table} where scope = %s"
+            ),
+            consistency_level=ConsistencyLevel.QUORUM,
+        )
+        row = session.execute(statement, (self.rbac_sync_scope,)).one()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row.payload or "{}")
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(f"invalid shared RBAC sync payload: {error}") from error
+        payload_hash = ((payload or {}).get("hash") or "").strip()
+        expected_hash = (row.state_hash or "").strip()
+        if expected_hash and payload_hash and payload_hash != expected_hash:
+            raise RuntimeError(
+                "shared RBAC sync payload hash mismatch: "
+                f"expected {expected_hash}, got {payload_hash}"
+            )
+        return {
+            "scope": (row.scope or "").strip(),
+            "publishedAt": int(row.published_at or 0),
+            "originParticipant": (row.origin_participant or "").strip(),
+            "stateHash": expected_hash or payload_hash,
+            "state": payload if isinstance(payload, dict) else {},
+        }
+
+    def wait_for_shared_rbac_state(self, received_published_at=0, timeout_seconds=15):
+        deadline = time.time() + max(1, int(timeout_seconds or 0))
+        latest = None
+        while True:
+            latest = self.read_shared_rbac_state()
+            if latest is None:
+                if time.time() >= deadline:
+                    return None
+            else:
+                shared_published_at = int(latest.get("publishedAt") or 0)
+                if not received_published_at or shared_published_at >= received_published_at:
+                    return latest
+                if time.time() >= deadline:
+                    return latest
+            time.sleep(1)
+
+    def upsert_shared_rbac_state(self, state, published_at):
+        state_hash = ((state or {}).get("hash") or "").strip()
+        if not state_hash:
+            raise RuntimeError("RBAC sync state is missing a hash")
+        session = self.ensure_rbac_sync_cassandra_session()
+        statement = SimpleStatement(
+            (
+                f"insert into {self.rbac_sync_cassandra_table} "
+                "(scope, published_at, origin_participant, state_hash, payload) "
+                "values (%s, %s, %s, %s, %s)"
+            ),
+            consistency_level=ConsistencyLevel.QUORUM,
+        )
+        session.execute(
+            statement,
+            (
+                self.rbac_sync_scope,
+                int(published_at or time.time()),
+                self.pod_name,
+                state_hash,
+                stable_json(state),
+            ),
+        )
+
     def publish_rbac_state_now(self):
         if not self.rbac_sync_enabled:
             return
@@ -3369,6 +3544,8 @@ class RelayRuntime:
         if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
             version_at = now
 
+        if self.rbac_sync_uses_cassandra():
+            self.upsert_shared_rbac_state(state, version_at)
         payload = self.build_rbac_state_payload(state, version_at)
         self.publish_envelope(
             f"relay.rbac-state.{sanitize_fragment(self.pod_name)}",
@@ -3399,6 +3576,8 @@ class RelayRuntime:
         if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
             version_at = now
 
+        if self.rbac_sync_uses_cassandra():
+            self.upsert_shared_rbac_state(state, version_at)
         payload = self.build_rbac_state_payload(state, version_at)
         self.channel.basic_publish(
             exchange=self.bundle["hub"]["exchanges"]["data"],
@@ -3833,6 +4012,22 @@ class RelayRuntime:
         raise RuntimeError(f"unsupported RBAC sync table {table_name}")
 
     def reconcile_rbac_state(self, state_payload, published_at, origin_participant):
+        if self.rbac_sync_uses_cassandra():
+            shared = self.wait_for_shared_rbac_state(published_at)
+            if shared is None:
+                raise RuntimeError("shared RBAC sync state is missing from Cassandra")
+            shared_published_at = int(shared.get("publishedAt") or 0)
+            if published_at and shared_published_at and shared_published_at < published_at:
+                raise RuntimeError(
+                    "shared RBAC sync state is older than the received intent: "
+                    f"{shared_published_at} < {published_at}"
+                )
+
+            shared_state = dict(shared.get("state") or {})
+            state_payload = shared_state
+            origin_participant = (shared.get("originParticipant") or "").strip() or origin_participant
+            published_at = shared_published_at or int(published_at or time.time())
+
         desired_tables = {}
         table_names = self.rbac_sync_table_names()
         for table_name in table_names:
@@ -3947,6 +4142,26 @@ class RelayRuntime:
             raise RuntimeError("RBAC sync payload is missing a hash")
 
         published_at = int(payload.get("publishedAt") or 0)
+        if self.rbac_sync_uses_cassandra():
+            shared = self.wait_for_shared_rbac_state(published_at)
+            if shared is None:
+                raise RuntimeError("shared RBAC sync state is missing from Cassandra")
+            shared_hash = (shared.get("stateHash") or "").strip()
+            shared_published_at = int(shared.get("publishedAt") or 0)
+            if published_at and shared_published_at and shared_published_at < published_at:
+                raise RuntimeError(
+                    "shared RBAC sync state is older than the received intent: "
+                    f"{shared_published_at} < {published_at}"
+                )
+            if shared_hash:
+                desired_hash = shared_hash
+            published_at = shared_published_at or published_at
+            origin_participant = (
+                (shared.get("originParticipant") or "").strip() or origin_participant
+            )
+            shared_payload = shared.get("state") or {}
+            if isinstance(shared_payload, dict):
+                state_payload = shared_payload
         current_state = self.rbac_sync_state_snapshot()
         current_desired_hash = (current_state.get("desiredHash") or "").strip()
         current_actual_hash = (current_state.get("actualHash") or "").strip()

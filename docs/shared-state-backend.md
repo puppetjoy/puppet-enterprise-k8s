@@ -73,6 +73,18 @@ orchestration job and plan state:
 - peer replicas can rehydrate their local `pe-orchestrator` database from
   Cassandra-backed shared state instead of replaying peer PostgreSQL rows
 
+The next auth slice is the remaining managed RBAC graph plus normal RBAC
+tokens:
+
+- Relay can treat the managed RBAC database domain as Cassandra-backed shared
+  state
+- reserved operator token prefixes still stay outside that shared domain so
+  local maintenance tokens are not revoked by convergence
+- peer replicas can rehydrate their local RBAC database from Cassandra-backed
+  shared state instead of replaying peer PostgreSQL rows
+- login-session handoff, normal RBAC tokens, and the remaining RBAC graph can
+  now all use the same shared-state model
+
 ## What Does Not Need Cassandra
 
 These domains already have a better shape and should stay that way:
@@ -118,7 +130,8 @@ The recommended order is:
    - move from projected peer replay toward Conductor-owned authoritative graph
 
 5. RBAC and local auth
-   - last, because it is the most tightly coupled to current PE local schema
+   - now available on the Cassandra-backed path for the managed RBAC domain,
+     login sessions, and normal RBAC tokens
 
 ## Foundation Requirement
 
