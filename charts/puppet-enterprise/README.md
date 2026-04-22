@@ -59,7 +59,7 @@ most important values are:
 | `conductor.relay.rbacSync.*` | Configure Cassandra-backed sync for the managed RBAC graph |
 | `conductor.relay.rbacTokenSync.*` | Configure Cassandra-backed sync for normal RBAC tokens and shared auth material |
 | `conductor.relay.orchestrationSync.*` | Configure persisted orchestration job-state sync, including the Cassandra backend |
-| `conductor.relay.inventorySync.*` | Enable Cassandra-backed sync for persisted orchestration inventory |
+| `conductor.relay.inventorySync.*` | Enable Cassandra-backed sync for persisted orchestration inventory; live discovered PCP connections stay local |
 | `conductor.gateway.*` | Enable Gateway for PCP/orchestration traffic |
 | `services.pe.*` | Control-plane Service type and optional load balancer IP |
 | `services.compilers.*` | Compiler Service type and optional load balancer IP |

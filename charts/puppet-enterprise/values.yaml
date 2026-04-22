@@ -160,7 +160,6 @@ conductor:
         - store report
         - deactivate node
     authBarrier:
-      loginsessionBackend: cassandra
       cassandra:
         contactPoints: []
         port: 9042
@@ -185,7 +184,6 @@ conductor:
         useClientSsl: true
     classifierSync:
       enabled: false
-      backend: cassandra
       targetRoles:
         - control-plane
       auth:
@@ -201,7 +199,6 @@ conductor:
         replicationFactor: 3
     rbacSync:
       enabled: false
-      backend: cassandra
       targetRoles:
         - control-plane
       excludedTokenLabelPrefixes:
@@ -226,7 +223,6 @@ conductor:
         replicationFactor: 3
     orchestrationSync:
       enabled: false
-      backend: cassandra
       targetRoles:
         - control-plane
       orchestratorConfPath: /etc/puppetlabs/orchestration-services/conf.d/orchestrator.conf

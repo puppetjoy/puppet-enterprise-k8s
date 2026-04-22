@@ -104,6 +104,13 @@ def api_status(namespace, pod, token, method, path, payload=None):
     return exec_sh(namespace, pod, "puppetserver", "\n".join(script_lines) + "\n")
 
 
+def api_status_safe(namespace, pod, token, method, path, payload=None):
+    try:
+        return api_status(namespace, pod, token, method, path, payload)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return "000"
+
+
 def api_status_and_headers(namespace, pod, token, method, path, payload=None):
     script_lines = ["set -e"]
     if payload is not None:
@@ -188,14 +195,14 @@ def main():
         writer_ready = False
         reader_ready = False
         while time.time() < deadline:
-            writer_status = api_status(
+            writer_status = api_status_safe(
                 namespace,
                 writer_pod,
                 writer_admin,
                 "GET",
                 f"/rbac-api/v1/users/{user_id}",
             )
-            reader_status = api_status(
+            reader_status = api_status_safe(
                 namespace,
                 reader_pod,
                 reader_admin,
@@ -218,26 +225,36 @@ def main():
             flush=True,
         )
 
-        reader_user_token = api_json(
-            namespace,
-            reader_pod,
-            reader_admin,
-            "POST",
-            "/rbac-api/v1/auth/token",
-            {
-                "login": user_login,
-                "password": user_password,
-                "lifetime": "5m",
-                "label": f"pe-k8s-rbac-proof-user-{uuid.uuid4()}",
-            },
-        )["token"]
-        reader_identity = api_json(
-            namespace,
-            reader_pod,
-            reader_user_token,
-            "GET",
-            "/rbac-api/v1/users/current",
-        )
+        reader_user_token = ""
+        reader_identity = {}
+        deadline = time.time() + wait_seconds
+        while time.time() < deadline:
+            try:
+                reader_user_token = api_json(
+                    namespace,
+                    reader_pod,
+                    reader_admin,
+                    "POST",
+                    "/rbac-api/v1/auth/token",
+                    {
+                        "login": user_login,
+                        "password": user_password,
+                        "lifetime": "5m",
+                        "label": f"pe-k8s-rbac-proof-user-{uuid.uuid4()}",
+                    },
+                )["token"]
+                reader_identity = api_json(
+                    namespace,
+                    reader_pod,
+                    reader_user_token,
+                    "GET",
+                    "/rbac-api/v1/users/current",
+                )
+                break
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, KeyError, json.JSONDecodeError):
+                time.sleep(5)
+        if not reader_user_token:
+            raise SystemExit(f"RBAC user {user_login} did not authenticate on {reader_pod}")
         if (reader_identity.get("login") or "").strip() != user_login:
             raise SystemExit(
                 f"RBAC user token on {reader_pod} resolved to "

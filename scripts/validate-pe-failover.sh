@@ -3,6 +3,8 @@ set -euo pipefail
 
 namespace="${PE_NAMESPACE:-puppet}"
 release="${PE_RELEASE:-pe}"
+conductor_namespace="${PE_CONDUCTOR_NAMESPACE:-$namespace}"
+conductor_release="${PE_CONDUCTOR_RELEASE:-conductor}"
 frontdoor_service="${PE_FRONTDOOR_SERVICE:-pe}"
 frontdoor_host="${PE_FRONTDOOR_HOST:-puppet.eyrie}"
 compiler_server="${PE_COMPILER_SERVER:-pe-compiler.eyrie}"
@@ -107,21 +109,37 @@ wait_for_console_check() {
 run_agent_check() {
   local output_file="${tmp_dir}/agent-run.log"
   local rc=0
+  local deadline=$((SECONDS + wait_seconds))
+  local attempt=1
 
-  kubectl -n "$namespace" exec "$test_node_pod" -- \
-    puppet agent -t --server "$compiler_server" >"${output_file}" 2>&1 || rc=$?
+  while :; do
+    rc=0
+    kubectl -n "$namespace" exec "$test_node_pod" -- \
+      puppet agent -t --server "$compiler_server" >"${output_file}" 2>&1 || rc=$?
 
-  if [[ "${rc}" -ne 0 && "${rc}" -ne 2 ]]; then
-    cat "${output_file}" >&2 || true
-    return "${rc}"
-  fi
+    if [[ "${rc}" -eq 0 || "${rc}" -eq 2 ]]; then
+      cat "${output_file}"
+      return 0
+    fi
 
-  cat "${output_file}"
+    if (( SECONDS >= deadline )); then
+      cat "${output_file}" >&2 || true
+      return "${rc}"
+    fi
+
+    if grep -Eq "Connection refused|Could not select a functional puppet server|status/v1/simple/server failed" "${output_file}" 2>/dev/null; then
+      echo "[info] agent run attempt ${attempt} is waiting for compiler service readiness"
+    else
+      echo "[info] agent run attempt ${attempt} is waiting for catalog path stability"
+    fi
+    attempt=$((attempt + 1))
+    sleep 5
+  done
 }
 
 issue_admin_token() {
   local pod="$1"
-  local deadline=$((SECONDS + 60))
+  local deadline=$((SECONDS + wait_seconds))
   local token=""
   local remote_script
 
@@ -202,9 +220,15 @@ exec ${remote_cmd}
 "
 }
 
+wait_for_pod_ready_in_namespace() {
+  local target_namespace="$1"
+  local pod="$2"
+  kubectl -n "$target_namespace" wait --for=condition=Ready "pod/${pod}" --timeout="${wait_seconds}s" >/dev/null
+}
+
 wait_for_pod_ready() {
   local pod="$1"
-  kubectl -n "$namespace" wait --for=condition=Ready "pod/${pod}" --timeout="${wait_seconds}s" >/dev/null
+  wait_for_pod_ready_in_namespace "$namespace" "$pod"
 }
 
 pe_service_pods() {
@@ -219,6 +243,99 @@ compiler_pods() {
     -l "app.kubernetes.io/instance=${release},app.kubernetes.io/component=compiler" \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' \
     | sed '/^$/d'
+}
+
+cassandra_pods() {
+  kubectl -n "$conductor_namespace" get pods \
+    -l "app.kubernetes.io/instance=${conductor_release},app.kubernetes.io/component=cassandra" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' \
+    | sed '/^$/d'
+}
+
+cassandra_statefulset() {
+  kubectl -n "$conductor_namespace" get statefulset \
+    -l "app.kubernetes.io/instance=${conductor_release},app.kubernetes.io/component=cassandra" \
+    -o jsonpath='{.items[0].metadata.name}'
+}
+
+cassandra_ready_count() {
+  kubectl -n "$conductor_namespace" get pods \
+    -l "app.kubernetes.io/instance=${conductor_release},app.kubernetes.io/component=cassandra" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{" "}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}' \
+    | awk '$2 == "True" { count += 1 } END { print count + 0 }'
+}
+
+wait_for_cassandra_up_nodes() {
+  local expected="$1"
+  local deadline=$((SECONDS + wait_seconds))
+  local pod=""
+  local status=""
+  local up_nodes=0
+  local transitional_nodes=0
+
+  while (( SECONDS < deadline )); do
+    pod="$(cassandra_pods | head -n1)"
+    if [[ -z "${pod}" ]]; then
+      sleep 2
+      continue
+    fi
+
+    status="$(
+      kubectl -n "$conductor_namespace" exec "$pod" -- nodetool status 2>/dev/null || true
+    )"
+    up_nodes="$(printf '%s\n' "$status" | awk '$1 == "UN" { count += 1 } END { print count + 0 }')"
+    transitional_nodes="$(
+      printf '%s\n' "$status" | awk '$1 ~ /^U[JLM]$/ { count += 1 } END { print count + 0 }'
+    )"
+    if [[ "${up_nodes}" == "${expected}" && "${transitional_nodes}" == "0" ]]; then
+      return 0
+    fi
+    sleep 5
+  done
+
+  echo "timed out waiting for Cassandra ring with ${expected} up nodes" >&2
+  printf '%s\n' "$status" >&2
+  return 1
+}
+
+wait_for_cassandra_ready_count() {
+  local expected="$1"
+  local deadline=$((SECONDS + wait_seconds))
+  local current=0
+
+  while (( SECONDS < deadline )); do
+    current="$(cassandra_ready_count)"
+    if [[ "${current}" == "${expected}" ]]; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "timed out waiting for Cassandra ready count ${expected}; last count=${current}" >&2
+  return 1
+}
+
+scale_cassandra_statefulset() {
+  local replicas="$1"
+  local statefulset
+
+  statefulset="$(cassandra_statefulset)"
+  kubectl -n "$conductor_namespace" scale statefulset "$statefulset" --replicas="$replicas" >/dev/null
+  wait_for_cassandra_ready_count "$replicas"
+  wait_for_cassandra_up_nodes "$replicas"
+}
+
+restart_cassandra_pods_one_by_one() {
+  local total="$1"
+  local pod=""
+
+  for pod in $(cassandra_pods); do
+    echo "[action] restarting Cassandra pod ${pod}"
+    kubectl -n "$conductor_namespace" delete pod "$pod" --wait=false >/dev/null
+    wait_for_pod_ready_in_namespace "$conductor_namespace" "$pod"
+    wait_for_cassandra_ready_count "$total"
+    wait_for_cassandra_up_nodes "$total"
+  done
 }
 
 test_node_image() {
@@ -676,11 +793,26 @@ run_job_history_sync_check() {
   local job_id=""
 
   echo "[check] job history sync ${active_pod} -> ${viewer_pod}"
-  run_puppet_job_check "$active_pod" "$certname" "$description" >"$create_output"
-  job_id="$(extract_job_id "$create_output")" || {
-    cat "$create_output" >&2
-    return 1
-  }
+  while :; do
+    if run_puppet_job_check "$active_pod" "$certname" "$description" >"$create_output" \
+      && job_id="$(extract_job_id "$create_output")"
+    then
+      break
+    fi
+
+    if (( SECONDS >= deadline )); then
+      cat "$create_output" >&2 || true
+      return 1
+    fi
+
+    if grep -Eq "Authentication token has been revoked|rbac-client/connection-failure|Could not connect to server" "$create_output" 2>/dev/null; then
+      echo "[info] job history create attempt ${attempt} is waiting for auth stability"
+    else
+      echo "[info] job history create attempt ${attempt} is waiting for local service readiness"
+    fi
+    attempt=$((attempt + 1))
+    sleep 5
+  done
 
   while (( SECONDS < deadline )); do
     if show_puppet_job_check "$viewer_pod" "$job_id" >"$show_output" 2>&1; then
@@ -690,7 +822,7 @@ run_job_history_sync_check() {
       fi
     fi
 
-    if grep -q "Authentication token has been revoked" "$show_output" 2>/dev/null; then
+    if grep -Eq "Authentication token has been revoked|rbac-client/connection-failure|Could not connect to server" "$show_output" 2>/dev/null; then
       echo "[info] job history attempt ${attempt} is waiting for auth stability"
     elif grep -q "No job found" "$show_output" 2>/dev/null; then
       echo "[info] job history attempt ${attempt} is waiting for shared-state convergence"
@@ -703,6 +835,18 @@ run_job_history_sync_check() {
 
   cat "$show_output" >&2 || true
   return 1
+}
+
+run_shared_state_checks() {
+  local active_pod="$1"
+  local standby_pod="$2"
+  local certname="$3"
+  local phase="$4"
+
+  run_classifier_projection_check "$active_pod" "$standby_pod" "$phase"
+  run_rbac_projection_check "$active_pod" "$standby_pod" "$phase"
+  wait_for_pod_ready "$standby_pod"
+  run_job_history_sync_check "$active_pod" "$standby_pod" "$certname" "$phase"
 }
 
 run_rbac_projection_check() {
@@ -845,6 +989,8 @@ run_orchestration_check() {
   until run_plan_check "$pod" "$certname" >"$plan_output"; do
     if grep -q "Authentication token has been revoked" "$plan_output" 2>/dev/null; then
       :
+    elif grep -q "Couldn't retrieve plan job status: .*unknown-job: Unknown job" "$plan_output" 2>/dev/null; then
+      :
     elif ! grep -q "either disconnected or does not have a connection type" "$plan_output"; then
       cat "$plan_output" >&2
       return 1
@@ -855,6 +1001,8 @@ run_orchestration_check() {
     fi
     if grep -q "Authentication token has been revoked" "$plan_output" 2>/dev/null; then
       echo "[info] plan run attempt ${attempt} is waiting for auth stability"
+    elif grep -q "Couldn't retrieve plan job status: .*unknown-job: Unknown job" "$plan_output" 2>/dev/null; then
+      echo "[info] plan run attempt ${attempt} is waiting for orchestration job projection"
     else
       echo "[info] plan run attempt ${attempt} is waiting for PCP/orchestration reconnection"
     fi
@@ -887,15 +1035,23 @@ run_checks() {
 certname="$(agent_certname)"
 initial_active="$(wait_for_frontdoor)"
 initial_standby="$(pe_service_pods | grep -vx "$initial_active" | head -n1)"
+cassandra_total="$(cassandra_pods | wc -l | tr -d ' ')"
+cassandra_degraded=""
 
 echo "[info] initial active backend: ${initial_active}"
 echo "[info] initial standby backend: ${initial_standby}"
+echo "[info] Cassandra namespace/release: ${conductor_namespace}/${conductor_release}"
 run_checks "$initial_active" "$certname" initial
-run_classifier_projection_check "$initial_active" "$initial_standby" initial
-run_rbac_projection_check "$initial_active" "$initial_standby" initial
-wait_for_pod_ready "$initial_standby"
-run_job_history_sync_check "$initial_active" "$initial_standby" "$certname" initial
+run_shared_state_checks "$initial_active" "$initial_standby" "$certname" initial
 run_ca_enrollment_check "$initial_active"
+
+if [[ "${cassandra_total}" -ge 3 ]]; then
+  cassandra_degraded="$(cassandra_statefulset)"
+  echo "[action] scaling Cassandra StatefulSet ${cassandra_degraded} to $((cassandra_total - 1)) replicas"
+  scale_cassandra_statefulset "$((cassandra_total - 1))"
+  wait_for_cassandra_ready_count "$((cassandra_total - 1))"
+  run_shared_state_checks "$initial_active" "$initial_standby" "$certname" cassandra-degraded
+fi
 
 echo "[action] deleting active backend ${initial_active}"
 kubectl -n "$namespace" delete pod "$initial_active" --wait=false
@@ -905,11 +1061,20 @@ echo "[info] new active backend: ${new_active}"
 run_checks "$new_active" "$certname" post-failover
 run_ca_revocation_check "$new_active" "$initial_active"
 
+if [[ -n "${cassandra_degraded}" ]]; then
+  echo "[check] Cassandra StatefulSet recovery for ${cassandra_degraded}"
+  scale_cassandra_statefulset "$cassandra_total"
+fi
+
 echo "[check] standby re-entry for ${initial_active}"
 wait_for_standby_reentry "$initial_active"
 echo "[ok] standby re-entry completed"
-run_classifier_projection_check "$new_active" "$initial_active" post-failover
-run_rbac_projection_check "$new_active" "$initial_active" post-failover
-run_job_history_sync_check "$new_active" "$initial_active" "$certname" post-failover
+run_shared_state_checks "$new_active" "$initial_active" "$certname" post-failover
+
+if [[ "${cassandra_total}" -ge 3 ]]; then
+  echo "[check] rolling Cassandra member recovery"
+  restart_cassandra_pods_one_by_one "$cassandra_total"
+  run_shared_state_checks "$new_active" "$initial_active" "$certname" cassandra-restarted
+fi
 
 echo "[ok] failover validation completed"

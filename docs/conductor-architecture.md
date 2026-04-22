@@ -174,8 +174,8 @@ That means:
 
 ## Shared State Backend
 
-The current repo direction is to retire peer PostgreSQL replay for shared
-control-plane domains and replace it with a Conductor-owned shared backend.
+The current repo direction is Cassandra-backed shared state for shared
+control-plane domains rather than peer PostgreSQL replay.
 
 The intended target is:
 
@@ -241,6 +241,9 @@ The current implementation:
   their own local classifier trees from that Cassandra-backed graph projection
 - can publish persisted `pe-inventory` and managed `pe-orchestrator` state into Cassandra as durable shared control-plane state
 - uses Fabric for convergence signals while peer `pe` replicas rehydrate their own local `pe-inventory` and `pe-orchestrator` databases from Cassandra-backed state
+- excludes local-only discovered PCP connections from the shared
+  `pe-inventory` projection so live broker presence is not replayed as durable
+  state
 - still reserves per-replica sequence residues so local PE databases stay safe for new inserts after rehydration
 - routes compiler PCP brokers, Bolt/orchestrator clients, console traffic, and compiler file-sync through selector-backed `service/pe` so one healthy control-plane replica owns those stable-backend surfaces at a time
 - publishes per-pod front-door eligibility and blocker annotations from Relay so `service/pe` promotion is driven by convergence state instead of Pod readiness alone

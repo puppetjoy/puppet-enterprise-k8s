@@ -115,11 +115,10 @@ The current replicated state includes:
 - code deployment intent and convergence state
 - managed orchestration data needed for task and plan failover
 
-The preferred shared-state path for auth and persisted orchestration data is
-now Cassandra-backed Conductor state. Peer PostgreSQL replay remains only as a
-fallback backend, not the target HA model. That preserves the current
-`service/pe` / `service/pe-compiler` deployment shape without making one `pe`
-replica special.
+The shared-state path for auth and persisted orchestration data is now
+Cassandra-backed Conductor state. That preserves the current `service/pe` /
+`service/pe-compiler` deployment shape without making one `pe` replica
+special.
 
 ## Current Traffic And Failover Model
 

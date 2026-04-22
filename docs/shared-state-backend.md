@@ -1,8 +1,8 @@
 # Shared State Backend
 
-This document defines the preferred shared-state model for replicated `pe`
-control-plane domains. Peer PostgreSQL replay still exists as a fallback for
-some domains, but it is no longer the intended HA path.
+This document defines the shared-state model for replicated `pe`
+control-plane domains. The earlier peer PostgreSQL replay path for shared
+domains has been retired in favor of Cassandra-backed state.
 
 ## Goal
 
@@ -35,9 +35,10 @@ The target Conductor state model has three layers:
    - local caches and local PE service state
    - no peer-to-peer database authority
 
-## What Moves Off Peer PostgreSQL Replay
+## What Moved Off Peer PostgreSQL Replay
 
-The current custom PostgreSQL replay should be treated as legacy fallback for:
+These domains now use Cassandra-backed shared state instead of peer PostgreSQL
+replay:
 
 - RBAC and local-auth managed state
 - orchestration job and plan state
@@ -69,6 +70,9 @@ orchestration job and plan state:
 - the active `pe` replica can publish that snapshot into Cassandra
 - peer replicas can rehydrate their local `pe-inventory` database from
   Cassandra-backed shared state instead of replaying peer PostgreSQL rows
+- the shared snapshot now excludes local-only discovered PCP connections, so
+  Cassandra carries saved inventory state while live broker-discovered
+  connections stay local to the active backend
 - Relay can also publish the managed `pe-orchestrator` snapshot plus
   `orchestratorEncryptionStore` into Cassandra
 - peer replicas can rehydrate their local `pe-orchestrator` database from

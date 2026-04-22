@@ -54,7 +54,6 @@ DEFAULT_CODE_DEPLOY_HOOK_PATH = "/conductor/code-manager/v1/post-environment"
 DEFAULT_CODE_DEPLOY_STATE_FILENAME = "code-deploy-state.json"
 DEFAULT_CLASSIFIER_SYNC_STATE_FILENAME = "classifier-sync-state.json"
 DEFAULT_CLASSIFIER_SYNC_SCOPE = "filtered-all-nodes"
-DEFAULT_CLASSIFIER_SYNC_BACKEND = "cassandra"
 DEFAULT_CLASSIFIER_SYNC_CASSANDRA_KEYSPACE = "conductor_classifier"
 DEFAULT_CLASSIFIER_SYNC_CASSANDRA_TABLE = "classifier_state"
 FRONTDOOR_ELIGIBLE_ANNOTATION = "pe-k8s.puppet.com/frontdoor-eligible"
@@ -98,7 +97,6 @@ DEFAULT_RBAC_SYNC_SHARED_SAML_KEY_PATH = (
 DEFAULT_RBAC_SYNC_SHARED_SAML_CERT_PATH = (
     f"{DEFAULT_RBAC_SYNC_SHARED_SECRET_DIR}/saml.cert.pem"
 )
-DEFAULT_RBAC_SYNC_BACKEND = "cassandra"
 DEFAULT_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES = [
     "pe-k8s-conductor-",
     "pe-k8s-classifier",
@@ -239,7 +237,6 @@ DEFAULT_ORCHESTRATION_TARGET_ROLES = [
 ]
 DEFAULT_ORCHESTRATION_SYNC_STATE_FILENAME = "orchestration-sync-state.json"
 DEFAULT_ORCHESTRATION_SYNC_SCOPE = "pe-orchestration-managed-domain"
-DEFAULT_ORCHESTRATION_SYNC_BACKEND = "cassandra"
 DEFAULT_ORCHESTRATION_SYNC_ORCHESTRATOR_CONF_PATH = (
     "/etc/puppetlabs/orchestration-services/conf.d/orchestrator.conf"
 )
@@ -493,7 +490,6 @@ DEFAULT_AUTH_BARRIER_AUTH_COOKIE_NAME = "__HOST-pl_ssti"
 DEFAULT_AUTH_BARRIER_LOGIN_PATH = "/auth/login"
 DEFAULT_AUTH_BARRIER_TOKEN_PATH = "/rbac-api/v1/auth/token"
 DEFAULT_AUTH_BARRIER_LOGINSESSION_PATH_PREFIX = "/conductor/auth/v1/loginsession/"
-DEFAULT_AUTH_BARRIER_LOGINSESSION_BACKEND = "cassandra"
 DEFAULT_AUTH_BARRIER_LOGINSESSION_CASSANDRA_KEYSPACE = "conductor_auth"
 DEFAULT_AUTH_BARRIER_LOGINSESSION_CASSANDRA_TABLE = "loginsession"
 AUTH_BARRIER_LOGIN_PAGE_MARKERS = (
@@ -1529,23 +1525,7 @@ class RelayRuntime:
             default=DEFAULT_CLASSIFIER_TARGET_ROLES,
         )
         self.classifier_sync_scope = DEFAULT_CLASSIFIER_SYNC_SCOPE
-        raw_classifier_sync_backend = (
-            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_BACKEND", "").strip().lower()
-        )
-        normalized_classifier_sync_backend = re.sub(
-            r"[^a-z0-9]+",
-            "",
-            raw_classifier_sync_backend or DEFAULT_CLASSIFIER_SYNC_BACKEND,
-        )
-        if normalized_classifier_sync_backend in {"postgres", "postgresreplay"}:
-            self.classifier_sync_backend = "postgresreplay"
-        elif normalized_classifier_sync_backend == "cassandra":
-            self.classifier_sync_backend = "cassandra"
-        else:
-            raise RuntimeError(
-                "unsupported classifier sync backend: "
-                f"{raw_classifier_sync_backend or DEFAULT_CLASSIFIER_SYNC_BACKEND}"
-            )
+        self.classifier_sync_backend = "cassandra" if self.classifier_sync_enabled else ""
         self.classifier_sync_state_path = os.path.join(
             self.output_dir,
             DEFAULT_CLASSIFIER_SYNC_STATE_FILENAME,
@@ -1577,23 +1557,7 @@ class RelayRuntime:
             default=DEFAULT_RBAC_TARGET_ROLES,
         )
         self.rbac_sync_scope = DEFAULT_RBAC_SYNC_SCOPE
-        raw_rbac_sync_backend = (
-            os.environ.get("CONDUCTOR_RELAY_RBAC_SYNC_BACKEND", "").strip().lower()
-        )
-        normalized_rbac_sync_backend = re.sub(
-            r"[^a-z0-9]+",
-            "",
-            raw_rbac_sync_backend or DEFAULT_RBAC_SYNC_BACKEND,
-        )
-        if normalized_rbac_sync_backend in {"postgres", "postgresreplay"}:
-            self.rbac_sync_backend = "postgresreplay"
-        elif normalized_rbac_sync_backend == "cassandra":
-            self.rbac_sync_backend = "cassandra"
-        else:
-            raise RuntimeError(
-                "unsupported RBAC sync backend: "
-                f"{raw_rbac_sync_backend or DEFAULT_RBAC_SYNC_BACKEND}"
-            )
+        self.rbac_sync_backend = "cassandra" if self.rbac_sync_enabled else ""
         self.rbac_sync_state_path = os.path.join(
             self.output_dir,
             DEFAULT_RBAC_SYNC_STATE_FILENAME,
@@ -1698,23 +1662,7 @@ class RelayRuntime:
             default=DEFAULT_ORCHESTRATION_TARGET_ROLES,
         )
         self.orchestration_sync_scope = DEFAULT_ORCHESTRATION_SYNC_SCOPE
-        raw_orchestration_sync_backend = (
-            os.environ.get("CONDUCTOR_RELAY_ORCHESTRATION_SYNC_BACKEND", "").strip().lower()
-        )
-        normalized_orchestration_sync_backend = re.sub(
-            r"[^a-z0-9]+",
-            "",
-            raw_orchestration_sync_backend or DEFAULT_ORCHESTRATION_SYNC_BACKEND,
-        )
-        if normalized_orchestration_sync_backend in {"postgres", "postgresreplay"}:
-            self.orchestration_sync_backend = "postgresreplay"
-        elif normalized_orchestration_sync_backend == "cassandra":
-            self.orchestration_sync_backend = "cassandra"
-        else:
-            raise RuntimeError(
-                "unsupported orchestration sync backend: "
-                f"{raw_orchestration_sync_backend or DEFAULT_ORCHESTRATION_SYNC_BACKEND}"
-            )
+        self.orchestration_sync_backend = "cassandra" if self.orchestration_sync_enabled else ""
         self.orchestration_sync_state_path = os.path.join(
             self.output_dir,
             DEFAULT_ORCHESTRATION_SYNC_STATE_FILENAME,
@@ -1826,15 +1774,7 @@ class RelayRuntime:
             "CONDUCTOR_RELAY_AUTH_BARRIER_WAIT_TIMEOUT_SECONDS",
             20,
         )
-        self.auth_barrier_loginsession_backend = (
-            os.environ.get("CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_BACKEND", "").strip().lower()
-            or DEFAULT_AUTH_BARRIER_LOGINSESSION_BACKEND
-        )
-        if self.auth_barrier_loginsession_backend not in {"postgres", "cassandra"}:
-            raise RuntimeError(
-                "unsupported auth barrier loginsession backend: "
-                f"{self.auth_barrier_loginsession_backend}"
-            )
+        self.auth_barrier_loginsession_backend = "cassandra" if self.auth_barrier_enabled else ""
         self.auth_barrier_loginsession_cassandra_contact_points = env_csv(
             "CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_CONTACT_POINTS",
         )
@@ -2413,7 +2353,7 @@ class RelayRuntime:
         return snapshot
 
     def classifier_sync_uses_cassandra(self):
-        return self.classifier_sync_enabled and self.classifier_sync_backend == "cassandra"
+        return self.classifier_sync_enabled
 
     @staticmethod
     def classifier_sync_preserved_logical_ids():
@@ -2704,17 +2644,14 @@ class RelayRuntime:
         self.merge_classifier_sync_state(**updates)
 
     def build_classifier_state_payload(self, state, published_at):
-        if self.classifier_sync_uses_cassandra():
-            state_payload = {
-                "scope": state.get("scope", self.classifier_sync_scope),
-                "excludedRoots": list(
-                    state.get("excludedRoots") or sorted(CLASSIFIER_LOCAL_EXCLUDE_ROOT_NAMES)
-                ),
-                "hash": state.get("hash", ""),
-                "groupCount": int(state.get("groupCount") or 0),
-            }
-        else:
-            state_payload = state
+        state_payload = {
+            "scope": state.get("scope", self.classifier_sync_scope),
+            "excludedRoots": list(
+                state.get("excludedRoots") or sorted(CLASSIFIER_LOCAL_EXCLUDE_ROOT_NAMES)
+            ),
+            "hash": state.get("hash", ""),
+            "groupCount": int(state.get("groupCount") or 0),
+        }
         return {
             "apiVersion": "pe-k8s.puppet.com/v1alpha1",
             "kind": "ConductorRelayClassifierState",
@@ -2730,8 +2667,8 @@ class RelayRuntime:
         }
 
     def ensure_classifier_sync_cassandra_session(self):
-        if not self.classifier_sync_uses_cassandra():
-            raise RuntimeError("classifier Cassandra backend is not enabled")
+        if not self.classifier_sync_enabled:
+            raise RuntimeError("classifier sync is not enabled")
         if not self.classifier_sync_cassandra_contact_points:
             raise RuntimeError("no Cassandra contact points configured for classifier sync")
         if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
@@ -2866,12 +2803,11 @@ class RelayRuntime:
             return
 
         snapshot = self.classifier_sync_state_snapshot()
-        version_at = int(snapshot.get("desiredPublishedAt") or 0)
-        if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
+        version_at = max(int(snapshot.get("desiredPublishedAt") or 0), now)
+        if (snapshot.get("desiredHash") or "").strip() != state_hash:
             version_at = now
 
-        if self.classifier_sync_uses_cassandra():
-            self.upsert_shared_classifier_state(state, version_at)
+        self.upsert_shared_classifier_state(state, version_at)
 
         payload = self.build_classifier_state_payload(state, version_at)
         self.channel.basic_publish(
@@ -2898,13 +2834,12 @@ class RelayRuntime:
         )
 
     def reconcile_classifier_state(self, state_payload, published_at, origin_participant):
-        if self.classifier_sync_uses_cassandra():
-            shared = self.wait_for_shared_classifier_state(published_at)
-            if shared is None:
-                raise RuntimeError("shared classifier sync state is missing from Cassandra")
-            state_payload = dict(shared.get("state") or {})
-            origin_participant = (shared.get("originParticipant") or "").strip() or origin_participant
-            published_at = int(shared.get("publishedAt") or 0) or int(published_at or time.time())
+        shared = self.wait_for_shared_classifier_state(published_at)
+        if shared is None:
+            raise RuntimeError("shared classifier sync state is missing from Cassandra")
+        state_payload = dict(shared.get("state") or {})
+        origin_participant = (shared.get("originParticipant") or "").strip() or origin_participant
+        published_at = int(shared.get("publishedAt") or 0) or int(published_at or time.time())
 
         desired_groups = []
         for raw_group in (state_payload.get("groups") or []):
@@ -3054,31 +2989,19 @@ class RelayRuntime:
             raise RuntimeError("classifier sync payload is missing a hash")
 
         published_at = int(payload.get("publishedAt") or 0)
-        if self.classifier_sync_uses_cassandra():
-            shared_state = self.wait_for_shared_classifier_state(published_at)
-            if shared_state is None:
-                raise RuntimeError("shared classifier sync state is missing from Cassandra")
-            shared_hash = (shared_state.get("stateHash") or "").strip()
-            if shared_hash:
-                desired_hash = shared_hash
-            published_at = int(shared_state.get("publishedAt") or 0) or published_at
-            origin_participant = (
-                (shared_state.get("originParticipant") or "").strip() or origin_participant
-            )
-            shared_payload = shared_state.get("state") or {}
-            if isinstance(shared_payload, dict):
-                state_payload = shared_payload
-        else:
-            has_all_nodes_root = any(
-                ((group or {}).get("id") or "").strip() == ALL_NODES_GROUP_ID
-                for group in (state_payload.get("groups") or [])
-            )
-            if not has_all_nodes_root:
-                log(
-                    "Ignoring legacy classifier sync payload at "
-                    f"{desired_hash[:12]} from {origin_participant}"
-                )
-                return
+        shared_state = self.wait_for_shared_classifier_state(published_at)
+        if shared_state is None:
+            raise RuntimeError("shared classifier sync state is missing from Cassandra")
+        shared_hash = (shared_state.get("stateHash") or "").strip()
+        if shared_hash:
+            desired_hash = shared_hash
+        published_at = int(shared_state.get("publishedAt") or 0) or published_at
+        origin_participant = (
+            (shared_state.get("originParticipant") or "").strip() or origin_participant
+        )
+        shared_payload = shared_state.get("state") or {}
+        if isinstance(shared_payload, dict):
+            state_payload = shared_payload
 
         current_state = self.classifier_sync_state_snapshot()
         current_desired_hash = (current_state.get("desiredHash") or "").strip()
@@ -3360,7 +3283,7 @@ class RelayRuntime:
         return list(RBAC_SYNC_REQUIRED_AUTH_FILES) + list(RBAC_SYNC_OPTIONAL_AUTH_FILES)
 
     def rbac_sync_uses_cassandra(self):
-        return self.rbac_sync_enabled and self.rbac_sync_backend == "cassandra"
+        return self.rbac_sync_enabled
 
     def rbac_sync_conf_text(self):
         if not os.path.isfile(self.rbac_sync_rbac_conf_path):
@@ -3581,17 +3504,14 @@ class RelayRuntime:
         self.merge_rbac_sync_state(**updates)
 
     def build_rbac_state_payload(self, state, published_at):
-        if self.rbac_sync_uses_cassandra():
-            state_payload = {
-                "scope": state.get("scope", self.rbac_sync_scope),
-                "excludedTokenLabelPrefixes": list(self.rbac_sync_excluded_token_label_prefixes),
-                "hash": state.get("hash", ""),
-                "tableCount": int(state.get("tableCount") or 0),
-                "rowCount": int(state.get("rowCount") or 0),
-                "authFileCount": int(state.get("authFileCount") or 0),
-            }
-        else:
-            state_payload = state
+        state_payload = {
+            "scope": state.get("scope", self.rbac_sync_scope),
+            "excludedTokenLabelPrefixes": list(self.rbac_sync_excluded_token_label_prefixes),
+            "hash": state.get("hash", ""),
+            "tableCount": int(state.get("tableCount") or 0),
+            "rowCount": int(state.get("rowCount") or 0),
+            "authFileCount": int(state.get("authFileCount") or 0),
+        }
         return {
             "apiVersion": "pe-k8s.puppet.com/v1alpha1",
             "kind": "ConductorRelayRbacState",
@@ -3627,8 +3547,8 @@ class RelayRuntime:
         )
 
     def ensure_rbac_sync_cassandra_session(self):
-        if not self.rbac_sync_uses_cassandra():
-            raise RuntimeError("RBAC Cassandra backend is not enabled")
+        if not self.rbac_sync_enabled:
+            raise RuntimeError("RBAC sync is not enabled")
         if not self.rbac_sync_cassandra_contact_points:
             raise RuntimeError("no Cassandra contact points configured for RBAC sync")
         if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
@@ -3715,7 +3635,10 @@ class RelayRuntime:
                 if not received_published_at or shared_published_at >= received_published_at:
                     return latest
                 if time.time() >= deadline:
-                    return latest
+                    raise RuntimeError(
+                        "shared RBAC sync state is older than the received intent: "
+                        f"{shared_published_at} < {received_published_at}"
+                    )
             time.sleep(1)
 
     def upsert_shared_rbac_state(self, state, published_at):
@@ -3750,12 +3673,11 @@ class RelayRuntime:
         now = int(time.time())
         state_hash = (state.get("hash") or "").strip()
         snapshot = self.rbac_sync_state_snapshot()
-        version_at = int(snapshot.get("desiredPublishedAt") or 0)
-        if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
+        version_at = max(int(snapshot.get("desiredPublishedAt") or 0), now)
+        if (snapshot.get("desiredHash") or "").strip() != state_hash:
             version_at = now
 
-        if self.rbac_sync_uses_cassandra():
-            self.upsert_shared_rbac_state(state, version_at)
+        self.upsert_shared_rbac_state(state, version_at)
         payload = self.build_rbac_state_payload(state, version_at)
         self.publish_envelope(
             f"relay.rbac-state.{sanitize_fragment(self.pod_name)}",
@@ -3782,12 +3704,11 @@ class RelayRuntime:
             return
 
         snapshot = self.rbac_sync_state_snapshot()
-        version_at = int(snapshot.get("desiredPublishedAt") or 0)
-        if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
+        version_at = max(int(snapshot.get("desiredPublishedAt") or 0), now)
+        if (snapshot.get("desiredHash") or "").strip() != state_hash:
             version_at = now
 
-        if self.rbac_sync_uses_cassandra():
-            self.upsert_shared_rbac_state(state, version_at)
+        self.upsert_shared_rbac_state(state, version_at)
         payload = self.build_rbac_state_payload(state, version_at)
         self.channel.basic_publish(
             exchange=self.bundle["hub"]["exchanges"]["data"],
@@ -4222,21 +4143,15 @@ class RelayRuntime:
         raise RuntimeError(f"unsupported RBAC sync table {table_name}")
 
     def reconcile_rbac_state(self, state_payload, published_at, origin_participant):
-        if self.rbac_sync_uses_cassandra():
-            shared = self.wait_for_shared_rbac_state(published_at)
-            if shared is None:
-                raise RuntimeError("shared RBAC sync state is missing from Cassandra")
-            shared_published_at = int(shared.get("publishedAt") or 0)
-            if published_at and shared_published_at and shared_published_at < published_at:
-                raise RuntimeError(
-                    "shared RBAC sync state is older than the received intent: "
-                    f"{shared_published_at} < {published_at}"
-                )
+        shared = self.wait_for_shared_rbac_state(published_at)
+        if shared is None:
+            raise RuntimeError("shared RBAC sync state is missing from Cassandra")
+        shared_published_at = int(shared.get("publishedAt") or 0)
 
-            shared_state = dict(shared.get("state") or {})
-            state_payload = shared_state
-            origin_participant = (shared.get("originParticipant") or "").strip() or origin_participant
-            published_at = shared_published_at or int(published_at or time.time())
+        shared_state = dict(shared.get("state") or {})
+        state_payload = shared_state
+        origin_participant = (shared.get("originParticipant") or "").strip() or origin_participant
+        published_at = shared_published_at or int(published_at or time.time())
 
         desired_tables = {}
         table_names = self.rbac_sync_table_names()
@@ -4352,26 +4267,20 @@ class RelayRuntime:
             raise RuntimeError("RBAC sync payload is missing a hash")
 
         published_at = int(payload.get("publishedAt") or 0)
-        if self.rbac_sync_uses_cassandra():
-            shared = self.wait_for_shared_rbac_state(published_at)
-            if shared is None:
-                raise RuntimeError("shared RBAC sync state is missing from Cassandra")
-            shared_hash = (shared.get("stateHash") or "").strip()
-            shared_published_at = int(shared.get("publishedAt") or 0)
-            if published_at and shared_published_at and shared_published_at < published_at:
-                raise RuntimeError(
-                    "shared RBAC sync state is older than the received intent: "
-                    f"{shared_published_at} < {published_at}"
-                )
-            if shared_hash:
-                desired_hash = shared_hash
-            published_at = shared_published_at or published_at
-            origin_participant = (
-                (shared.get("originParticipant") or "").strip() or origin_participant
-            )
-            shared_payload = shared.get("state") or {}
-            if isinstance(shared_payload, dict):
-                state_payload = shared_payload
+        shared = self.wait_for_shared_rbac_state(published_at)
+        if shared is None:
+            raise RuntimeError("shared RBAC sync state is missing from Cassandra")
+        shared_hash = (shared.get("stateHash") or "").strip()
+        shared_published_at = int(shared.get("publishedAt") or 0)
+        if shared_hash:
+            desired_hash = shared_hash
+        published_at = shared_published_at or published_at
+        origin_participant = (
+            (shared.get("originParticipant") or "").strip() or origin_participant
+        )
+        shared_payload = shared.get("state") or {}
+        if isinstance(shared_payload, dict):
+            state_payload = shared_payload
         current_state = self.rbac_sync_state_snapshot()
         current_desired_hash = (current_state.get("desiredHash") or "").strip()
         current_actual_hash = (current_state.get("actualHash") or "").strip()
@@ -4629,6 +4538,24 @@ class RelayRuntime:
             "state": payload if isinstance(payload, dict) else {},
         }
 
+    def wait_for_shared_rbac_token_state(self, received_published_at=0, timeout_seconds=15):
+        deadline = time.time() + max(1, int(timeout_seconds or 0))
+        while True:
+            shared = self.read_shared_rbac_token_state()
+            if shared is None:
+                if time.time() >= deadline:
+                    return None
+            else:
+                shared_published_at = int(shared.get("publishedAt") or 0)
+                if not received_published_at or shared_published_at >= received_published_at:
+                    return shared
+                if time.time() >= deadline:
+                    raise RuntimeError(
+                        "shared RBAC token sync state is older than the received intent: "
+                        f"{shared_published_at} < {received_published_at}"
+                    )
+            time.sleep(1)
+
     def upsert_shared_rbac_token_state(self, state, published_at):
         state_hash = ((state or {}).get("hash") or "").strip()
         if not state_hash:
@@ -4661,8 +4588,8 @@ class RelayRuntime:
         now = int(time.time())
         state_hash = (state.get("hash") or "").strip()
         snapshot = self.rbac_token_sync_state_snapshot()
-        version_at = int(snapshot.get("desiredPublishedAt") or 0)
-        if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
+        version_at = max(int(snapshot.get("desiredPublishedAt") or 0), now)
+        if (snapshot.get("desiredHash") or "").strip() != state_hash:
             version_at = now
 
         self.upsert_shared_rbac_token_state(state, version_at)
@@ -4695,8 +4622,8 @@ class RelayRuntime:
             return
 
         snapshot = self.rbac_token_sync_state_snapshot()
-        version_at = int(snapshot.get("desiredPublishedAt") or 0)
-        if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
+        version_at = max(int(snapshot.get("desiredPublishedAt") or 0), now)
+        if (snapshot.get("desiredHash") or "").strip() != state_hash:
             version_at = now
 
         self.upsert_shared_rbac_token_state(state, version_at)
@@ -4745,15 +4672,10 @@ class RelayRuntime:
         return False
 
     def reconcile_rbac_token_state(self, state_payload, published_at, origin_participant):
-        shared = self.read_shared_rbac_token_state()
+        shared = self.wait_for_shared_rbac_token_state(published_at)
         if shared is None:
             raise RuntimeError("shared RBAC token sync state is missing from Cassandra")
         shared_published_at = int(shared.get("publishedAt") or 0)
-        if published_at and shared_published_at and shared_published_at < published_at:
-            raise RuntimeError(
-                "shared RBAC token sync state is older than the received intent: "
-                f"{shared_published_at} < {published_at}"
-            )
 
         shared_state = dict(shared.get("state") or {})
         state_payload = shared_state
@@ -4859,16 +4781,11 @@ class RelayRuntime:
             raise RuntimeError("RBAC token sync payload is missing a hash")
 
         published_at = int(payload.get("publishedAt") or 0)
-        shared = self.read_shared_rbac_token_state()
+        shared = self.wait_for_shared_rbac_token_state(published_at)
         if shared is None:
             raise RuntimeError("shared RBAC token sync state is missing from Cassandra")
         shared_hash = (shared.get("stateHash") or "").strip()
         shared_published_at = int(shared.get("publishedAt") or 0)
-        if published_at and shared_published_at and shared_published_at < published_at:
-            raise RuntimeError(
-                "shared RBAC token sync state is older than the received intent: "
-                f"{shared_published_at} < {published_at}"
-            )
         if shared_hash:
             desired_hash = shared_hash
         published_at = shared_published_at or published_at
@@ -5165,7 +5082,7 @@ class RelayRuntime:
         return names
 
     def orchestration_sync_uses_cassandra(self):
-        return self.orchestration_sync_enabled and self.orchestration_sync_backend == "cassandra"
+        return self.orchestration_sync_enabled
 
     def inventory_sync_auth_file_paths(self):
         inventory_content = ""
@@ -5501,17 +5418,15 @@ class RelayRuntime:
         self.merge_orchestration_sync_state(**updates)
 
     def build_orchestration_state_payload(self, state, published_at):
-        payload_state = state
-        if self.orchestration_sync_uses_cassandra():
-            payload_state = {
-                "scope": state.get("scope", self.orchestration_sync_scope),
-                "hash": state.get("hash", ""),
-                "databaseCount": int(state.get("databaseCount") or 0),
-                "tableCount": int(state.get("tableCount") or 0),
-                "rowCount": int(state.get("rowCount") or 0),
-                "authFileCount": int(state.get("authFileCount") or 0),
-                "sequenceCount": int(state.get("sequenceCount") or 0),
-            }
+        payload_state = {
+            "scope": state.get("scope", self.orchestration_sync_scope),
+            "hash": state.get("hash", ""),
+            "databaseCount": int(state.get("databaseCount") or 0),
+            "tableCount": int(state.get("tableCount") or 0),
+            "rowCount": int(state.get("rowCount") or 0),
+            "authFileCount": int(state.get("authFileCount") or 0),
+            "sequenceCount": int(state.get("sequenceCount") or 0),
+        }
         return {
             "apiVersion": "pe-k8s.puppet.com/v1alpha1",
             "kind": "ConductorRelayOrchestrationState",
@@ -5570,12 +5485,11 @@ class RelayRuntime:
             return
 
         snapshot = self.orchestration_sync_state_snapshot()
-        version_at = int(snapshot.get("desiredPublishedAt") or 0)
-        if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
+        version_at = max(int(snapshot.get("desiredPublishedAt") or 0), now)
+        if (snapshot.get("desiredHash") or "").strip() != state_hash:
             version_at = now
 
-        if self.orchestration_sync_uses_cassandra():
-            self.upsert_shared_orchestration_state(state, version_at)
+        self.upsert_shared_orchestration_state(state, version_at)
 
         payload = self.build_orchestration_state_payload(state, version_at)
         self.channel.basic_publish(
@@ -5663,19 +5577,13 @@ class RelayRuntime:
             connection.close()
 
     def reconcile_orchestration_state(self, state_payload, published_at, origin_participant):
-        if self.orchestration_sync_uses_cassandra():
-            shared = self.read_shared_orchestration_state()
-            if shared is None:
-                raise RuntimeError("shared orchestration sync state is missing from Cassandra")
-            shared_published_at = int(shared.get("publishedAt") or 0)
-            if published_at and shared_published_at and shared_published_at < published_at:
-                raise RuntimeError(
-                    "shared orchestration sync state is older than the received intent: "
-                    f"{shared_published_at} < {published_at}"
-                )
-            state_payload = dict(shared.get("state") or {})
-            origin_participant = (shared.get("originParticipant") or "").strip() or origin_participant
-            published_at = shared_published_at or int(published_at or time.time())
+        shared = self.wait_for_shared_orchestration_state(published_at)
+        if shared is None:
+            raise RuntimeError("shared orchestration sync state is missing from Cassandra")
+        shared_published_at = int(shared.get("publishedAt") or 0)
+        state_payload = dict(shared.get("state") or {})
+        origin_participant = (shared.get("originParticipant") or "").strip() or origin_participant
+        published_at = shared_published_at or int(published_at or time.time())
 
         desired_databases = state_payload.get("databases") or {}
         if not isinstance(desired_databases, dict):
@@ -5754,8 +5662,8 @@ class RelayRuntime:
         self.merge_orchestration_sync_state(**updates)
 
     def ensure_orchestration_sync_cassandra_session(self):
-        if not self.orchestration_sync_uses_cassandra():
-            raise RuntimeError("orchestration sync Cassandra backend is not enabled")
+        if not self.orchestration_sync_enabled:
+            raise RuntimeError("orchestration sync is not enabled")
         if not self.orchestration_sync_cassandra_contact_points:
             raise RuntimeError("no Cassandra contact points configured for orchestration sync")
         if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
@@ -5829,6 +5737,24 @@ class RelayRuntime:
             "state": payload if isinstance(payload, dict) else {},
         }
 
+    def wait_for_shared_orchestration_state(self, received_published_at=0, timeout_seconds=15):
+        deadline = time.time() + max(1, int(timeout_seconds or 0))
+        while True:
+            shared = self.read_shared_orchestration_state()
+            if shared is None:
+                if time.time() >= deadline:
+                    return None
+            else:
+                shared_published_at = int(shared.get("publishedAt") or 0)
+                if not received_published_at or shared_published_at >= received_published_at:
+                    return shared
+                if time.time() >= deadline:
+                    raise RuntimeError(
+                        "shared orchestration sync state is older than the received intent: "
+                        f"{shared_published_at} < {received_published_at}"
+                    )
+            time.sleep(1)
+
     def upsert_shared_orchestration_state(self, state, published_at):
         state_hash = ((state or {}).get("hash") or "").strip()
         if not state_hash:
@@ -5872,26 +5798,20 @@ class RelayRuntime:
             raise RuntimeError("orchestration sync payload is missing a hash")
 
         published_at = int(payload.get("publishedAt") or 0)
-        if self.orchestration_sync_uses_cassandra():
-            shared_state = self.read_shared_orchestration_state()
-            if shared_state is None:
-                raise RuntimeError("shared orchestration sync state is missing from Cassandra")
-            shared_hash = (shared_state.get("stateHash") or "").strip()
-            shared_published_at = int(shared_state.get("publishedAt") or 0)
-            if published_at and shared_published_at and shared_published_at < published_at:
-                raise RuntimeError(
-                    "shared orchestration sync state is older than the received intent: "
-                    f"{shared_published_at} < {published_at}"
-                )
-            if shared_hash:
-                desired_hash = shared_hash
-            published_at = shared_published_at or published_at
-            origin_participant = (
-                (shared_state.get("originParticipant") or "").strip() or origin_participant
-            )
-            shared_payload = shared_state.get("state") or {}
-            if isinstance(shared_payload, dict):
-                state_payload = shared_payload
+        shared_state = self.wait_for_shared_orchestration_state(published_at)
+        if shared_state is None:
+            raise RuntimeError("shared orchestration sync state is missing from Cassandra")
+        shared_hash = (shared_state.get("stateHash") or "").strip()
+        shared_published_at = int(shared_state.get("publishedAt") or 0)
+        if shared_hash:
+            desired_hash = shared_hash
+        published_at = shared_published_at or published_at
+        origin_participant = (
+            (shared_state.get("originParticipant") or "").strip() or origin_participant
+        )
+        shared_payload = shared_state.get("state") or {}
+        if isinstance(shared_payload, dict):
+            state_payload = shared_payload
         current_state = self.orchestration_sync_state_snapshot()
         current_desired_hash = (current_state.get("desiredHash") or "").strip()
         current_actual_hash = (current_state.get("actualHash") or "").strip()
@@ -6014,6 +5934,24 @@ class RelayRuntime:
             "state": payload if isinstance(payload, dict) else {},
         }
 
+    def wait_for_shared_inventory_state(self, received_published_at=0, timeout_seconds=15):
+        deadline = time.time() + max(1, int(timeout_seconds or 0))
+        while True:
+            shared = self.read_shared_inventory_state()
+            if shared is None:
+                if time.time() >= deadline:
+                    return None
+            else:
+                shared_published_at = int(shared.get("publishedAt") or 0)
+                if not received_published_at or shared_published_at >= received_published_at:
+                    return shared
+                if time.time() >= deadline:
+                    raise RuntimeError(
+                        "shared inventory sync state is older than the received intent: "
+                        f"{shared_published_at} < {received_published_at}"
+                    )
+            time.sleep(1)
+
     def upsert_shared_inventory_state(self, state, published_at):
         state_hash = ((state or {}).get("hash") or "").strip()
         if not state_hash:
@@ -6039,10 +5977,11 @@ class RelayRuntime:
         )
 
     def read_local_inventory_sync_state(self):
-        database = self.read_orchestration_database_state(
+        full_database = self.read_orchestration_database_state(
             "inventory",
             self.inventory_sync_inventory_conf_path,
         )
+        database = self.inventory_shared_database_state(full_database)
         auth_files = {}
         for logical_name, source_path in self.inventory_sync_auth_file_paths().items():
             if not source_path or not os.path.isfile(source_path):
@@ -6061,6 +6000,122 @@ class RelayRuntime:
         }
         payload["hash"] = self.orchestration_rows_hash({"inventory": database}, auth_files)
         return payload
+
+    @staticmethod
+    def inventory_row_id_set(rows, column_name="id"):
+        identifiers = set()
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            value = row.get(column_name)
+            if value is None:
+                continue
+            identifiers.add(str(value))
+        return identifiers
+
+    @staticmethod
+    def inventory_is_local_only_connection(row):
+        if not isinstance(row, dict):
+            return False
+        return bool(row.get("undiscoverable"))
+
+    def inventory_split_database_state(self, database_state):
+        table_names = list((database_state or {}).get("tableNames") or [])
+        tables = {
+            table_name: list(((database_state or {}).get("tables") or {}).get(table_name) or [])
+            for table_name in table_names
+        }
+
+        shared_connections = []
+        local_connections = []
+        for row in tables.get("connections") or []:
+            if self.inventory_is_local_only_connection(row):
+                local_connections.append(row)
+            else:
+                shared_connections.append(row)
+
+        shared_connection_ids = self.inventory_row_id_set(shared_connections)
+        local_connection_ids = self.inventory_row_id_set(local_connections)
+
+        shared_parameter_ids = self.inventory_row_id_set(shared_connections, "parameters")
+        shared_sensitive_ids = self.inventory_row_id_set(shared_connections, "sensitive_parameters")
+        local_parameter_ids = self.inventory_row_id_set(local_connections, "parameters")
+        local_sensitive_ids = self.inventory_row_id_set(local_connections, "sensitive_parameters")
+
+        shared_tables = {
+            "connections": shared_connections,
+            "parameters": [
+                row
+                for row in tables.get("parameters") or []
+                if str((row or {}).get("id")) in shared_parameter_ids
+            ],
+            "sensitive_parameters": [
+                row
+                for row in tables.get("sensitive_parameters") or []
+                if str((row or {}).get("id")) in shared_sensitive_ids
+            ],
+            "connection_metadata": [
+                row
+                for row in tables.get("connection_metadata") or []
+                if str((row or {}).get("connection_id")) in shared_connection_ids
+            ],
+        }
+        local_tables = {
+            "connections": local_connections,
+            "parameters": [
+                row
+                for row in tables.get("parameters") or []
+                if str((row or {}).get("id")) in local_parameter_ids
+            ],
+            "sensitive_parameters": [
+                row
+                for row in tables.get("sensitive_parameters") or []
+                if str((row or {}).get("id")) in local_sensitive_ids
+            ],
+            "connection_metadata": [
+                row
+                for row in tables.get("connection_metadata") or []
+                if str((row or {}).get("connection_id")) in local_connection_ids
+            ],
+        }
+
+        def build_state(filtered_tables):
+            return {
+                "tableNames": table_names,
+                "tables": {
+                    table_name: list(filtered_tables.get(table_name) or [])
+                    for table_name in table_names
+                },
+                "tableCount": len(table_names),
+                "rowCount": sum(
+                    len(filtered_tables.get(table_name) or []) for table_name in table_names
+                ),
+                "sequenceCount": int((database_state or {}).get("sequenceCount") or 0),
+            }
+
+        return {
+            "shared": build_state(shared_tables),
+            "local": build_state(local_tables),
+        }
+
+    def inventory_shared_database_state(self, database_state):
+        split = self.inventory_split_database_state(database_state)
+        return split["shared"]
+
+    def merge_inventory_database_state(self, local_database_state, shared_database_state):
+        local_tables = self.inventory_split_database_state(local_database_state)["local"]["tables"]
+        shared_tables = dict((shared_database_state or {}).get("tables") or {})
+        table_names = list(
+            (shared_database_state or {}).get("tableNames")
+            or (local_database_state or {}).get("tableNames")
+            or []
+        )
+        merged_tables = {}
+        for table_name in table_names:
+            merged_tables[table_name] = list(local_tables.get(table_name) or []) + list(
+                shared_tables.get(table_name) or []
+            )
+        return merged_tables
 
     def refresh_local_inventory_sync_state(self):
         if not self.inventory_sync_enabled:
@@ -6171,8 +6226,8 @@ class RelayRuntime:
             return
 
         snapshot = self.inventory_sync_state_snapshot()
-        version_at = int(snapshot.get("desiredPublishedAt") or 0)
-        if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
+        version_at = max(int(snapshot.get("desiredPublishedAt") or 0), now)
+        if (snapshot.get("desiredHash") or "").strip() != state_hash:
             version_at = now
 
         self.upsert_shared_inventory_state(state, version_at)
@@ -6188,15 +6243,10 @@ class RelayRuntime:
         self.record_published_inventory_state(state, version_at, now)
 
     def reconcile_inventory_state(self, state_payload, published_at, origin_participant):
-        shared = self.read_shared_inventory_state()
+        shared = self.wait_for_shared_inventory_state(published_at)
         if shared is None:
             raise RuntimeError("shared inventory sync state is missing from Cassandra")
         shared_published_at = int(shared.get("publishedAt") or 0)
-        if published_at and shared_published_at and shared_published_at < published_at:
-            raise RuntimeError(
-                "shared inventory sync state is older than the received intent: "
-                f"{shared_published_at} < {published_at}"
-            )
 
         shared_state = dict(shared.get("state") or {})
         state_payload = shared_state
@@ -6217,10 +6267,22 @@ class RelayRuntime:
             if not isinstance(rows, list):
                 raise RuntimeError(f"inventory sync payload table inventory.{table_name} is not a list")
             desired_tables[table_name] = rows
+        local_database = self.read_orchestration_database_state(
+            "inventory",
+            self.inventory_sync_inventory_conf_path,
+        )
+        desired_database = {
+            "tableNames": list(database_payload.get("tableNames") or []),
+            "tables": desired_tables,
+            "tableCount": int(database_payload.get("tableCount") or 0),
+            "rowCount": int(database_payload.get("rowCount") or 0),
+            "sequenceCount": int(database_payload.get("sequenceCount") or 0),
+        }
+        merged_tables = self.merge_inventory_database_state(local_database, desired_database)
         self.reconcile_orchestration_database(
             "inventory",
             self.inventory_sync_inventory_conf_path,
-            desired_tables,
+            merged_tables,
         )
 
         local_state = self.read_local_inventory_sync_state()
@@ -6279,16 +6341,11 @@ class RelayRuntime:
             raise RuntimeError("inventory sync payload is missing a hash")
 
         published_at = int(payload.get("publishedAt") or 0)
-        shared = self.read_shared_inventory_state()
+        shared = self.wait_for_shared_inventory_state(published_at)
         if shared is None:
             raise RuntimeError("shared inventory sync state is missing from Cassandra")
         shared_hash = (shared.get("stateHash") or "").strip()
         shared_published_at = int(shared.get("publishedAt") or 0)
-        if published_at and shared_published_at and shared_published_at < published_at:
-            raise RuntimeError(
-                "shared inventory sync state is older than the received intent: "
-                f"{shared_published_at} < {published_at}"
-            )
         if shared_hash:
             desired_hash = shared_hash
         published_at = shared_published_at or published_at
@@ -7313,11 +7370,11 @@ class RelayRuntime:
         }
 
     def auth_barrier_loginsession_uses_cassandra(self):
-        return self.auth_barrier_loginsession_backend == "cassandra"
+        return self.auth_barrier_enabled
 
     def ensure_loginsession_cassandra_session(self):
-        if not self.auth_barrier_loginsession_uses_cassandra():
-            raise RuntimeError("loginsession Cassandra backend is not enabled")
+        if not self.auth_barrier_enabled:
+            raise RuntimeError("auth barrier is not enabled")
         if not self.auth_barrier_loginsession_cassandra_contact_points:
             raise RuntimeError("no Cassandra contact points configured for loginsession backend")
         if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
@@ -7515,78 +7572,15 @@ class RelayRuntime:
         session_id = self.normalize_loginsession_id(session_id)
         if self.read_local_loginsession(session_id) is not None:
             return True
-        if not self.auth_barrier_loginsession_uses_cassandra():
-            return False
         payload = self.read_shared_loginsession(session_id)
         if payload is None:
             return False
         self.upsert_local_loginsession(payload, expected_session_id=session_id)
         return True
 
-    def peer_loginsession_url(self, peer_host, session_id):
-        session_id = self.normalize_loginsession_id(session_id)
-        return (
-            f"https://{peer_host}:{self.auth_barrier_api_port}"
-            f"{DEFAULT_AUTH_BARRIER_LOGINSESSION_PATH_PREFIX}{urllib.parse.quote(session_id)}"
-        )
-
-    def push_loginsession_to_peer(self, peer_host, payload):
-        status_code, body = http_request_json(
-            "PUT",
-            self.peer_loginsession_url(peer_host, payload.get("id")),
-            headers={"Content-Type": "application/json"},
-            payload=payload,
-            context=self.build_local_service_context(),
-            timeout=self.auth_barrier_peer_request_timeout_seconds,
-        )
-        if status_code != 200:
-            raise RuntimeError(f"loginsession sync returned {status_code}: {body}")
-
-    def validate_loginsession_on_peer(self, peer_host, session_id):
-        status_code, _body = http_request_json(
-            "GET",
-            self.peer_loginsession_url(peer_host, session_id),
-            headers={"Accept": "application/json"},
-            context=self.build_local_service_context(),
-            timeout=self.auth_barrier_peer_request_timeout_seconds,
-        )
-        return status_code == 200
-
     def synchronize_loginsession(self, session_id):
-        if self.auth_barrier_loginsession_uses_cassandra():
-            session_payload = self.wait_for_local_loginsession(session_id)
-            self.upsert_shared_loginsession(session_payload, expected_session_id=session_id)
-            return
-
-        peers = self.auth_barrier_target_peers()
-        if not peers:
-            return
-
         session_payload = self.wait_for_local_loginsession(session_id)
-        pending = {peer["participant"]: peer["host"] for peer in peers}
-        last_errors = {}
-        deadline = time.time() + max(self.auth_barrier_wait_timeout_seconds, 1)
-
-        while pending and time.time() < deadline:
-            for participant, host in list(pending.items()):
-                try:
-                    self.push_loginsession_to_peer(host, session_payload)
-                    if self.validate_loginsession_on_peer(host, session_id):
-                        pending.pop(participant, None)
-                        last_errors.pop(participant, None)
-                        continue
-                    last_errors[participant] = "not yet converged"
-                except Exception as error:  # pragma: no cover - transient network failures
-                    last_errors[participant] = str(error)
-            if pending:
-                time.sleep(self.auth_barrier_poll_interval_seconds)
-
-        if pending:
-            details = ", ".join(
-                f"{participant} ({last_errors.get(participant, 'not yet converged')})"
-                for participant in sorted(pending)
-            )
-            raise RuntimeError(f"timed out waiting for loginsession convergence on {details}")
+        self.upsert_shared_loginsession(session_payload, expected_session_id=session_id)
 
     def validate_bearer_token_on_peer(self, peer_host, token):
         status_code, _reason, _headers, _body = self.proxy_upstream_request(

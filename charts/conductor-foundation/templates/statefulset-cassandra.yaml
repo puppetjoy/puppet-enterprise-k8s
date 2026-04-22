@@ -70,7 +70,9 @@ spec:
               command:
                 - /bin/sh
                 - -ec
-                - nodetool statusgossip | grep -q running
+                - |
+                  ip="$(hostname -i | awk '{print $1}')"
+                  nodetool status | awk -v ip="$ip" '$1 == "UN" && $2 == ip { found = 1 } END { exit(found ? 0 : 1) }'
             periodSeconds: 20
             timeoutSeconds: 10
             failureThreshold: 6

@@ -136,8 +136,8 @@ Current decision:
 
 ## Phase 6: Shared State Backend
 
-The current custom PostgreSQL replay used for some shared control-plane
-domains is useful as a proof point, but it is not the intended end state.
+The earlier custom PostgreSQL replay used for some shared control-plane
+domains proved the HA shape, but it is no longer the target implementation.
 
 This phase should prove:
 
@@ -149,7 +149,7 @@ This phase should prove:
 Current direction:
 
 - `conductor-foundation` now grows optional Cassandra infrastructure as the shared-state layer
-- peer PostgreSQL replay for RBAC, orchestration, and login-session handoff is now treated as transitional
+- peer PostgreSQL replay for RBAC, orchestration, and login-session handoff has been retired
 - the first migration slices are now login sessions, persisted orchestration inventory, persisted orchestration job state, and only then broader auth domains such as RBAC
 - classifier should evolve toward a Conductor-owned authoritative graph rather than more local-database replay
 

@@ -582,8 +582,6 @@ spec:
               value: {{ join "," .Values.conductor.relay.commandProxy.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_REPLICATED_COMMANDS
               value: {{ join "," .Values.conductor.relay.commandProxy.replicatedCommands | quote }}
-            - name: CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_BACKEND
-              value: {{ .Values.conductor.relay.authBarrier.loginsessionBackend | quote }}
             - name: CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_CONTACT_POINTS
               value: {{ include "pe.conductorSharedStateContactPointsCsv" (dict "root" . "points" .Values.conductor.relay.authBarrier.cassandra.contactPoints) | quote }}
             - name: CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_PORT
@@ -622,8 +620,6 @@ spec:
               value: {{ ternary "true" "false" .Values.conductor.relay.classifierSync.enabled | quote }}
             - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_SERVICE_HOST
               value: {{ include "pe.identity" . | quote }}
-            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_BACKEND
-              value: {{ .Values.conductor.relay.classifierSync.backend | quote }}
             - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_TARGET_ROLES
               value: {{ join "," .Values.conductor.relay.classifierSync.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_USERNAME
@@ -646,8 +642,6 @@ spec:
               value: {{ .Values.conductor.relay.classifierSync.cassandra.replicationFactor | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_ENABLED
               value: {{ ternary "true" "false" .Values.conductor.relay.rbacSync.enabled | quote }}
-            - name: CONDUCTOR_RELAY_RBAC_SYNC_BACKEND
-              value: {{ .Values.conductor.relay.rbacSync.backend | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_TARGET_ROLES
               value: {{ join "," .Values.conductor.relay.rbacSync.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES
@@ -678,8 +672,6 @@ spec:
               value: {{ .Values.conductor.relay.rbacTokenSync.cassandra.replicationFactor | quote }}
             - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_ENABLED
               value: {{ ternary "true" "false" .Values.conductor.relay.orchestrationSync.enabled | quote }}
-            - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_BACKEND
-              value: {{ .Values.conductor.relay.orchestrationSync.backend | quote }}
             - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_TARGET_ROLES
               value: {{ join "," .Values.conductor.relay.orchestrationSync.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_ORCHESTRATOR_CONF_PATH
