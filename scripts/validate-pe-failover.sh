@@ -148,7 +148,7 @@ raise SystemExit(1)
 PY
 )
 cat > /tmp/pe-k8s-token.json <<EOF
-{"login":"admin","password":"${password}","lifetime":"5m","label":"pe-k8s-failover-$(date +%s%N)"}
+{"login":"admin","password":"${password}","lifetime":"5m","label":"pe-k8s-conductor-failover-$(date +%s%N)"}
 EOF
 response="$(
 /usr/bin/curl -sk \
@@ -650,6 +650,19 @@ if not any((item.get("name") or "") == certname for item in items if isinstance(
 PY
 }
 
+run_classifier_projection_check() {
+  local active_pod="$1"
+  local standby_pod="$2"
+  local phase="$3"
+
+  echo "[check] classifier sync ${active_pod} -> ${standby_pod} (${phase})"
+  python3 "$repo_root/scripts/validate-classifier-projection.py" \
+    --namespace "$namespace" \
+    --writer-pod "$active_pod" \
+    --reader-pod "$standby_pod" \
+    --wait-seconds "$wait_seconds"
+}
+
 run_job_history_sync_check() {
   local active_pod="$1"
   local viewer_pod="$2"
@@ -878,6 +891,7 @@ initial_standby="$(pe_service_pods | grep -vx "$initial_active" | head -n1)"
 echo "[info] initial active backend: ${initial_active}"
 echo "[info] initial standby backend: ${initial_standby}"
 run_checks "$initial_active" "$certname" initial
+run_classifier_projection_check "$initial_active" "$initial_standby" initial
 run_rbac_projection_check "$initial_active" "$initial_standby" initial
 wait_for_pod_ready "$initial_standby"
 run_job_history_sync_check "$initial_active" "$initial_standby" "$certname" initial
@@ -894,6 +908,7 @@ run_ca_revocation_check "$new_active" "$initial_active"
 echo "[check] standby re-entry for ${initial_active}"
 wait_for_standby_reentry "$initial_active"
 echo "[ok] standby re-entry completed"
+run_classifier_projection_check "$new_active" "$initial_active" post-failover
 run_rbac_projection_check "$new_active" "$initial_active" post-failover
 run_job_history_sync_check "$new_active" "$initial_active" "$certname" post-failover
 

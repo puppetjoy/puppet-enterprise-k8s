@@ -54,6 +54,9 @@ DEFAULT_CODE_DEPLOY_HOOK_PATH = "/conductor/code-manager/v1/post-environment"
 DEFAULT_CODE_DEPLOY_STATE_FILENAME = "code-deploy-state.json"
 DEFAULT_CLASSIFIER_SYNC_STATE_FILENAME = "classifier-sync-state.json"
 DEFAULT_CLASSIFIER_SYNC_SCOPE = "filtered-all-nodes"
+DEFAULT_CLASSIFIER_SYNC_BACKEND = "cassandra"
+DEFAULT_CLASSIFIER_SYNC_CASSANDRA_KEYSPACE = "conductor_classifier"
+DEFAULT_CLASSIFIER_SYNC_CASSANDRA_TABLE = "classifier_state"
 FRONTDOOR_ELIGIBLE_ANNOTATION = "pe-k8s.puppet.com/frontdoor-eligible"
 FRONTDOOR_BLOCKERS_ANNOTATION = "pe-k8s.puppet.com/frontdoor-blockers"
 FRONTDOOR_REASON_ANNOTATION = "pe-k8s.puppet.com/frontdoor-reason"
@@ -1526,9 +1529,47 @@ class RelayRuntime:
             default=DEFAULT_CLASSIFIER_TARGET_ROLES,
         )
         self.classifier_sync_scope = DEFAULT_CLASSIFIER_SYNC_SCOPE
+        raw_classifier_sync_backend = (
+            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_BACKEND", "").strip().lower()
+        )
+        normalized_classifier_sync_backend = re.sub(
+            r"[^a-z0-9]+",
+            "",
+            raw_classifier_sync_backend or DEFAULT_CLASSIFIER_SYNC_BACKEND,
+        )
+        if normalized_classifier_sync_backend in {"postgres", "postgresreplay"}:
+            self.classifier_sync_backend = "postgresreplay"
+        elif normalized_classifier_sync_backend == "cassandra":
+            self.classifier_sync_backend = "cassandra"
+        else:
+            raise RuntimeError(
+                "unsupported classifier sync backend: "
+                f"{raw_classifier_sync_backend or DEFAULT_CLASSIFIER_SYNC_BACKEND}"
+            )
         self.classifier_sync_state_path = os.path.join(
             self.output_dir,
             DEFAULT_CLASSIFIER_SYNC_STATE_FILENAME,
+        )
+        self.classifier_sync_cassandra_contact_points = env_csv(
+            "CONDUCTOR_RELAY_CLASSIFIER_SYNC_CASSANDRA_CONTACT_POINTS",
+        )
+        self.classifier_sync_cassandra_port = env_int(
+            "CONDUCTOR_RELAY_CLASSIFIER_SYNC_CASSANDRA_PORT",
+            9042,
+        )
+        self.classifier_sync_cassandra_keyspace = normalize_cassandra_identifier(
+            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_CASSANDRA_KEYSPACE", "").strip()
+            or DEFAULT_CLASSIFIER_SYNC_CASSANDRA_KEYSPACE,
+            "keyspace",
+        )
+        self.classifier_sync_cassandra_table = normalize_cassandra_identifier(
+            os.environ.get("CONDUCTOR_RELAY_CLASSIFIER_SYNC_CASSANDRA_TABLE", "").strip()
+            or DEFAULT_CLASSIFIER_SYNC_CASSANDRA_TABLE,
+            "table",
+        )
+        self.classifier_sync_cassandra_replication_factor = env_int(
+            "CONDUCTOR_RELAY_CLASSIFIER_SYNC_CASSANDRA_REPLICATION_FACTOR",
+            3,
         )
         self.rbac_sync_enabled = env_bool("CONDUCTOR_RELAY_RBAC_SYNC_ENABLED", False)
         self.rbac_sync_target_roles = env_csv(
@@ -1931,6 +1972,8 @@ class RelayRuntime:
 
         self.command_proxy_server = None
         self.command_proxy_thread = None
+        self.classifier_sync_cassandra_cluster = None
+        self.classifier_sync_cassandra_session = None
         self.rbac_sync_cassandra_cluster = None
         self.rbac_sync_cassandra_session = None
         self.rbac_token_sync_cassandra_cluster = None
@@ -2005,6 +2048,7 @@ class RelayRuntime:
             "codeDeployEnvironments": {},
             "classifierSyncEnabled": self.classifier_sync_enabled,
             "classifierSyncReady": not self.classifier_sync_enabled,
+            "classifierSyncBackend": self.classifier_sync_backend if self.classifier_sync_enabled else "",
             "classifierSyncServiceHost": self.classifier_sync_service_host if self.classifier_sync_enabled else "",
             "classifierSyncTargetRoles": list(self.classifier_sync_target_roles),
             "classifierSyncScope": self.classifier_sync_scope if self.classifier_sync_enabled else "",
@@ -2294,6 +2338,9 @@ class RelayRuntime:
         self.status.update(
             {
                 "classifierSyncReady": ready,
+                "classifierSyncBackend": (
+                    self.classifier_sync_backend if self.classifier_sync_enabled else ""
+                ),
                 "classifierSyncServiceHost": (
                     self.classifier_sync_service_host if self.classifier_sync_enabled else ""
                 ),
@@ -2364,6 +2411,9 @@ class RelayRuntime:
             snapshot = dict(state)
         self.persist_classifier_sync_state()
         return snapshot
+
+    def classifier_sync_uses_cassandra(self):
+        return self.classifier_sync_enabled and self.classifier_sync_backend == "cassandra"
 
     @staticmethod
     def classifier_sync_preserved_logical_ids():
@@ -2653,6 +2703,152 @@ class RelayRuntime:
         self.classifier_sync_runtime_error = ""
         self.merge_classifier_sync_state(**updates)
 
+    def build_classifier_state_payload(self, state, published_at):
+        if self.classifier_sync_uses_cassandra():
+            state_payload = {
+                "scope": state.get("scope", self.classifier_sync_scope),
+                "excludedRoots": list(
+                    state.get("excludedRoots") or sorted(CLASSIFIER_LOCAL_EXCLUDE_ROOT_NAMES)
+                ),
+                "hash": state.get("hash", ""),
+                "groupCount": int(state.get("groupCount") or 0),
+            }
+        else:
+            state_payload = state
+        return {
+            "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+            "kind": "ConductorRelayClassifierState",
+            "publishedAt": published_at,
+            "origin": {
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "role": self.relay_role,
+                "segment": self.segment_name,
+            },
+            "targetRoles": list(self.classifier_sync_target_roles),
+            "state": state_payload,
+        }
+
+    def ensure_classifier_sync_cassandra_session(self):
+        if not self.classifier_sync_uses_cassandra():
+            raise RuntimeError("classifier Cassandra backend is not enabled")
+        if not self.classifier_sync_cassandra_contact_points:
+            raise RuntimeError("no Cassandra contact points configured for classifier sync")
+        if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
+            raise RuntimeError("cassandra-driver is not available in the Conductor image")
+
+        with self.lock:
+            if self.classifier_sync_cassandra_session is not None:
+                return self.classifier_sync_cassandra_session
+
+            cluster = Cluster(
+                contact_points=self.classifier_sync_cassandra_contact_points,
+                port=self.classifier_sync_cassandra_port,
+            )
+            session = cluster.connect()
+            keyspace = self.classifier_sync_cassandra_keyspace
+            table = self.classifier_sync_cassandra_table
+            replication_factor = max(1, self.classifier_sync_cassandra_replication_factor)
+            session.execute(
+                f"""
+                create keyspace if not exists {keyspace}
+                with replication = {{
+                    'class': 'SimpleStrategy',
+                    'replication_factor': {replication_factor}
+                }}
+                """
+            )
+            session.set_keyspace(keyspace)
+            session.execute(
+                f"""
+                create table if not exists {table} (
+                    scope text primary key,
+                    published_at bigint,
+                    origin_participant text,
+                    state_hash text,
+                    payload text
+                )
+                """
+            )
+            self.classifier_sync_cassandra_cluster = cluster
+            self.classifier_sync_cassandra_session = session
+            return session
+
+    def read_shared_classifier_state(self):
+        session = self.ensure_classifier_sync_cassandra_session()
+        statement = SimpleStatement(
+            (
+                f"select scope, published_at, origin_participant, state_hash, payload "
+                f"from {self.classifier_sync_cassandra_table} where scope = %s"
+            ),
+            consistency_level=ConsistencyLevel.QUORUM,
+        )
+        row = session.execute(statement, (self.classifier_sync_scope,)).one()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row.payload or "{}")
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(f"invalid shared classifier sync payload: {error}") from error
+        payload_hash = ((payload or {}).get("hash") or "").strip()
+        expected_hash = (row.state_hash or "").strip()
+        if expected_hash and payload_hash and payload_hash != expected_hash:
+            raise RuntimeError(
+                "shared classifier sync payload hash mismatch: "
+                f"expected {expected_hash}, got {payload_hash}"
+            )
+        return {
+            "scope": (row.scope or "").strip(),
+            "publishedAt": int(row.published_at or 0),
+            "originParticipant": (row.origin_participant or "").strip(),
+            "stateHash": expected_hash or payload_hash,
+            "state": payload if isinstance(payload, dict) else {},
+        }
+
+    def wait_for_shared_classifier_state(self, received_published_at=0, timeout_seconds=15):
+        deadline = time.time() + max(1, int(timeout_seconds))
+        last_state = None
+        last_published_at = 0
+        while time.time() < deadline:
+            shared = self.read_shared_classifier_state()
+            if shared is not None:
+                shared_published_at = int(shared.get("publishedAt") or 0)
+                if not received_published_at or not shared_published_at or shared_published_at >= received_published_at:
+                    return shared
+                last_state = shared
+                last_published_at = shared_published_at
+            time.sleep(1)
+        if last_state is not None and received_published_at:
+            raise RuntimeError(
+                "shared classifier sync state is older than the received intent: "
+                f"{last_published_at} < {received_published_at}"
+            )
+        return last_state
+
+    def upsert_shared_classifier_state(self, state, published_at):
+        state_hash = ((state or {}).get("hash") or "").strip()
+        if not state_hash:
+            raise RuntimeError("classifier sync state is missing a hash")
+        session = self.ensure_classifier_sync_cassandra_session()
+        statement = SimpleStatement(
+            (
+                f"insert into {self.classifier_sync_cassandra_table} "
+                "(scope, published_at, origin_participant, state_hash, payload) "
+                "values (%s, %s, %s, %s, %s)"
+            ),
+            consistency_level=ConsistencyLevel.QUORUM,
+        )
+        session.execute(
+            statement,
+            (
+                self.classifier_sync_scope,
+                int(published_at or time.time()),
+                self.pod_name,
+                state_hash,
+                stable_json(state),
+            ),
+        )
+
     def publish_classifier_state(self):
         if (
             not self.classifier_sync_enabled
@@ -2674,19 +2870,10 @@ class RelayRuntime:
         if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
             version_at = now
 
-        payload = {
-            "apiVersion": "pe-k8s.puppet.com/v1alpha1",
-            "kind": "ConductorRelayClassifierState",
-            "publishedAt": version_at,
-            "origin": {
-                "participant": self.pod_name,
-                "namespace": self.pod_namespace,
-                "role": self.relay_role,
-                "segment": self.segment_name,
-            },
-            "targetRoles": list(self.classifier_sync_target_roles),
-            "state": state,
-        }
+        if self.classifier_sync_uses_cassandra():
+            self.upsert_shared_classifier_state(state, version_at)
+
+        payload = self.build_classifier_state_payload(state, version_at)
         self.channel.basic_publish(
             exchange=self.bundle["hub"]["exchanges"]["data"],
             routing_key=f"relay.classifier-state.{sanitize_fragment(self.pod_name)}",
@@ -2711,6 +2898,14 @@ class RelayRuntime:
         )
 
     def reconcile_classifier_state(self, state_payload, published_at, origin_participant):
+        if self.classifier_sync_uses_cassandra():
+            shared = self.wait_for_shared_classifier_state(published_at)
+            if shared is None:
+                raise RuntimeError("shared classifier sync state is missing from Cassandra")
+            state_payload = dict(shared.get("state") or {})
+            origin_participant = (shared.get("originParticipant") or "").strip() or origin_participant
+            published_at = int(shared.get("publishedAt") or 0) or int(published_at or time.time())
+
         desired_groups = []
         for raw_group in (state_payload.get("groups") or []):
             group = normalize_classifier_group(raw_group)
@@ -2858,18 +3053,33 @@ class RelayRuntime:
         if not desired_hash:
             raise RuntimeError("classifier sync payload is missing a hash")
 
-        has_all_nodes_root = any(
-            ((group or {}).get("id") or "").strip() == ALL_NODES_GROUP_ID
-            for group in (state_payload.get("groups") or [])
-        )
-        if not has_all_nodes_root:
-            log(
-                "Ignoring legacy classifier sync payload at "
-                f"{desired_hash[:12]} from {origin_participant}"
-            )
-            return
-
         published_at = int(payload.get("publishedAt") or 0)
+        if self.classifier_sync_uses_cassandra():
+            shared_state = self.wait_for_shared_classifier_state(published_at)
+            if shared_state is None:
+                raise RuntimeError("shared classifier sync state is missing from Cassandra")
+            shared_hash = (shared_state.get("stateHash") or "").strip()
+            if shared_hash:
+                desired_hash = shared_hash
+            published_at = int(shared_state.get("publishedAt") or 0) or published_at
+            origin_participant = (
+                (shared_state.get("originParticipant") or "").strip() or origin_participant
+            )
+            shared_payload = shared_state.get("state") or {}
+            if isinstance(shared_payload, dict):
+                state_payload = shared_payload
+        else:
+            has_all_nodes_root = any(
+                ((group or {}).get("id") or "").strip() == ALL_NODES_GROUP_ID
+                for group in (state_payload.get("groups") or [])
+            )
+            if not has_all_nodes_root:
+                log(
+                    "Ignoring legacy classifier sync payload at "
+                    f"{desired_hash[:12]} from {origin_participant}"
+                )
+                return
+
         current_state = self.classifier_sync_state_snapshot()
         current_desired_hash = (current_state.get("desiredHash") or "").strip()
         current_actual_hash = (current_state.get("actualHash") or "").strip()

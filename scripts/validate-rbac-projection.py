@@ -8,12 +8,16 @@ import uuid
 
 
 def run(args, *, input_text=None, timeout=90):
-    return subprocess.check_output(
+    completed = subprocess.run(
         args,
         input=input_text,
         text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         timeout=timeout,
-    ).strip()
+        check=True,
+    )
+    return completed.stdout.strip()
 
 
 def exec_sh(namespace, pod, container, script):
@@ -57,7 +61,14 @@ cat > /tmp/pe-k8s-token.json <<EOF
 EOF
 curl -sk --max-time 30 -H 'Content-Type: application/json' --request POST https://127.0.0.1:4433/rbac-api/v1/auth/token --data @/tmp/pe-k8s-token.json
 """
-    return json.loads(exec_sh(namespace, pod, "puppetserver", script))["token"]
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        try:
+            response = exec_sh(namespace, pod, "puppetserver", script)
+            return json.loads(response)["token"]
+        except (subprocess.CalledProcessError, KeyError, json.JSONDecodeError):
+            time.sleep(2)
+    raise SystemExit(f"timed out issuing admin token on {pod}")
 
 
 def api_json(namespace, pod, token, method, path, payload=None):

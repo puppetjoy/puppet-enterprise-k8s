@@ -24,7 +24,9 @@ The repo currently exposes these top-level validation commands:
 | The control plane fails over cleanly | `make validate-pe-failover` | The harness deletes the active `pe` backend and observes a new active backend |
 | Code deploy converges through the control plane | `make validate-pe-failover` | The harness completes a `puppet code deploy` step before and after failover |
 | Catalog traffic survives failover | `make validate-pe-failover` | Test agent runs succeed through `pe-compiler.eyrie` before and after failover |
+| Managed classifier groups converge across replicas | `make validate-pe-failover` | The harness creates a temporary node group on one `pe` replica, sees it on the peer, then verifies the delete converges too |
 | Orchestration survives failover | `make validate-pe-failover` | Task and plan runs succeed before and after failover |
+| Managed RBAC state converges across replicas | `make validate-pe-failover` | The harness creates a temporary user on one `pe` replica, sees it on the peer, and authenticates that user there |
 | Persisted orchestration job history survives replica changes | `make validate-pe-failover` | The harness creates a Puppet job on one `pe` replica and reads it back from another |
 | Fresh enrollment and signing work | `make validate-pe-failover` | A new test agent cert is requested, signed, and used successfully |
 | CA revocation propagates to compilers | `make validate-pe-failover` | The revoked test cert is rejected through `pe-compiler.eyrie` |
@@ -38,15 +40,17 @@ The current HA harness exercises:
 1. Console reachability
 2. Code deployment
 3. Agent run through the compiler front door
-4. Task execution
-5. Plan execution
-6. Cross-replica Puppet job history visibility
-7. Fresh agent enrollment and signing
-8. Control-plane failover
-9. Post-failover revalidation
-10. Revoke and clean
-11. CRL pickup and revoked-cert rejection
-12. Standby re-entry and post-failover job history visibility
+4. Managed classifier projection across replicas
+5. Task execution
+6. Plan execution
+7. Managed RBAC projection across replicas
+8. Cross-replica Puppet job history visibility
+9. Fresh agent enrollment and signing
+10. Control-plane failover
+11. Post-failover revalidation
+12. Revoke and clean
+13. CRL pickup and revoked-cert rejection
+14. Standby re-entry, then post-failover classifier, RBAC, and job-history visibility
 
 ## Notes
 

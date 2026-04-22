@@ -235,6 +235,10 @@ orchestration state.
 
 The current implementation:
 
+- can publish the filtered managed classifier graph into Cassandra as durable
+  shared Conductor state
+- uses Fabric for convergence signals while peer `pe` replicas rehydrate
+  their own local classifier trees from that Cassandra-backed graph projection
 - can publish persisted `pe-inventory` and managed `pe-orchestrator` state into Cassandra as durable shared control-plane state
 - uses Fabric for convergence signals while peer `pe` replicas rehydrate their own local `pe-inventory` and `pe-orchestrator` databases from Cassandra-backed state
 - still reserves per-replica sequence residues so local PE databases stay safe for new inserts after rehydration

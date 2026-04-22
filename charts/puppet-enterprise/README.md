@@ -55,6 +55,7 @@ most important values are:
 | `conductor.enabled` | Enable participant onboarding and trust integration |
 | `conductor.sharedState.cassandra.serviceName` | Default Cassandra Service name used when per-domain contact points are not set |
 | `conductor.relay.*` | Enable replicated control-plane state and front-door gating |
+| `conductor.relay.classifierSync.*` | Configure the filtered shared classifier graph, including the Cassandra backend |
 | `conductor.relay.rbacSync.*` | Configure Cassandra-backed sync for the managed RBAC graph |
 | `conductor.relay.rbacTokenSync.*` | Configure Cassandra-backed sync for normal RBAC tokens and shared auth material |
 | `conductor.relay.orchestrationSync.*` | Configure persisted orchestration job-state sync, including the Cassandra backend |

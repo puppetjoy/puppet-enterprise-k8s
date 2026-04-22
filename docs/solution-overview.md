@@ -101,6 +101,8 @@ flowchart TB
 The current replicated state includes:
 
 - filtered user-visible classification
+- the filtered managed classifier graph can move through a Cassandra-backed
+  Conductor shared-state path
 - RBAC and local-auth managed state
 - login-session handoff can move through a Cassandra-backed Conductor store
   instead of direct peer database writes

@@ -184,6 +184,12 @@ When `conductor.relay.classifierSync.enabled=true`:
 - PE-owned local infrastructure groups such as `PE Infrastructure` stay outside the replicated domain
 - relay readiness can fail if that managed classifier domain is stale or not converged for the local replica
 
+When the Cassandra backend is enabled for `classifierSync`, Relay treats the
+filtered managed classifier domain as shared Conductor state. Fabric then
+carries convergence intent while peer `pe` replicas rehydrate their local PE
+classifier trees from the Cassandra-backed graph projection instead of taking
+the peer payload itself as authority.
+
 When `conductor.relay.rbacSync.enabled=true`:
 
 - control-plane relays share console auth material so locally issued RBAC tokens can validate on peer `pe` replicas
@@ -219,7 +225,7 @@ That gives the release a real Fabric membership model without shared storage or 
 The repo now also carries explicit operator validation helpers:
 
 - `scripts/pe-frontdoor-status.sh` prints the selected `service/pe` backend and the per-pod front-door annotations
-- `scripts/validate-pe-failover.sh` runs a live failover exercise against the current release by checking the login page, code deploy, orchestration task/plan execution, and agent catalog flow before and after deleting the selected `pe` pod
+- `scripts/validate-pe-failover.sh` runs a live failover exercise against the current release by checking the login page, code deploy, classifier and RBAC projection, orchestration task/plan execution, job history, and agent catalog flow before and after deleting the selected `pe` pod
 
 CA, classification, code-deploy intent, RBAC/local-auth, and managed orchestration job state are now in place, but the browser console, PCP/orchestration path, and compiler file-sync path are intentionally treated as stable-backend traffic through selector-backed `service/pe`. Current evidence indicates that `pe-inventory` backs saved connection inventory such as `/connections`, `/query`, and `/overwrite-connections`, not live PCP broker presence, so an empty `pe-inventory` database during certname-driven task and plan validation is expected. The open orchestration question is broader PCP mediation and any additional inventory surfaces that should converge beyond those saved connection records.
 

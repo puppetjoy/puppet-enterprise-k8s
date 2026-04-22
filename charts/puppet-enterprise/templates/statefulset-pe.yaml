@@ -622,6 +622,8 @@ spec:
               value: {{ ternary "true" "false" .Values.conductor.relay.classifierSync.enabled | quote }}
             - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_SERVICE_HOST
               value: {{ include "pe.identity" . | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_BACKEND
+              value: {{ .Values.conductor.relay.classifierSync.backend | quote }}
             - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_TARGET_ROLES
               value: {{ join "," .Values.conductor.relay.classifierSync.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_USERNAME
@@ -632,6 +634,16 @@ spec:
               value: {{ .Values.conductor.relay.classifierSync.auth.tokenLifetime | quote }}
             - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_TOKEN_LABEL
               value: {{ .Values.conductor.relay.classifierSync.auth.tokenLabel | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_CASSANDRA_CONTACT_POINTS
+              value: {{ include "pe.conductorSharedStateContactPointsCsv" (dict "root" . "points" .Values.conductor.relay.classifierSync.cassandra.contactPoints) | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_CASSANDRA_PORT
+              value: {{ .Values.conductor.relay.classifierSync.cassandra.port | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_CASSANDRA_KEYSPACE
+              value: {{ .Values.conductor.relay.classifierSync.cassandra.keyspace | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_CASSANDRA_TABLE
+              value: {{ .Values.conductor.relay.classifierSync.cassandra.table | quote }}
+            - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_CASSANDRA_REPLICATION_FACTOR
+              value: {{ .Values.conductor.relay.classifierSync.cassandra.replicationFactor | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_ENABLED
               value: {{ ternary "true" "false" .Values.conductor.relay.rbacSync.enabled | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_BACKEND

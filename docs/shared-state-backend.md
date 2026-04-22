@@ -94,9 +94,6 @@ These domains already have a better shape and should stay that way:
   - file and bundle convergence, not relational replay
 - code deployment
   - deploy intent and convergence state
-- classifier semantics
-  - logical graph/domain modelling, even if Cassandra eventually stores the
-    authoritative graph
 - live PCP broker sessions
   - runtime locality, not durable shared authority
 
@@ -128,7 +125,8 @@ The recommended order is:
    - now available on the Cassandra-backed path
 
 4. classifier shared graph
-   - move from projected peer replay toward Conductor-owned authoritative graph
+   - now available on the Cassandra-backed path for the filtered managed
+     classifier domain rooted at `All Nodes`
 
 5. RBAC and local auth
    - now available on the Cassandra-backed path for the managed RBAC domain,

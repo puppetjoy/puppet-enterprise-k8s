@@ -185,6 +185,7 @@ conductor:
         useClientSsl: true
     classifierSync:
       enabled: false
+      backend: cassandra
       targetRoles:
         - control-plane
       auth:
@@ -192,6 +193,12 @@ conductor:
         password: ""
         tokenLifetime: 15m
         tokenLabel: pe-k8s-conductor-classifier-sync
+      cassandra:
+        contactPoints: []
+        port: 9042
+        keyspace: conductor_classifier
+        table: classifier_state
+        replicationFactor: 3
     rbacSync:
       enabled: false
       backend: cassandra
