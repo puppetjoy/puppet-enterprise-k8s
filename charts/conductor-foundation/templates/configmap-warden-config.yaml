@@ -1,4 +1,4 @@
-{{- if .Values.warden.enabled }}
+{{- if eq (include "conductor.wardenEnabled" .) "true" }}
 {{- $config := dict
       "apiVersion" "pe-k8s/v1alpha1"
       "kind" "ConductorFabricConfig"

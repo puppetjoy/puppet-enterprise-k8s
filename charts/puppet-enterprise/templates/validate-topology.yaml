@@ -1,0 +1,12 @@
+{{- $controlPlaneReplicas := int .Values.controlPlane.replicaCount -}}
+{{- $compilerReplicas := int .Values.compilers.replicaCount -}}
+{{- $compilerPoolEnabled := and .Values.compilers.enabled (gt $compilerReplicas 0) -}}
+{{- if and .Values.compilers.enabled (lt $compilerReplicas 1) -}}
+{{ fail "compilers.replicaCount must be at least 1 when compilers.enabled=true" }}
+{{- end -}}
+{{- if and (not .Values.compilers.enabled) (gt $compilerReplicas 0) -}}
+{{ fail "compilers.replicaCount must be 0 when compilers.enabled=false" }}
+{{- end -}}
+{{- if and (gt $controlPlaneReplicas 1) (not $compilerPoolEnabled) -}}
+{{ fail "controlPlane.replicaCount > 1 requires compilers.enabled=true and compilers.replicaCount > 0" }}
+{{- end -}}

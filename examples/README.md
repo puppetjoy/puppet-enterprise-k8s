@@ -14,4 +14,7 @@ cp examples/values-agent.example.yaml local/values-agent.yaml
 cp examples/values-conductor.example.yaml local/values-conductor.yaml
 ```
 
+`local/values-conductor.yaml` is only required for the supported HA topologies
+with multiple `pe` replicas and one or more `pe-compiler` replicas.
+
 The `local/` directory stays operator-specific and is ignored by Git.

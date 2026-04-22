@@ -19,7 +19,7 @@ The repo currently exposes these top-level validation commands:
 | Claim | Tooling | What success looks like |
 | --- | --- | --- |
 | Local build/deploy inputs are present | `make check-current-state PE_VERSION=<version>` | Local values files, SSH key, and installer tarball are found |
-| The charts deploy from repo-managed workflows | `make deploy-conductor && make deploy-pe && make deploy-agent` | Helm upgrades/installations succeed |
+| The charts deploy from repo-managed workflows | `make deploy-pe && make deploy-agent` | Helm upgrades/installations succeed, and `deploy-pe` brings in the Conductor foundation automatically when the topology requires it |
 | `service/pe` has a clear active backend | `make pe-frontdoor-status` | One active `pe` backend is shown and another replica is eligible or standby |
 | The control plane fails over cleanly | `make validate-pe-failover` | The harness deletes the active `pe` backend and observes a new active backend |
 | Code deploy converges through the control plane | `make validate-pe-failover` | The harness completes a `puppet code deploy` step before and after failover |

@@ -45,6 +45,14 @@ help:
 	@echo "  make deploy-conductor"
 	@echo "  make deploy"
 	@echo ""
+	@echo "Supported PE topologies:"
+	@echo "  1. single pe"
+	@echo "  2. single pe + single compiler"
+	@echo "  3. single pe + multiple compilers"
+	@echo "  4. multiple pe + single compiler"
+	@echo "  5. multiple pe + multiple compilers"
+	@echo "Conductor foundation is derived automatically from $(PE_VALUES_FILE)."
+	@echo ""
 	@echo "Repo-local artifact paths:"
 	@echo "  installer: $(INSTALLERS_DIR)/puppet-enterprise-<version>-el-9-x86_64.tar.gz"
 	@echo "  pe values: $(PE_VALUES_FILE)"
@@ -150,7 +158,15 @@ push-conductor:
 
 check-current-state:
 	@missing=0; \
-	for path in "$(PE_VALUES_FILE)" "$(PE_AGENT_VALUES_FILE)" "$(CONDUCTOR_VALUES_FILE)" "$(R10K_DEPLOY_KEY_PATH)"; do \
+	if [ -f "$(PE_VALUES_FILE)" ]; then \
+		echo "[OK] $(PE_VALUES_FILE)"; \
+		eval "$$(python3 ./scripts/read-pe-topology.py "$(PE_VALUES_FILE)" --format shell)"; \
+		echo "[INFO] controlPlaneReplicaCount=$$PE_TOPOLOGY_CONTROL_PLANE_REPLICA_COUNT compilerReplicaCount=$$PE_TOPOLOGY_COMPILER_REPLICA_COUNT foundationRequired=$$PE_TOPOLOGY_FOUNDATION_REQUIRED"; \
+	else \
+		echo "[MISSING] $(PE_VALUES_FILE)"; \
+		missing=1; \
+	fi; \
+	for path in "$(PE_AGENT_VALUES_FILE)" "$(R10K_DEPLOY_KEY_PATH)"; do \
 		if [ -f "$$path" ]; then \
 			echo "[OK] $$path"; \
 		else \
@@ -158,6 +174,23 @@ check-current-state:
 			missing=1; \
 		fi; \
 	done; \
+	if [ -f "$(PE_VALUES_FILE)" ]; then \
+		eval "$$(python3 ./scripts/read-pe-topology.py "$(PE_VALUES_FILE)" --format shell)"; \
+		if [ "$$PE_TOPOLOGY_FOUNDATION_REQUIRED" = "true" ]; then \
+			if [ -f "$(CONDUCTOR_VALUES_FILE)" ]; then \
+				echo "[OK] $(CONDUCTOR_VALUES_FILE)"; \
+			else \
+				echo "[MISSING] $(CONDUCTOR_VALUES_FILE)"; \
+				missing=1; \
+			fi; \
+		else \
+			if [ -f "$(CONDUCTOR_VALUES_FILE)" ]; then \
+				echo "[OK] $(CONDUCTOR_VALUES_FILE)"; \
+			else \
+				echo "[OPTIONAL] $(CONDUCTOR_VALUES_FILE) (not required for selected topology)"; \
+			fi; \
+		fi; \
+	fi; \
 	if [ -n "$(PE_VERSION)" ]; then \
 		if [ -f "$(PE_INSTALLER_TAR_PATH)" ]; then \
 			echo "[OK] $(PE_INSTALLER_TAR_PATH)"; \
@@ -193,7 +226,7 @@ create-license-secret:
 		--from-file=license.txt="$(PE_LICENSE_PATH)" \
 		--dry-run=client -o yaml | kubectl apply -f -
 
-deploy-pe: create-r10k-secret
+deploy-pe: create-r10k-secret deploy-conductor
 	@if [ ! -f "$(PE_VALUES_FILE)" ]; then \
 		echo "ERROR: PE values file not found: $(PE_VALUES_FILE)"; \
 		exit 1; \
@@ -214,14 +247,25 @@ deploy-agent:
 		-f "$(PE_AGENT_VALUES_FILE)"
 
 deploy-conductor:
-	@if [ ! -f "$(CONDUCTOR_VALUES_FILE)" ]; then \
-		echo "ERROR: conductor values file not found: $(CONDUCTOR_VALUES_FILE)"; \
+	@if [ ! -f "$(PE_VALUES_FILE)" ]; then \
+		echo "ERROR: PE values file not found: $(PE_VALUES_FILE)"; \
 		exit 1; \
 	fi
+	@eval "$$(python3 ./scripts/read-pe-topology.py "$(PE_VALUES_FILE)" --format shell)"; \
+	extra_values_args=""; \
+	if [ -f "$(CONDUCTOR_VALUES_FILE)" ]; then \
+		extra_values_args="-f $(CONDUCTOR_VALUES_FILE)"; \
+	elif [ "$$PE_TOPOLOGY_FOUNDATION_REQUIRED" = "true" ]; then \
+		echo "ERROR: conductor values file not found: $(CONDUCTOR_VALUES_FILE)"; \
+		exit 1; \
+	fi; \
 	helm upgrade --install "$(CONDUCTOR_RELEASE)" charts/conductor-foundation \
 		--namespace "$(CONDUCTOR_NAMESPACE)" \
 		--create-namespace \
-		-f "$(CONDUCTOR_VALUES_FILE)"
+		$$extra_values_args \
+		--set foundation.mode=auto \
+		--set topology.controlPlaneReplicaCount="$$PE_TOPOLOGY_CONTROL_PLANE_REPLICA_COUNT" \
+		--set topology.compilerReplicaCount="$$PE_TOPOLOGY_COMPILER_REPLICA_COUNT"
 
 deploy: deploy-pe deploy-agent
 

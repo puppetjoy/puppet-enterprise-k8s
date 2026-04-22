@@ -28,7 +28,6 @@ controlPlane:
     provider: releaseRoot
 
 conductor:
-  enabled: true
   namespace: puppet
   resourcePrefix: conductor
   segmentName: production
@@ -36,22 +35,6 @@ conductor:
     image:
       repository: registry.example.test/pe-k8s-conductor
       tag: "0.1.47"
-  relay:
-    enabled: true
-    caSync:
-      enabled: true
-    commandProxy:
-      enabled: true
-    codeDeploy:
-      enabled: true
-    classifierSync:
-      enabled: true
-    rbacSync:
-      enabled: true
-    orchestrationSync:
-      enabled: true
-  gateway:
-    enabled: true
 
 services:
   pe:

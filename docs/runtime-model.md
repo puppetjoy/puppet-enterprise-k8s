@@ -155,7 +155,7 @@ problem.
 
 The current Conductor foundation slice is release-topology-driven. Warden expands stable workload sets inside a release, including the `pe` control-plane `StatefulSet` and the compiler `StatefulSet`, into participant identities and onboarding bundles. That is intentionally different from treating separate Helm releases as static peers.
 
-When `conductor.enabled=true` on the PE chart:
+When the selected PE topology enables Conductor participation:
 
 - each `pe` and compiler pod gets a `conductor-participant` sidecar
 - the sidecar derives its participant identity from the StatefulSet pod name
@@ -166,7 +166,7 @@ When `conductor.enabled=true` on the PE chart:
 - participant sidecars install the current trust bundle into a pod-local directory for later Relay and Gateway consumption
 - participant readiness can remove a pod from `service/pe` or `service/pe-compiler` when onboarding, Fabric connectivity, or trust-bundle currency falls out of policy
 
-When `conductor.relay.enabled=true` as well:
+When that topology also enables Relay:
 
 - each `pe` and compiler pod also gets a `conductor-relay` sidecar from the same Conductor image
 - Relay reuses the pod's onboarding Secret, but consumes Fabric on its own durable `relay.<pod>` queue

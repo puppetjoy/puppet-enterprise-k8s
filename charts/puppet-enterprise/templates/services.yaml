@@ -28,10 +28,10 @@ spec:
       targetPort: puppetserver
     - name: pcp-broker
       port: 8142
-      targetPort: {{ ternary "gw-pcp" "orch-pcp" (and .Values.conductor.enabled .Values.conductor.gateway.enabled .Values.conductor.gateway.pcp.enabled) }}
+      targetPort: {{ ternary "gw-pcp" "orch-pcp" (and (eq (include "pe.conductorGatewayEnabled" .) "true") .Values.conductor.gateway.pcp.enabled) }}
     - name: orchestration
       port: 8143
-      targetPort: {{ ternary "gw-orch" "orch-svc" (and .Values.conductor.enabled .Values.conductor.gateway.enabled .Values.conductor.gateway.orchestration.enabled) }}
+      targetPort: {{ ternary "gw-orch" "orch-svc" (and (eq (include "pe.conductorGatewayEnabled" .) "true") .Values.conductor.gateway.orchestration.enabled) }}
     - name: host-action
       port: 8147
       targetPort: hac-svc
@@ -85,10 +85,10 @@ spec:
       targetPort: puppetserver
     - name: pcp-broker
       port: 8142
-      targetPort: {{ ternary "gw-pcp" "orch-pcp" (and .Values.conductor.enabled .Values.conductor.gateway.enabled .Values.conductor.gateway.pcp.enabled) }}
+      targetPort: {{ ternary "gw-pcp" "orch-pcp" (and (eq (include "pe.conductorGatewayEnabled" .) "true") .Values.conductor.gateway.pcp.enabled) }}
     - name: orchestration
       port: 8143
-      targetPort: {{ ternary "gw-orch" "orch-svc" (and .Values.conductor.enabled .Values.conductor.gateway.enabled .Values.conductor.gateway.orchestration.enabled) }}
+      targetPort: {{ ternary "gw-orch" "orch-svc" (and (eq (include "pe.conductorGatewayEnabled" .) "true") .Values.conductor.gateway.orchestration.enabled) }}
     - name: host-action
       port: 8147
       targetPort: hac-svc

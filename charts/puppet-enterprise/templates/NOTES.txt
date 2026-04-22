@@ -15,7 +15,7 @@ This chart uses non-shared per-replica storage for:
   - /opt/puppetlabs
   - /var/lib/pe-k8s
 
-{{- if .Values.conductor.enabled }}
+{{- if eq (include "pe.conductorEnabled" .) "true" }}
 Conductor integration:
   Segment: {{ .Values.conductor.segmentName }}
   Onboarding Namespace: {{ include "pe.conductorNamespace" . }}

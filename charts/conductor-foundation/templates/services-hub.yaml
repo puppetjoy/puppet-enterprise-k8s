@@ -1,3 +1,4 @@
+{{- if eq (include "conductor.foundationEnabled" .) "true" }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -40,3 +41,4 @@ spec:
     - name: management
       port: {{ .Values.hub.service.managementPort }}
       targetPort: management
+{{- end }}

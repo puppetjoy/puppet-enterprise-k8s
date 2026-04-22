@@ -9,6 +9,13 @@ affinity: {}
 
 tolerations: []
 
+foundation:
+  mode: auto
+
+topology:
+  controlPlaneReplicaCount: 1
+  compilerReplicaCount: 0
+
 serviceAccount:
   create: true
   name: ""
@@ -50,7 +57,7 @@ warden:
   resources: {}
 
 cassandra:
-  enabled: false
+  enabled: true
   image:
     repository: docker.io/library/cassandra
     tag: "5.0"

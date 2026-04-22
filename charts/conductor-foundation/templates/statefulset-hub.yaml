@@ -1,3 +1,4 @@
+{{- if eq (include "conductor.foundationEnabled" .) "true" }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -103,3 +104,4 @@ spec:
         storageClassName: {{ .Values.hub.persistence.storageClassName }}
         {{- end }}
   {{- end }}
+{{- end }}

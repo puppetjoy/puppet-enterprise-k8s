@@ -58,6 +58,22 @@ Multi-replica control planes currently use one selected `service/pe` backend
 at a time. That is the current HA contract. The compiler pool remains the main
 catalog scale surface.
 
+## Supported Deployment Patterns
+
+The charts are intended to respond correctly by default for these patterns:
+
+- single `pe`
+- single `pe` with one `pe-compiler`
+- single `pe` with multiple `pe-compiler` replicas
+- multiple `pe` replicas with one `pe-compiler`
+- multiple `pe` replicas with multiple `pe-compiler` replicas
+
+The two multi-`pe` patterns are the current HA topologies. In those cases, the
+PE chart enables Conductor participation automatically and the Conductor
+foundation chart is expected as a supporting release. For the
+single-control-plane patterns, those ancillary Conductor services are not
+required.
+
 ## Current Shared-State Model
 
 These control-plane domains now use Cassandra-backed shared state:
@@ -97,7 +113,7 @@ Repo-local operator inputs typically live in:
 
 - `local/values-pe.yaml`
 - `local/values-agent.yaml`
-- `local/values-conductor.yaml`
+- `local/values-conductor.yaml` for the multi-`pe` HA topologies
 - `local/keys/id-control_repo.ed25519`
 - `local/license.txt` if you need to load a PE license from a Secret
 
@@ -162,10 +178,13 @@ CONTAINER_ENGINE=podman make push-conductor \
 ### 3. Deploy
 
 ```bash
-make deploy-conductor
 make deploy-pe
 make deploy-agent
 ```
+
+`make deploy-pe` now runs `deploy-conductor` first. The foundation chart
+derives its topology from `local/values-pe.yaml` and only renders the
+Conductor release when the selected PE topology needs it.
 
 These targets deploy from repo-local values files under `local/`. The tracked
 files under `examples/` are only the starting point.

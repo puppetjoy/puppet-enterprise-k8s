@@ -33,8 +33,137 @@ pe
 {{- printf "%s-headless" (include "pe.controlPlaneStatefulSetName" .) -}}
 {{- end -}}
 
-{{- define "pe.frontDoorSelectorEnabled" -}}
+{{- define "pe.compilerPoolEnabled" -}}
+{{- if and .Values.compilers.enabled (gt (int .Values.compilers.replicaCount) 0) -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.replicatedControlPlaneEnabled" -}}
 {{- if gt (int .Values.controlPlane.replicaCount) 1 -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.conductorMode" -}}
+{{- default "auto" .Values.conductor.mode -}}
+{{- end -}}
+
+{{- define "pe.conductorEnabled" -}}
+{{- $mode := include "pe.conductorMode" . -}}
+{{- if eq $mode "enabled" -}}
+true
+{{- else if eq $mode "disabled" -}}
+false
+{{- else if eq $mode "manual" -}}
+{{- ternary "true" "false" .Values.conductor.enabled -}}
+{{- else if eq (include "pe.replicatedControlPlaneEnabled" .) "true" -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.conductorRelayEnabled" -}}
+{{- if and (eq (include "pe.conductorEnabled" .) "true") .Values.conductor.relay.enabled -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.conductorGatewayEnabled" -}}
+{{- if and (eq (include "pe.conductorEnabled" .) "true") .Values.conductor.gateway.enabled -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.conductorRelayCommandProxyEnabled" -}}
+{{- if and (eq (include "pe.conductorRelayEnabled" .) "true") .Values.conductor.relay.commandProxy.enabled -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.conductorRelayCodeDeployEnabled" -}}
+{{- if and (eq (include "pe.conductorRelayEnabled" .) "true") .Values.conductor.relay.codeDeploy.enabled -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.conductorRelayClassifierSyncEnabled" -}}
+{{- if and (eq (include "pe.conductorRelayEnabled" .) "true") .Values.conductor.relay.classifierSync.enabled -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.conductorRelayRbacSyncEnabled" -}}
+{{- if and (eq (include "pe.conductorRelayEnabled" .) "true") .Values.conductor.relay.rbacSync.enabled -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.conductorRelayRbacTokenSyncEnabled" -}}
+{{- if and (eq (include "pe.conductorRelayEnabled" .) "true") .Values.conductor.relay.rbacTokenSync.enabled -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.conductorRelayOrchestrationSyncEnabled" -}}
+{{- if and (eq (include "pe.conductorRelayEnabled" .) "true") .Values.conductor.relay.orchestrationSync.enabled -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.conductorRelayInventorySyncEnabled" -}}
+{{- if and (eq (include "pe.conductorRelayEnabled" .) "true") .Values.conductor.relay.inventorySync.enabled -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.conductorRelayCaSyncEnabled" -}}
+{{- if and (eq (include "pe.conductorRelayEnabled" .) "true") .Values.conductor.relay.caSync.enabled -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.conductorRelayWritesEtc" -}}
+{{- if or
+    (eq (include "pe.conductorRelayCaSyncEnabled" .) "true")
+    (eq (include "pe.conductorRelayRbacSyncEnabled" .) "true")
+    (eq (include "pe.conductorRelayRbacTokenSyncEnabled" .) "true")
+    (eq (include "pe.conductorRelayOrchestrationSyncEnabled" .) "true")
+    (eq (include "pe.conductorRelayInventorySyncEnabled" .) "true")
+-}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "pe.frontDoorSelectorEnabled" -}}
+{{- if and (eq (include "pe.replicatedControlPlaneEnabled" .) "true") (eq (include "pe.conductorEnabled" .) "true") -}}
 true
 {{- else -}}
 false

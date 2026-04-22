@@ -194,11 +194,11 @@ spec:
             - name: PE_K8S_COMPILER_HEADLESS_SERVICE
               value: {{ include "pe.compilerHeadlessServiceName" . | quote }}
             - name: PE_K8S_RELAY_COMMAND_PROXY_ENABLED
-              value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled .Values.conductor.relay.commandProxy.enabled) | quote }}
+              value: {{ include "pe.conductorRelayCommandProxyEnabled" . | quote }}
             - name: PE_K8S_RELAY_COMMAND_PROXY_PORT
               value: {{ .Values.conductor.relay.commandProxy.port | quote }}
             - name: PE_K8S_CODE_DEPLOY_HOOK_ENABLED
-              value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled .Values.conductor.relay.codeDeploy.enabled) | quote }}
+              value: {{ include "pe.conductorRelayCodeDeployEnabled" . | quote }}
             - name: PE_K8S_CODE_DEPLOY_HOOK_URL
               value: {{ printf "https://%s:%v%s" (include "pe.identity" .) .Values.conductor.relay.codeDeploy.hook.listenPort .Values.conductor.relay.codeDeploy.hook.path | quote }}
             - name: PE_K8S_CODE_DEPLOY_HOOK_USE_CLIENT_SSL
@@ -207,7 +207,7 @@ spec:
             - name: PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME
               value: {{ include "pe.controlPlaneCaBundleSecretName" . | quote }}
             {{- end }}
-            {{- if .Values.conductor.enabled }}
+            {{- if eq (include "pe.conductorEnabled" .) "true" }}
             - name: PE_CONTROL_PLANE_RUNTIME_TRUST_BUNDLE_SECRET_NAME
               value: {{ include "pe.conductorTrustBundleSecretName" . | quote }}
             {{- end }}
@@ -309,7 +309,7 @@ spec:
             - name: PE_K8S_COMPILER_HEADLESS_SERVICE
               value: {{ include "pe.compilerHeadlessServiceName" . | quote }}
             - name: PE_K8S_CONDUCTOR_RBAC_SYNC_ENABLED
-              value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled (or .Values.conductor.relay.rbacSync.enabled .Values.conductor.relay.rbacTokenSync.enabled)) | quote }}
+              value: {{ ternary "true" "false" (or (eq (include "pe.conductorRelayRbacSyncEnabled" .) "true") (eq (include "pe.conductorRelayRbacTokenSyncEnabled" .) "true")) | quote }}
             - name: PE_K8S_ORCHESTRATION_SERVICE_HOST
               value: {{ include "pe.identity" . | quote }}
           ports:
@@ -470,7 +470,7 @@ spec:
           resources:
 {{ toYaml .Values.controlPlane.resources.hostActionCollector | indent 12 }}
           volumeMounts: *controlPlaneMounts
-        {{- if .Values.conductor.enabled }}
+        {{- if eq (include "pe.conductorEnabled" .) "true" }}
         - name: conductor-participant
           image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
           imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
@@ -520,7 +520,7 @@ spec:
               readOnly: true
             - name: conductor-trust
               mountPath: {{ .Values.conductor.participant.trustOutputDir | quote }}
-        {{- if .Values.conductor.relay.enabled }}
+        {{- if eq (include "pe.conductorRelayEnabled" .) "true" }}
         - name: conductor-relay
           image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
           imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
@@ -563,7 +563,7 @@ spec:
             - name: CONDUCTOR_RELAY_PARTICIPANT_STATUS_MAX_AGE_SECONDS
               value: {{ .Values.conductor.participant.statusMaxAgeSeconds | quote }}
             - name: CONDUCTOR_RELAY_CA_SYNC_ENABLED
-              value: {{ ternary "true" "false" .Values.conductor.relay.caSync.enabled | quote }}
+              value: {{ include "pe.conductorRelayCaSyncEnabled" . | quote }}
             - name: CONDUCTOR_RELAY_CA_SYNC_DIR
               value: {{ .Values.conductor.relay.caSync.stateDir | quote }}
             - name: CONDUCTOR_RELAY_CA_SYNC_PUBLISH_INTERVAL_SECONDS
@@ -573,7 +573,7 @@ spec:
             - name: CONDUCTOR_RELAY_CA_SYNC_TARGET_ROLES
               value: {{ join "," .Values.conductor.relay.caSync.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_COMMAND_PROXY_ENABLED
-              value: {{ ternary "true" "false" .Values.conductor.relay.commandProxy.enabled | quote }}
+              value: {{ include "pe.conductorRelayCommandProxyEnabled" . | quote }}
             - name: CONDUCTOR_RELAY_COMMAND_PROXY_BIND_HOST
               value: {{ .Values.conductor.relay.commandProxy.bindHost | quote }}
             - name: CONDUCTOR_RELAY_COMMAND_PROXY_PORT
@@ -593,7 +593,7 @@ spec:
             - name: CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_REPLICATION_FACTOR
               value: {{ .Values.conductor.relay.authBarrier.cassandra.replicationFactor | quote }}
             - name: CONDUCTOR_RELAY_CODE_DEPLOY_ENABLED
-              value: {{ ternary "true" "false" .Values.conductor.relay.codeDeploy.enabled | quote }}
+              value: {{ include "pe.conductorRelayCodeDeployEnabled" . | quote }}
             - name: CONDUCTOR_RELAY_CODE_DEPLOY_STATUS_POLL_INTERVAL_SECONDS
               value: {{ .Values.conductor.relay.codeDeploy.statusPollIntervalSeconds | quote }}
             - name: CONDUCTOR_RELAY_CODE_DEPLOY_REQUEST_TIMEOUT_SECONDS
@@ -617,7 +617,7 @@ spec:
             - name: CONDUCTOR_RELAY_CODE_DEPLOY_HOOK_PATH
               value: {{ .Values.conductor.relay.codeDeploy.hook.path | quote }}
             - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_ENABLED
-              value: {{ ternary "true" "false" .Values.conductor.relay.classifierSync.enabled | quote }}
+              value: {{ include "pe.conductorRelayClassifierSyncEnabled" . | quote }}
             - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_SERVICE_HOST
               value: {{ include "pe.identity" . | quote }}
             - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_TARGET_ROLES
@@ -641,7 +641,7 @@ spec:
             - name: CONDUCTOR_RELAY_CLASSIFIER_SYNC_CASSANDRA_REPLICATION_FACTOR
               value: {{ .Values.conductor.relay.classifierSync.cassandra.replicationFactor | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_ENABLED
-              value: {{ ternary "true" "false" .Values.conductor.relay.rbacSync.enabled | quote }}
+              value: {{ include "pe.conductorRelayRbacSyncEnabled" . | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_TARGET_ROLES
               value: {{ join "," .Values.conductor.relay.rbacSync.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES
@@ -657,7 +657,7 @@ spec:
             - name: CONDUCTOR_RELAY_RBAC_SYNC_CASSANDRA_REPLICATION_FACTOR
               value: {{ .Values.conductor.relay.rbacSync.cassandra.replicationFactor | quote }}
             - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_ENABLED
-              value: {{ ternary "true" "false" .Values.conductor.relay.rbacTokenSync.enabled | quote }}
+              value: {{ include "pe.conductorRelayRbacTokenSyncEnabled" . | quote }}
             - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_TARGET_ROLES
               value: {{ join "," .Values.conductor.relay.rbacTokenSync.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_CONTACT_POINTS
@@ -671,7 +671,7 @@ spec:
             - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_REPLICATION_FACTOR
               value: {{ .Values.conductor.relay.rbacTokenSync.cassandra.replicationFactor | quote }}
             - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_ENABLED
-              value: {{ ternary "true" "false" .Values.conductor.relay.orchestrationSync.enabled | quote }}
+              value: {{ include "pe.conductorRelayOrchestrationSyncEnabled" . | quote }}
             - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_TARGET_ROLES
               value: {{ join "," .Values.conductor.relay.orchestrationSync.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_ORCHESTRATOR_CONF_PATH
@@ -691,7 +691,7 @@ spec:
             - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_CASSANDRA_REPLICATION_FACTOR
               value: {{ .Values.conductor.relay.orchestrationSync.cassandra.replicationFactor | quote }}
             - name: CONDUCTOR_RELAY_INVENTORY_SYNC_ENABLED
-              value: {{ ternary "true" "false" .Values.conductor.relay.inventorySync.enabled | quote }}
+              value: {{ include "pe.conductorRelayInventorySyncEnabled" . | quote }}
             - name: CONDUCTOR_RELAY_INVENTORY_SYNC_TARGET_ROLES
               value: {{ join "," .Values.conductor.relay.inventorySync.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_INVENTORY_SYNC_INVENTORY_CONF_PATH
@@ -717,7 +717,7 @@ spec:
           volumeMounts:
             - name: etc
               mountPath: /etc/puppetlabs
-              readOnly: {{ not (or .Values.conductor.relay.caSync.enabled .Values.conductor.relay.rbacSync.enabled .Values.conductor.relay.rbacTokenSync.enabled .Values.conductor.relay.orchestrationSync.enabled .Values.conductor.relay.inventorySync.enabled) }}
+              readOnly: {{ ne (include "pe.conductorRelayWritesEtc" .) "true" }}
             - name: opt
               mountPath: /opt/puppetlabs
               readOnly: true
@@ -727,7 +727,7 @@ spec:
             - name: conductor-relay
               mountPath: {{ .Values.conductor.relay.outputDir | quote }}
         {{- end }}
-        {{- if .Values.conductor.gateway.enabled }}
+        {{- if eq (include "pe.conductorGatewayEnabled" .) "true" }}
         - name: conductor-gateway
           image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
           imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
@@ -850,14 +850,14 @@ spec:
             name: {{ include "pe.fullname" . }}-conf
         - name: logs
           emptyDir: {}
-        {{- if .Values.conductor.enabled }}
+        {{- if eq (include "pe.conductorEnabled" .) "true" }}
         - name: conductor-trust
           emptyDir: {}
-        {{- if .Values.conductor.relay.enabled }}
+        {{- if eq (include "pe.conductorRelayEnabled" .) "true" }}
         - name: conductor-relay
           emptyDir: {}
         {{- end }}
-        {{- if .Values.conductor.gateway.enabled }}
+        {{- if eq (include "pe.conductorGatewayEnabled" .) "true" }}
         - name: conductor-gateway
           emptyDir: {}
         {{- end }}

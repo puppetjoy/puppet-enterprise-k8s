@@ -1,3 +1,4 @@
+{{- if eq (include "conductor.foundationEnabled" .) "true" }}
 Conductor foundation deployed.
 
 Hub service:
@@ -12,8 +13,11 @@ Warden publishes per-participant onboarding bundles into Secrets labeled:
 Warden also assembles segment trust bundles into Secrets labeled:
   pe-k8s.puppet.com/conductor=trust-bundle
 
-{{- if .Values.cassandra.enabled }}
+{{- if eq (include "conductor.cassandraEnabled" .) "true" }}
 
 Cassandra shared-state service:
   {{ include "conductor.cassandraServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.cassandra.service.cqlPort }}
+{{- end }}
+{{- else }}
+Conductor foundation is disabled for the selected topology.
 {{- end }}

@@ -1,4 +1,4 @@
-{{- if .Values.warden.enabled }}
+{{- if eq (include "conductor.wardenEnabled" .) "true" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

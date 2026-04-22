@@ -9,7 +9,7 @@ It is intentionally Kubernetes-first:
 - the control plane runs as a `StatefulSet`
 - compilers are optional and separate
 - multi-replica `pe` uses one stable `service/pe` backend at a time
-- Conductor integration is optional and controlled by values
+- Conductor participation is topology-driven by default
 
 ## Before You Install
 
@@ -52,7 +52,7 @@ most important values are:
 | `compilers.replicaCount` | Number of compiler replicas |
 | `compilers.resources.*` | Per-container compiler resources |
 | `storage.*` | Control-plane PVC sizing and storage classes |
-| `conductor.enabled` | Enable participant onboarding and trust integration |
+| `conductor.mode` | `auto`, `enabled`, or `disabled` control for Conductor participation |
 | `conductor.sharedState.cassandra.serviceName` | Default Cassandra Service name used when per-domain contact points are not set |
 | `conductor.relay.*` | Enable replicated control-plane state and front-door gating |
 | `conductor.relay.classifierSync.*` | Configure the filtered shared classifier graph, including the Cassandra backend |
@@ -69,8 +69,14 @@ most important values are:
 
 - `service/pe` is the control-plane front door.
 - `service/pe-compiler` is the compiler pool front door.
+- The supported topologies are:
+  single `pe`, single `pe` plus one compiler, single `pe` plus multiple
+  compilers, multiple `pe` plus one compiler, and multiple `pe` plus multiple
+  compilers.
 - In multi-replica mode, the chart currently favors stable-backend HA for
   `service/pe` over arbitrary pooled routing.
+- In `conductor.mode=auto`, single-control-plane topologies stay local-only and
+  the multi-`pe` topology enables Conductor participation automatically.
 - When the replicated shared-state domains are enabled, they use the
   Conductor Cassandra service by default unless contact points are set
   explicitly.

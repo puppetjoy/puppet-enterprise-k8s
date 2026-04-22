@@ -83,7 +83,7 @@ spec:
             - name: PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME
               value: {{ include "pe.controlPlaneCaBundleSecretName" . | quote }}
             {{- end }}
-            {{- if .Values.conductor.enabled }}
+            {{- if eq (include "pe.conductorEnabled" .) "true" }}
             - name: PE_CONTROL_PLANE_RUNTIME_TRUST_BUNDLE_SECRET_NAME
               value: {{ include "pe.conductorTrustBundleSecretName" . | quote }}
             {{- end }}
@@ -201,14 +201,14 @@ spec:
             - name: PE_K8S_COMPILER_PCP_BROKER_PORT
               value: {{ .Values.services.compilers.pcpPort | quote }}
             - name: PE_K8S_RELAY_COMMAND_PROXY_ENABLED
-              value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled .Values.conductor.relay.commandProxy.enabled) | quote }}
+              value: {{ include "pe.conductorRelayCommandProxyEnabled" . | quote }}
             - name: PE_K8S_RELAY_COMMAND_PROXY_PORT
               value: {{ .Values.conductor.relay.commandProxy.port | quote }}
             {{- if eq .Values.controlPlane.ca.provider "releaseRoot" }}
             - name: PE_CONTROL_PLANE_CA_BUNDLE_SECRET_NAME
               value: {{ include "pe.controlPlaneCaBundleSecretName" . | quote }}
             {{- end }}
-            {{- if .Values.conductor.enabled }}
+            {{- if eq (include "pe.conductorEnabled" .) "true" }}
             - name: PE_CONTROL_PLANE_RUNTIME_TRUST_BUNDLE_SECRET_NAME
               value: {{ include "pe.conductorTrustBundleSecretName" . | quote }}
             {{- end }}
@@ -246,7 +246,7 @@ spec:
               mountPath: /var/lib/pe-k8s
             - name: logs
               mountPath: /var/log/puppetlabs
-        {{- if .Values.conductor.enabled }}
+        {{- if eq (include "pe.conductorEnabled" .) "true" }}
         - name: conductor-participant
           image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
           imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
@@ -289,7 +289,7 @@ spec:
           volumeMounts:
             - name: conductor-trust
               mountPath: {{ .Values.conductor.participant.trustOutputDir | quote }}
-        {{- if .Values.conductor.relay.enabled }}
+        {{- if eq (include "pe.conductorRelayEnabled" .) "true" }}
         - name: conductor-relay
           image: "{{ .Values.conductor.participant.image.repository }}:{{ .Values.conductor.participant.image.tag }}"
           imagePullPolicy: {{ .Values.conductor.participant.image.pullPolicy }}
@@ -332,7 +332,7 @@ spec:
             - name: CONDUCTOR_RELAY_PARTICIPANT_STATUS_MAX_AGE_SECONDS
               value: {{ .Values.conductor.participant.statusMaxAgeSeconds | quote }}
             - name: CONDUCTOR_RELAY_COMMAND_PROXY_ENABLED
-              value: {{ ternary "true" "false" .Values.conductor.relay.commandProxy.enabled | quote }}
+              value: {{ include "pe.conductorRelayCommandProxyEnabled" . | quote }}
             - name: CONDUCTOR_RELAY_COMMAND_PROXY_BIND_HOST
               value: {{ .Values.conductor.relay.commandProxy.bindHost | quote }}
             - name: CONDUCTOR_RELAY_COMMAND_PROXY_PORT
@@ -363,10 +363,10 @@ spec:
       volumes:
         - name: logs
           emptyDir: {}
-        {{- if .Values.conductor.enabled }}
+        {{- if eq (include "pe.conductorEnabled" .) "true" }}
         - name: conductor-trust
           emptyDir: {}
-        {{- if .Values.conductor.relay.enabled }}
+        {{- if eq (include "pe.conductorRelayEnabled" .) "true" }}
         - name: conductor-relay
           emptyDir: {}
         {{- end }}
