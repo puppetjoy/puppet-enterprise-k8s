@@ -1241,10 +1241,7 @@ class LocalAuthBarrierHandler(BaseHTTPRequestHandler):
 
         try:
             if self.command == "GET":
-                if self.server.runtime.auth_barrier_loginsession_uses_cassandra():
-                    payload = self.server.runtime.read_shared_loginsession(session_id)
-                else:
-                    payload = self.server.runtime.read_local_loginsession(session_id)
+                payload = self.server.runtime.read_shared_loginsession(session_id)
                 if payload is None:
                     self.text_response(404, "loginsession not found")
                     return
@@ -1258,16 +1255,10 @@ class LocalAuthBarrierHandler(BaseHTTPRequestHandler):
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     self.text_response(400, "invalid JSON body")
                     return
-                if self.server.runtime.auth_barrier_loginsession_uses_cassandra():
-                    self.server.runtime.upsert_shared_loginsession(
-                        payload,
-                        expected_session_id=session_id,
-                    )
-                else:
-                    self.server.runtime.upsert_local_loginsession(
-                        payload,
-                        expected_session_id=session_id,
-                    )
+                self.server.runtime.upsert_shared_loginsession(
+                    payload,
+                    expected_session_id=session_id,
+                )
                 self.json_response(200, {"id": session_id, "status": "ok"})
                 return
 
@@ -1525,7 +1516,6 @@ class RelayRuntime:
             default=DEFAULT_CLASSIFIER_TARGET_ROLES,
         )
         self.classifier_sync_scope = DEFAULT_CLASSIFIER_SYNC_SCOPE
-        self.classifier_sync_backend = "cassandra" if self.classifier_sync_enabled else ""
         self.classifier_sync_state_path = os.path.join(
             self.output_dir,
             DEFAULT_CLASSIFIER_SYNC_STATE_FILENAME,
@@ -1557,7 +1547,6 @@ class RelayRuntime:
             default=DEFAULT_RBAC_TARGET_ROLES,
         )
         self.rbac_sync_scope = DEFAULT_RBAC_SYNC_SCOPE
-        self.rbac_sync_backend = "cassandra" if self.rbac_sync_enabled else ""
         self.rbac_sync_state_path = os.path.join(
             self.output_dir,
             DEFAULT_RBAC_SYNC_STATE_FILENAME,
@@ -1662,7 +1651,6 @@ class RelayRuntime:
             default=DEFAULT_ORCHESTRATION_TARGET_ROLES,
         )
         self.orchestration_sync_scope = DEFAULT_ORCHESTRATION_SYNC_SCOPE
-        self.orchestration_sync_backend = "cassandra" if self.orchestration_sync_enabled else ""
         self.orchestration_sync_state_path = os.path.join(
             self.output_dir,
             DEFAULT_ORCHESTRATION_SYNC_STATE_FILENAME,
@@ -1774,7 +1762,6 @@ class RelayRuntime:
             "CONDUCTOR_RELAY_AUTH_BARRIER_WAIT_TIMEOUT_SECONDS",
             20,
         )
-        self.auth_barrier_loginsession_backend = "cassandra" if self.auth_barrier_enabled else ""
         self.auth_barrier_loginsession_cassandra_contact_points = env_csv(
             "CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_CONTACT_POINTS",
         )
@@ -1988,7 +1975,7 @@ class RelayRuntime:
             "codeDeployEnvironments": {},
             "classifierSyncEnabled": self.classifier_sync_enabled,
             "classifierSyncReady": not self.classifier_sync_enabled,
-            "classifierSyncBackend": self.classifier_sync_backend if self.classifier_sync_enabled else "",
+            "classifierSyncBackend": "cassandra" if self.classifier_sync_enabled else "",
             "classifierSyncServiceHost": self.classifier_sync_service_host if self.classifier_sync_enabled else "",
             "classifierSyncTargetRoles": list(self.classifier_sync_target_roles),
             "classifierSyncScope": self.classifier_sync_scope if self.classifier_sync_enabled else "",
@@ -2004,7 +1991,7 @@ class RelayRuntime:
             "classifierSyncLastError": "",
             "rbacSyncEnabled": self.rbac_sync_enabled,
             "rbacSyncReady": not self.rbac_sync_enabled,
-            "rbacSyncBackend": self.rbac_sync_backend if self.rbac_sync_enabled else "",
+            "rbacSyncBackend": "cassandra" if self.rbac_sync_enabled else "",
             "rbacSyncTargetRoles": list(self.rbac_sync_target_roles),
             "rbacSyncScope": self.rbac_sync_scope if self.rbac_sync_enabled else "",
             "rbacSyncExcludedTokenLabelPrefixes": list(self.rbac_sync_excluded_token_label_prefixes),
@@ -2041,9 +2028,7 @@ class RelayRuntime:
             "rbacTokenSyncLastError": "",
             "orchestrationSyncEnabled": self.orchestration_sync_enabled,
             "orchestrationSyncReady": not self.orchestration_sync_enabled,
-            "orchestrationSyncBackend": (
-                self.orchestration_sync_backend if self.orchestration_sync_enabled else ""
-            ),
+            "orchestrationSyncBackend": "cassandra" if self.orchestration_sync_enabled else "",
             "orchestrationSyncTargetRoles": list(self.orchestration_sync_target_roles),
             "orchestrationSyncScope": self.orchestration_sync_scope if self.orchestration_sync_enabled else "",
             "orchestrationSyncState": "idle",
@@ -2278,9 +2263,7 @@ class RelayRuntime:
         self.status.update(
             {
                 "classifierSyncReady": ready,
-                "classifierSyncBackend": (
-                    self.classifier_sync_backend if self.classifier_sync_enabled else ""
-                ),
+                "classifierSyncBackend": "cassandra" if self.classifier_sync_enabled else "",
                 "classifierSyncServiceHost": (
                     self.classifier_sync_service_host if self.classifier_sync_enabled else ""
                 ),
@@ -2666,38 +2649,73 @@ class RelayRuntime:
             "state": state_payload,
         }
 
-    def ensure_classifier_sync_cassandra_session(self):
-        if not self.classifier_sync_enabled:
-            raise RuntimeError("classifier sync is not enabled")
-        if not self.classifier_sync_cassandra_contact_points:
-            raise RuntimeError("no Cassandra contact points configured for classifier sync")
+    def ensure_cassandra_session(
+        self,
+        *,
+        feature_name,
+        enabled,
+        session_attr,
+        cluster_attr,
+        contact_points,
+        port,
+        keyspace,
+        table,
+        replication_factor,
+        table_cql,
+    ):
+        if not enabled:
+            raise RuntimeError(f"{feature_name} is not enabled")
+        if not contact_points:
+            raise RuntimeError(f"no Cassandra contact points configured for {feature_name}")
         if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
             raise RuntimeError("cassandra-driver is not available in the Conductor image")
 
         with self.lock:
-            if self.classifier_sync_cassandra_session is not None:
-                return self.classifier_sync_cassandra_session
+            existing_session = getattr(self, session_attr)
+            if existing_session is not None:
+                return existing_session
 
-            cluster = Cluster(
-                contact_points=self.classifier_sync_cassandra_contact_points,
-                port=self.classifier_sync_cassandra_port,
-            )
+            cluster = Cluster(contact_points=contact_points, port=port)
             session = cluster.connect()
-            keyspace = self.classifier_sync_cassandra_keyspace
-            table = self.classifier_sync_cassandra_table
-            replication_factor = max(1, self.classifier_sync_cassandra_replication_factor)
             session.execute(
                 f"""
                 create keyspace if not exists {keyspace}
                 with replication = {{
                     'class': 'SimpleStrategy',
-                    'replication_factor': {replication_factor}
+                    'replication_factor': {max(1, replication_factor)}
                 }}
                 """
             )
             session.set_keyspace(keyspace)
-            session.execute(
-                f"""
+            session.execute(table_cql.format(table=table))
+            setattr(self, cluster_attr, cluster)
+            setattr(self, session_attr, session)
+            return session
+
+    def ensure_shared_scope_state_cassandra_session(
+        self,
+        *,
+        feature_name,
+        enabled,
+        session_attr,
+        cluster_attr,
+        contact_points,
+        port,
+        keyspace,
+        table,
+        replication_factor,
+    ):
+        return self.ensure_cassandra_session(
+            feature_name=feature_name,
+            enabled=enabled,
+            session_attr=session_attr,
+            cluster_attr=cluster_attr,
+            contact_points=contact_points,
+            port=port,
+            keyspace=keyspace,
+            table=table,
+            replication_factor=replication_factor,
+            table_cql="""
                 create table if not exists {table} (
                     scope text primary key,
                     published_at bigint,
@@ -2705,33 +2723,29 @@ class RelayRuntime:
                     state_hash text,
                     payload text
                 )
-                """
-            )
-            self.classifier_sync_cassandra_cluster = cluster
-            self.classifier_sync_cassandra_session = session
-            return session
+            """,
+        )
 
-    def read_shared_classifier_state(self):
-        session = self.ensure_classifier_sync_cassandra_session()
+    def read_shared_scope_state(self, session, table, scope, state_label):
         statement = SimpleStatement(
             (
                 f"select scope, published_at, origin_participant, state_hash, payload "
-                f"from {self.classifier_sync_cassandra_table} where scope = %s"
+                f"from {table} where scope = %s"
             ),
             consistency_level=ConsistencyLevel.QUORUM,
         )
-        row = session.execute(statement, (self.classifier_sync_scope,)).one()
+        row = session.execute(statement, (scope,)).one()
         if row is None:
             return None
         try:
             payload = json.loads(row.payload or "{}")
         except (TypeError, ValueError) as error:
-            raise RuntimeError(f"invalid shared classifier sync payload: {error}") from error
+            raise RuntimeError(f"invalid shared {state_label} payload: {error}") from error
         payload_hash = ((payload or {}).get("hash") or "").strip()
         expected_hash = (row.state_hash or "").strip()
         if expected_hash and payload_hash and payload_hash != expected_hash:
             raise RuntimeError(
-                "shared classifier sync payload hash mismatch: "
+                f"shared {state_label} payload hash mismatch: "
                 f"expected {expected_hash}, got {payload_hash}"
             )
         return {
@@ -2742,34 +2756,40 @@ class RelayRuntime:
             "state": payload if isinstance(payload, dict) else {},
         }
 
-    def wait_for_shared_classifier_state(self, received_published_at=0, timeout_seconds=15):
-        deadline = time.time() + max(1, int(timeout_seconds))
-        last_state = None
-        last_published_at = 0
-        while time.time() < deadline:
-            shared = self.read_shared_classifier_state()
-            if shared is not None:
-                shared_published_at = int(shared.get("publishedAt") or 0)
-                if not received_published_at or not shared_published_at or shared_published_at >= received_published_at:
-                    return shared
-                last_state = shared
-                last_published_at = shared_published_at
+    def wait_for_shared_state(self, reader, state_label, received_published_at=0, timeout_seconds=15):
+        deadline = time.time() + max(1, int(timeout_seconds or 0))
+        latest = None
+        while True:
+            latest = reader()
+            if latest is None:
+                if time.time() >= deadline:
+                    return None
+            else:
+                shared_published_at = int(latest.get("publishedAt") or 0)
+                if not received_published_at or shared_published_at >= received_published_at:
+                    return latest
+                if time.time() >= deadline:
+                    raise RuntimeError(
+                        f"shared {state_label} is older than the received intent: "
+                        f"{shared_published_at} < {received_published_at}"
+                    )
             time.sleep(1)
-        if last_state is not None and received_published_at:
-            raise RuntimeError(
-                "shared classifier sync state is older than the received intent: "
-                f"{last_published_at} < {received_published_at}"
-            )
-        return last_state
 
-    def upsert_shared_classifier_state(self, state, published_at):
+    def upsert_shared_scope_state(
+        self,
+        session,
+        table,
+        scope,
+        state,
+        published_at,
+        state_label,
+    ):
         state_hash = ((state or {}).get("hash") or "").strip()
         if not state_hash:
-            raise RuntimeError("classifier sync state is missing a hash")
-        session = self.ensure_classifier_sync_cassandra_session()
+            raise RuntimeError(f"{state_label} is missing a hash")
         statement = SimpleStatement(
             (
-                f"insert into {self.classifier_sync_cassandra_table} "
+                f"insert into {table} "
                 "(scope, published_at, origin_participant, state_hash, payload) "
                 "values (%s, %s, %s, %s, %s)"
             ),
@@ -2778,12 +2798,51 @@ class RelayRuntime:
         session.execute(
             statement,
             (
-                self.classifier_sync_scope,
+                scope,
                 int(published_at or time.time()),
                 self.pod_name,
                 state_hash,
                 stable_json(state),
             ),
+        )
+
+    def ensure_classifier_sync_cassandra_session(self):
+        return self.ensure_shared_scope_state_cassandra_session(
+            feature_name="classifier sync",
+            enabled=self.classifier_sync_enabled,
+            session_attr="classifier_sync_cassandra_session",
+            cluster_attr="classifier_sync_cassandra_cluster",
+            contact_points=self.classifier_sync_cassandra_contact_points,
+            port=self.classifier_sync_cassandra_port,
+            keyspace=self.classifier_sync_cassandra_keyspace,
+            table=self.classifier_sync_cassandra_table,
+            replication_factor=self.classifier_sync_cassandra_replication_factor,
+        )
+
+    def read_shared_classifier_state(self):
+        return self.read_shared_scope_state(
+            self.ensure_classifier_sync_cassandra_session(),
+            self.classifier_sync_cassandra_table,
+            self.classifier_sync_scope,
+            "classifier sync state",
+        )
+
+    def wait_for_shared_classifier_state(self, received_published_at=0, timeout_seconds=15):
+        return self.wait_for_shared_state(
+            self.read_shared_classifier_state,
+            "classifier sync state",
+            received_published_at=received_published_at,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def upsert_shared_classifier_state(self, state, published_at):
+        self.upsert_shared_scope_state(
+            self.ensure_classifier_sync_cassandra_session(),
+            self.classifier_sync_cassandra_table,
+            self.classifier_sync_scope,
+            state,
+            published_at,
+            "classifier sync state",
         )
 
     def publish_classifier_state(self):
@@ -3083,7 +3142,7 @@ class RelayRuntime:
         self.status.update(
             {
                 "rbacSyncReady": ready,
-                "rbacSyncBackend": self.rbac_sync_backend,
+                "rbacSyncBackend": "cassandra" if self.rbac_sync_enabled else "",
                 "rbacSyncTargetRoles": list(self.rbac_sync_target_roles),
                 "rbacSyncScope": state.get("scope", ""),
                 "rbacSyncExcludedTokenLabelPrefixes": list(
@@ -3547,122 +3606,42 @@ class RelayRuntime:
         )
 
     def ensure_rbac_sync_cassandra_session(self):
-        if not self.rbac_sync_enabled:
-            raise RuntimeError("RBAC sync is not enabled")
-        if not self.rbac_sync_cassandra_contact_points:
-            raise RuntimeError("no Cassandra contact points configured for RBAC sync")
-        if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
-            raise RuntimeError("cassandra-driver is not available in the Conductor image")
-
-        with self.lock:
-            if self.rbac_sync_cassandra_session is not None:
-                return self.rbac_sync_cassandra_session
-
-            cluster = Cluster(
-                contact_points=self.rbac_sync_cassandra_contact_points,
-                port=self.rbac_sync_cassandra_port,
-            )
-            session = cluster.connect()
-            keyspace = self.rbac_sync_cassandra_keyspace
-            table = self.rbac_sync_cassandra_table
-            replication_factor = max(1, self.rbac_sync_cassandra_replication_factor)
-            session.execute(
-                f"""
-                create keyspace if not exists {keyspace}
-                with replication = {{
-                    'class': 'SimpleStrategy',
-                    'replication_factor': {replication_factor}
-                }}
-                """
-            )
-            session.set_keyspace(keyspace)
-            session.execute(
-                f"""
-                create table if not exists {table} (
-                    scope text primary key,
-                    published_at bigint,
-                    origin_participant text,
-                    state_hash text,
-                    payload text
-                )
-                """
-            )
-            self.rbac_sync_cassandra_cluster = cluster
-            self.rbac_sync_cassandra_session = session
-            return session
+        return self.ensure_shared_scope_state_cassandra_session(
+            feature_name="RBAC sync",
+            enabled=self.rbac_sync_enabled,
+            session_attr="rbac_sync_cassandra_session",
+            cluster_attr="rbac_sync_cassandra_cluster",
+            contact_points=self.rbac_sync_cassandra_contact_points,
+            port=self.rbac_sync_cassandra_port,
+            keyspace=self.rbac_sync_cassandra_keyspace,
+            table=self.rbac_sync_cassandra_table,
+            replication_factor=self.rbac_sync_cassandra_replication_factor,
+        )
 
     def read_shared_rbac_state(self):
-        session = self.ensure_rbac_sync_cassandra_session()
-        statement = SimpleStatement(
-            (
-                f"select scope, published_at, origin_participant, state_hash, payload "
-                f"from {self.rbac_sync_cassandra_table} where scope = %s"
-            ),
-            consistency_level=ConsistencyLevel.QUORUM,
+        return self.read_shared_scope_state(
+            self.ensure_rbac_sync_cassandra_session(),
+            self.rbac_sync_cassandra_table,
+            self.rbac_sync_scope,
+            "RBAC sync state",
         )
-        row = session.execute(statement, (self.rbac_sync_scope,)).one()
-        if row is None:
-            return None
-        try:
-            payload = json.loads(row.payload or "{}")
-        except (TypeError, ValueError) as error:
-            raise RuntimeError(f"invalid shared RBAC sync payload: {error}") from error
-        payload_hash = ((payload or {}).get("hash") or "").strip()
-        expected_hash = (row.state_hash or "").strip()
-        if expected_hash and payload_hash and payload_hash != expected_hash:
-            raise RuntimeError(
-                "shared RBAC sync payload hash mismatch: "
-                f"expected {expected_hash}, got {payload_hash}"
-            )
-        return {
-            "scope": (row.scope or "").strip(),
-            "publishedAt": int(row.published_at or 0),
-            "originParticipant": (row.origin_participant or "").strip(),
-            "stateHash": expected_hash or payload_hash,
-            "state": payload if isinstance(payload, dict) else {},
-        }
 
     def wait_for_shared_rbac_state(self, received_published_at=0, timeout_seconds=15):
-        deadline = time.time() + max(1, int(timeout_seconds or 0))
-        latest = None
-        while True:
-            latest = self.read_shared_rbac_state()
-            if latest is None:
-                if time.time() >= deadline:
-                    return None
-            else:
-                shared_published_at = int(latest.get("publishedAt") or 0)
-                if not received_published_at or shared_published_at >= received_published_at:
-                    return latest
-                if time.time() >= deadline:
-                    raise RuntimeError(
-                        "shared RBAC sync state is older than the received intent: "
-                        f"{shared_published_at} < {received_published_at}"
-                    )
-            time.sleep(1)
+        return self.wait_for_shared_state(
+            self.read_shared_rbac_state,
+            "RBAC sync state",
+            received_published_at=received_published_at,
+            timeout_seconds=timeout_seconds,
+        )
 
     def upsert_shared_rbac_state(self, state, published_at):
-        state_hash = ((state or {}).get("hash") or "").strip()
-        if not state_hash:
-            raise RuntimeError("RBAC sync state is missing a hash")
-        session = self.ensure_rbac_sync_cassandra_session()
-        statement = SimpleStatement(
-            (
-                f"insert into {self.rbac_sync_cassandra_table} "
-                "(scope, published_at, origin_participant, state_hash, payload) "
-                "values (%s, %s, %s, %s, %s)"
-            ),
-            consistency_level=ConsistencyLevel.QUORUM,
-        )
-        session.execute(
-            statement,
-            (
-                self.rbac_sync_scope,
-                int(published_at or time.time()),
-                self.pod_name,
-                state_hash,
-                stable_json(state),
-            ),
+        self.upsert_shared_scope_state(
+            self.ensure_rbac_sync_cassandra_session(),
+            self.rbac_sync_cassandra_table,
+            self.rbac_sync_scope,
+            state,
+            published_at,
+            "RBAC sync state",
         )
 
     def publish_rbac_state_now(self):
@@ -4463,121 +4442,42 @@ class RelayRuntime:
         )
 
     def ensure_rbac_token_sync_cassandra_session(self):
-        if not self.rbac_token_sync_enabled:
-            raise RuntimeError("RBAC token sync is not enabled")
-        if not self.rbac_token_sync_cassandra_contact_points:
-            raise RuntimeError("no Cassandra contact points configured for RBAC token sync")
-        if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
-            raise RuntimeError("cassandra-driver is not available in the Conductor image")
-
-        with self.lock:
-            if self.rbac_token_sync_cassandra_session is not None:
-                return self.rbac_token_sync_cassandra_session
-
-            cluster = Cluster(
-                contact_points=self.rbac_token_sync_cassandra_contact_points,
-                port=self.rbac_token_sync_cassandra_port,
-            )
-            session = cluster.connect()
-            keyspace = self.rbac_token_sync_cassandra_keyspace
-            table = self.rbac_token_sync_cassandra_table
-            replication_factor = max(1, self.rbac_token_sync_cassandra_replication_factor)
-            session.execute(
-                f"""
-                create keyspace if not exists {keyspace}
-                with replication = {{
-                    'class': 'SimpleStrategy',
-                    'replication_factor': {replication_factor}
-                }}
-                """
-            )
-            session.set_keyspace(keyspace)
-            session.execute(
-                f"""
-                create table if not exists {table} (
-                    scope text primary key,
-                    published_at bigint,
-                    origin_participant text,
-                    state_hash text,
-                    payload text
-                )
-                """
-            )
-            self.rbac_token_sync_cassandra_cluster = cluster
-            self.rbac_token_sync_cassandra_session = session
-            return session
+        return self.ensure_shared_scope_state_cassandra_session(
+            feature_name="RBAC token sync",
+            enabled=self.rbac_token_sync_enabled,
+            session_attr="rbac_token_sync_cassandra_session",
+            cluster_attr="rbac_token_sync_cassandra_cluster",
+            contact_points=self.rbac_token_sync_cassandra_contact_points,
+            port=self.rbac_token_sync_cassandra_port,
+            keyspace=self.rbac_token_sync_cassandra_keyspace,
+            table=self.rbac_token_sync_cassandra_table,
+            replication_factor=self.rbac_token_sync_cassandra_replication_factor,
+        )
 
     def read_shared_rbac_token_state(self):
-        session = self.ensure_rbac_token_sync_cassandra_session()
-        statement = SimpleStatement(
-            (
-                f"select scope, published_at, origin_participant, state_hash, payload "
-                f"from {self.rbac_token_sync_cassandra_table} where scope = %s"
-            ),
-            consistency_level=ConsistencyLevel.QUORUM,
+        return self.read_shared_scope_state(
+            self.ensure_rbac_token_sync_cassandra_session(),
+            self.rbac_token_sync_cassandra_table,
+            self.rbac_token_sync_scope,
+            "RBAC token sync state",
         )
-        row = session.execute(statement, (self.rbac_token_sync_scope,)).one()
-        if row is None:
-            return None
-        try:
-            payload = json.loads(row.payload or "{}")
-        except (TypeError, ValueError) as error:
-            raise RuntimeError(f"invalid shared RBAC token sync payload: {error}") from error
-        payload_hash = ((payload or {}).get("hash") or "").strip()
-        expected_hash = (row.state_hash or "").strip()
-        if expected_hash and payload_hash and payload_hash != expected_hash:
-            raise RuntimeError(
-                "shared RBAC token sync payload hash mismatch: "
-                f"expected {expected_hash}, got {payload_hash}"
-            )
-        return {
-            "scope": (row.scope or "").strip(),
-            "publishedAt": int(row.published_at or 0),
-            "originParticipant": (row.origin_participant or "").strip(),
-            "stateHash": expected_hash or payload_hash,
-            "state": payload if isinstance(payload, dict) else {},
-        }
 
     def wait_for_shared_rbac_token_state(self, received_published_at=0, timeout_seconds=15):
-        deadline = time.time() + max(1, int(timeout_seconds or 0))
-        while True:
-            shared = self.read_shared_rbac_token_state()
-            if shared is None:
-                if time.time() >= deadline:
-                    return None
-            else:
-                shared_published_at = int(shared.get("publishedAt") or 0)
-                if not received_published_at or shared_published_at >= received_published_at:
-                    return shared
-                if time.time() >= deadline:
-                    raise RuntimeError(
-                        "shared RBAC token sync state is older than the received intent: "
-                        f"{shared_published_at} < {received_published_at}"
-                    )
-            time.sleep(1)
+        return self.wait_for_shared_state(
+            self.read_shared_rbac_token_state,
+            "RBAC token sync state",
+            received_published_at=received_published_at,
+            timeout_seconds=timeout_seconds,
+        )
 
     def upsert_shared_rbac_token_state(self, state, published_at):
-        state_hash = ((state or {}).get("hash") or "").strip()
-        if not state_hash:
-            raise RuntimeError("RBAC token sync state is missing a hash")
-        session = self.ensure_rbac_token_sync_cassandra_session()
-        statement = SimpleStatement(
-            (
-                f"insert into {self.rbac_token_sync_cassandra_table} "
-                "(scope, published_at, origin_participant, state_hash, payload) "
-                "values (%s, %s, %s, %s, %s)"
-            ),
-            consistency_level=ConsistencyLevel.QUORUM,
-        )
-        session.execute(
-            statement,
-            (
-                self.rbac_token_sync_scope,
-                int(published_at or time.time()),
-                self.pod_name,
-                state_hash,
-                stable_json(state),
-            ),
+        self.upsert_shared_scope_state(
+            self.ensure_rbac_token_sync_cassandra_session(),
+            self.rbac_token_sync_cassandra_table,
+            self.rbac_token_sync_scope,
+            state,
+            published_at,
+            "RBAC token sync state",
         )
 
     def publish_rbac_token_state_now(self):
@@ -4879,7 +4779,7 @@ class RelayRuntime:
         self.status.update(
             {
                 "orchestrationSyncReady": ready,
-                "orchestrationSyncBackend": self.orchestration_sync_backend,
+                "orchestrationSyncBackend": "cassandra" if self.orchestration_sync_enabled else "",
                 "orchestrationSyncTargetRoles": list(self.orchestration_sync_target_roles),
                 "orchestrationSyncScope": state.get("scope", ""),
                 "orchestrationSyncState": state.get("state", "idle"),
@@ -5662,121 +5562,42 @@ class RelayRuntime:
         self.merge_orchestration_sync_state(**updates)
 
     def ensure_orchestration_sync_cassandra_session(self):
-        if not self.orchestration_sync_enabled:
-            raise RuntimeError("orchestration sync is not enabled")
-        if not self.orchestration_sync_cassandra_contact_points:
-            raise RuntimeError("no Cassandra contact points configured for orchestration sync")
-        if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
-            raise RuntimeError("cassandra-driver is not available in the Conductor image")
-
-        with self.lock:
-            if self.orchestration_sync_cassandra_session is not None:
-                return self.orchestration_sync_cassandra_session
-
-            cluster = Cluster(
-                contact_points=self.orchestration_sync_cassandra_contact_points,
-                port=self.orchestration_sync_cassandra_port,
-            )
-            session = cluster.connect()
-            keyspace = self.orchestration_sync_cassandra_keyspace
-            table = self.orchestration_sync_cassandra_table
-            replication_factor = max(1, self.orchestration_sync_cassandra_replication_factor)
-            session.execute(
-                f"""
-                create keyspace if not exists {keyspace}
-                with replication = {{
-                    'class': 'SimpleStrategy',
-                    'replication_factor': {replication_factor}
-                }}
-                """
-            )
-            session.set_keyspace(keyspace)
-            session.execute(
-                f"""
-                create table if not exists {table} (
-                    scope text primary key,
-                    published_at bigint,
-                    origin_participant text,
-                    state_hash text,
-                    payload text
-                )
-                """
-            )
-            self.orchestration_sync_cassandra_cluster = cluster
-            self.orchestration_sync_cassandra_session = session
-            return session
+        return self.ensure_shared_scope_state_cassandra_session(
+            feature_name="orchestration sync",
+            enabled=self.orchestration_sync_enabled,
+            session_attr="orchestration_sync_cassandra_session",
+            cluster_attr="orchestration_sync_cassandra_cluster",
+            contact_points=self.orchestration_sync_cassandra_contact_points,
+            port=self.orchestration_sync_cassandra_port,
+            keyspace=self.orchestration_sync_cassandra_keyspace,
+            table=self.orchestration_sync_cassandra_table,
+            replication_factor=self.orchestration_sync_cassandra_replication_factor,
+        )
 
     def read_shared_orchestration_state(self):
-        session = self.ensure_orchestration_sync_cassandra_session()
-        statement = SimpleStatement(
-            (
-                f"select scope, published_at, origin_participant, state_hash, payload "
-                f"from {self.orchestration_sync_cassandra_table} where scope = %s"
-            ),
-            consistency_level=ConsistencyLevel.QUORUM,
+        return self.read_shared_scope_state(
+            self.ensure_orchestration_sync_cassandra_session(),
+            self.orchestration_sync_cassandra_table,
+            self.orchestration_sync_scope,
+            "orchestration sync state",
         )
-        row = session.execute(statement, (self.orchestration_sync_scope,)).one()
-        if row is None:
-            return None
-        try:
-            payload = json.loads(row.payload or "{}")
-        except (TypeError, ValueError) as error:
-            raise RuntimeError(f"invalid shared orchestration sync payload: {error}") from error
-        payload_hash = ((payload or {}).get("hash") or "").strip()
-        expected_hash = (row.state_hash or "").strip()
-        if expected_hash and payload_hash and payload_hash != expected_hash:
-            raise RuntimeError(
-                "shared orchestration sync payload hash mismatch: "
-                f"expected {expected_hash}, got {payload_hash}"
-            )
-        return {
-            "scope": (row.scope or "").strip(),
-            "publishedAt": int(row.published_at or 0),
-            "originParticipant": (row.origin_participant or "").strip(),
-            "stateHash": expected_hash or payload_hash,
-            "state": payload if isinstance(payload, dict) else {},
-        }
 
     def wait_for_shared_orchestration_state(self, received_published_at=0, timeout_seconds=15):
-        deadline = time.time() + max(1, int(timeout_seconds or 0))
-        while True:
-            shared = self.read_shared_orchestration_state()
-            if shared is None:
-                if time.time() >= deadline:
-                    return None
-            else:
-                shared_published_at = int(shared.get("publishedAt") or 0)
-                if not received_published_at or shared_published_at >= received_published_at:
-                    return shared
-                if time.time() >= deadline:
-                    raise RuntimeError(
-                        "shared orchestration sync state is older than the received intent: "
-                        f"{shared_published_at} < {received_published_at}"
-                    )
-            time.sleep(1)
+        return self.wait_for_shared_state(
+            self.read_shared_orchestration_state,
+            "orchestration sync state",
+            received_published_at=received_published_at,
+            timeout_seconds=timeout_seconds,
+        )
 
     def upsert_shared_orchestration_state(self, state, published_at):
-        state_hash = ((state or {}).get("hash") or "").strip()
-        if not state_hash:
-            raise RuntimeError("orchestration sync state is missing a hash")
-        session = self.ensure_orchestration_sync_cassandra_session()
-        statement = SimpleStatement(
-            (
-                f"insert into {self.orchestration_sync_cassandra_table} "
-                "(scope, published_at, origin_participant, state_hash, payload) "
-                "values (%s, %s, %s, %s, %s)"
-            ),
-            consistency_level=ConsistencyLevel.QUORUM,
-        )
-        session.execute(
-            statement,
-            (
-                self.orchestration_sync_scope,
-                int(published_at or time.time()),
-                self.pod_name,
-                state_hash,
-                stable_json(state),
-            ),
+        self.upsert_shared_scope_state(
+            self.ensure_orchestration_sync_cassandra_session(),
+            self.orchestration_sync_cassandra_table,
+            self.orchestration_sync_scope,
+            state,
+            published_at,
+            "orchestration sync state",
         )
 
     def handle_remote_orchestration_state(self, payload):
@@ -5859,121 +5680,42 @@ class RelayRuntime:
         self.reconcile_orchestration_state(state_payload, published_at, origin_participant)
 
     def ensure_inventory_sync_cassandra_session(self):
-        if not self.inventory_sync_enabled:
-            raise RuntimeError("inventory sync is not enabled")
-        if not self.inventory_sync_cassandra_contact_points:
-            raise RuntimeError("no Cassandra contact points configured for inventory sync")
-        if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
-            raise RuntimeError("cassandra-driver is not available in the Conductor image")
-
-        with self.lock:
-            if self.inventory_sync_cassandra_session is not None:
-                return self.inventory_sync_cassandra_session
-
-            cluster = Cluster(
-                contact_points=self.inventory_sync_cassandra_contact_points,
-                port=self.inventory_sync_cassandra_port,
-            )
-            session = cluster.connect()
-            keyspace = self.inventory_sync_cassandra_keyspace
-            table = self.inventory_sync_cassandra_table
-            replication_factor = max(1, self.inventory_sync_cassandra_replication_factor)
-            session.execute(
-                f"""
-                create keyspace if not exists {keyspace}
-                with replication = {{
-                    'class': 'SimpleStrategy',
-                    'replication_factor': {replication_factor}
-                }}
-                """
-            )
-            session.set_keyspace(keyspace)
-            session.execute(
-                f"""
-                create table if not exists {table} (
-                    scope text primary key,
-                    published_at bigint,
-                    origin_participant text,
-                    state_hash text,
-                    payload text
-                )
-                """
-            )
-            self.inventory_sync_cassandra_cluster = cluster
-            self.inventory_sync_cassandra_session = session
-            return session
+        return self.ensure_shared_scope_state_cassandra_session(
+            feature_name="inventory sync",
+            enabled=self.inventory_sync_enabled,
+            session_attr="inventory_sync_cassandra_session",
+            cluster_attr="inventory_sync_cassandra_cluster",
+            contact_points=self.inventory_sync_cassandra_contact_points,
+            port=self.inventory_sync_cassandra_port,
+            keyspace=self.inventory_sync_cassandra_keyspace,
+            table=self.inventory_sync_cassandra_table,
+            replication_factor=self.inventory_sync_cassandra_replication_factor,
+        )
 
     def read_shared_inventory_state(self):
-        session = self.ensure_inventory_sync_cassandra_session()
-        statement = SimpleStatement(
-            (
-                f"select scope, published_at, origin_participant, state_hash, payload "
-                f"from {self.inventory_sync_cassandra_table} where scope = %s"
-            ),
-            consistency_level=ConsistencyLevel.QUORUM,
+        return self.read_shared_scope_state(
+            self.ensure_inventory_sync_cassandra_session(),
+            self.inventory_sync_cassandra_table,
+            self.inventory_sync_scope,
+            "inventory sync state",
         )
-        row = session.execute(statement, (self.inventory_sync_scope,)).one()
-        if row is None:
-            return None
-        try:
-            payload = json.loads(row.payload or "{}")
-        except (TypeError, ValueError) as error:
-            raise RuntimeError(f"invalid shared inventory sync payload: {error}") from error
-        payload_hash = ((payload or {}).get("hash") or "").strip()
-        expected_hash = (row.state_hash or "").strip()
-        if expected_hash and payload_hash and payload_hash != expected_hash:
-            raise RuntimeError(
-                "shared inventory sync payload hash mismatch: "
-                f"expected {expected_hash}, got {payload_hash}"
-            )
-        return {
-            "scope": (row.scope or "").strip(),
-            "publishedAt": int(row.published_at or 0),
-            "originParticipant": (row.origin_participant or "").strip(),
-            "stateHash": expected_hash or payload_hash,
-            "state": payload if isinstance(payload, dict) else {},
-        }
 
     def wait_for_shared_inventory_state(self, received_published_at=0, timeout_seconds=15):
-        deadline = time.time() + max(1, int(timeout_seconds or 0))
-        while True:
-            shared = self.read_shared_inventory_state()
-            if shared is None:
-                if time.time() >= deadline:
-                    return None
-            else:
-                shared_published_at = int(shared.get("publishedAt") or 0)
-                if not received_published_at or shared_published_at >= received_published_at:
-                    return shared
-                if time.time() >= deadline:
-                    raise RuntimeError(
-                        "shared inventory sync state is older than the received intent: "
-                        f"{shared_published_at} < {received_published_at}"
-                    )
-            time.sleep(1)
+        return self.wait_for_shared_state(
+            self.read_shared_inventory_state,
+            "inventory sync state",
+            received_published_at=received_published_at,
+            timeout_seconds=timeout_seconds,
+        )
 
     def upsert_shared_inventory_state(self, state, published_at):
-        state_hash = ((state or {}).get("hash") or "").strip()
-        if not state_hash:
-            raise RuntimeError("inventory sync state is missing a hash")
-        session = self.ensure_inventory_sync_cassandra_session()
-        statement = SimpleStatement(
-            (
-                f"insert into {self.inventory_sync_cassandra_table} "
-                "(scope, published_at, origin_participant, state_hash, payload) "
-                "values (%s, %s, %s, %s, %s)"
-            ),
-            consistency_level=ConsistencyLevel.QUORUM,
-        )
-        session.execute(
-            statement,
-            (
-                self.inventory_sync_scope,
-                int(published_at or time.time()),
-                self.pod_name,
-                state_hash,
-                stable_json(state),
-            ),
+        self.upsert_shared_scope_state(
+            self.ensure_inventory_sync_cassandra_session(),
+            self.inventory_sync_cassandra_table,
+            self.inventory_sync_scope,
+            state,
+            published_at,
+            "inventory sync state",
         )
 
     def read_local_inventory_sync_state(self):
@@ -7369,54 +7111,25 @@ class RelayRuntime:
             "expirationDate": datetime_to_text(row["expirationDate"]),
         }
 
-    def auth_barrier_loginsession_uses_cassandra(self):
-        return self.auth_barrier_enabled
-
     def ensure_loginsession_cassandra_session(self):
-        if not self.auth_barrier_enabled:
-            raise RuntimeError("auth barrier is not enabled")
-        if not self.auth_barrier_loginsession_cassandra_contact_points:
-            raise RuntimeError("no Cassandra contact points configured for loginsession backend")
-        if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
-            raise RuntimeError("cassandra-driver is not available in the Conductor image")
-
-        with self.lock:
-            if self.auth_barrier_loginsession_cassandra_session is not None:
-                return self.auth_barrier_loginsession_cassandra_session
-
-            cluster = Cluster(
-                contact_points=self.auth_barrier_loginsession_cassandra_contact_points,
-                port=self.auth_barrier_loginsession_cassandra_port,
-            )
-            session = cluster.connect()
-            keyspace = self.auth_barrier_loginsession_cassandra_keyspace
-            table = self.auth_barrier_loginsession_cassandra_table
-            replication_factor = max(
-                1,
-                self.auth_barrier_loginsession_cassandra_replication_factor,
-            )
-            session.execute(
-                f"""
-                create keyspace if not exists {keyspace}
-                with replication = {{
-                    'class': 'SimpleStrategy',
-                    'replication_factor': {replication_factor}
-                }}
-                """
-            )
-            session.set_keyspace(keyspace)
-            session.execute(
-                f"""
+        return self.ensure_cassandra_session(
+            feature_name="auth barrier loginsession",
+            enabled=self.auth_barrier_enabled,
+            session_attr="auth_barrier_loginsession_cassandra_session",
+            cluster_attr="auth_barrier_loginsession_cassandra_cluster",
+            contact_points=self.auth_barrier_loginsession_cassandra_contact_points,
+            port=self.auth_barrier_loginsession_cassandra_port,
+            keyspace=self.auth_barrier_loginsession_cassandra_keyspace,
+            table=self.auth_barrier_loginsession_cassandra_table,
+            replication_factor=self.auth_barrier_loginsession_cassandra_replication_factor,
+            table_cql="""
                 create table if not exists {table} (
                     id uuid primary key,
                     creation_date timestamp,
                     expiration_date timestamp
                 )
-                """
-            )
-            self.auth_barrier_loginsession_cassandra_cluster = cluster
-            self.auth_barrier_loginsession_cassandra_session = session
-            return session
+            """,
+        )
 
     def read_shared_loginsession(self, session_id):
         session_id = self.normalize_loginsession_id(session_id)
