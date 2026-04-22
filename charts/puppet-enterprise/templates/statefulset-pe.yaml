@@ -309,7 +309,7 @@ spec:
             - name: PE_K8S_COMPILER_HEADLESS_SERVICE
               value: {{ include "pe.compilerHeadlessServiceName" . | quote }}
             - name: PE_K8S_CONDUCTOR_RBAC_SYNC_ENABLED
-              value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled .Values.conductor.relay.rbacSync.enabled) | quote }}
+              value: {{ ternary "true" "false" (and .Values.conductor.enabled .Values.conductor.relay.enabled (or .Values.conductor.relay.rbacSync.enabled .Values.conductor.relay.rbacTokenSync.enabled)) | quote }}
             - name: PE_K8S_ORCHESTRATION_SERVICE_HOST
               value: {{ include "pe.identity" . | quote }}
           ports:
@@ -638,6 +638,20 @@ spec:
               value: {{ join "," .Values.conductor.relay.rbacSync.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES
               value: {{ join "," .Values.conductor.relay.rbacSync.excludedTokenLabelPrefixes | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_ENABLED
+              value: {{ ternary "true" "false" .Values.conductor.relay.rbacTokenSync.enabled | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_TARGET_ROLES
+              value: {{ join "," .Values.conductor.relay.rbacTokenSync.targetRoles | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_CONTACT_POINTS
+              value: {{ join "," .Values.conductor.relay.rbacTokenSync.cassandra.contactPoints | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_PORT
+              value: {{ .Values.conductor.relay.rbacTokenSync.cassandra.port | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_KEYSPACE
+              value: {{ .Values.conductor.relay.rbacTokenSync.cassandra.keyspace | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_TABLE
+              value: {{ .Values.conductor.relay.rbacTokenSync.cassandra.table | quote }}
+            - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_REPLICATION_FACTOR
+              value: {{ .Values.conductor.relay.rbacTokenSync.cassandra.replicationFactor | quote }}
             - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_ENABLED
               value: {{ ternary "true" "false" .Values.conductor.relay.orchestrationSync.enabled | quote }}
             - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_BACKEND
@@ -687,7 +701,7 @@ spec:
           volumeMounts:
             - name: etc
               mountPath: /etc/puppetlabs
-              readOnly: {{ not (or .Values.conductor.relay.caSync.enabled .Values.conductor.relay.rbacSync.enabled .Values.conductor.relay.orchestrationSync.enabled .Values.conductor.relay.inventorySync.enabled) }}
+              readOnly: {{ not (or .Values.conductor.relay.caSync.enabled .Values.conductor.relay.rbacSync.enabled .Values.conductor.relay.rbacTokenSync.enabled .Values.conductor.relay.orchestrationSync.enabled .Values.conductor.relay.inventorySync.enabled) }}
             - name: opt
               mountPath: /opt/puppetlabs
               readOnly: true

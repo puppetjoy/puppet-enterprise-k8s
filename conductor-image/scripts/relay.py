@@ -77,6 +77,8 @@ DEFAULT_RBAC_TARGET_ROLES = [
 ]
 DEFAULT_RBAC_SYNC_STATE_FILENAME = "rbac-sync-state.json"
 DEFAULT_RBAC_SYNC_SCOPE = "pe-rbac-managed-domain"
+DEFAULT_RBAC_TOKEN_SYNC_STATE_FILENAME = "rbac-token-sync-state.json"
+DEFAULT_RBAC_TOKEN_SYNC_SCOPE = "pe-rbac-token-auth"
 DEFAULT_RBAC_SYNC_RBAC_CONF_PATH = "/etc/puppetlabs/console-services/conf.d/rbac.conf"
 DEFAULT_RBAC_SYNC_RBAC_DATABASE_CONF_PATH = "/etc/puppetlabs/console-services/conf.d/rbac-database.conf"
 DEFAULT_RBAC_SYNC_KEYS_PATH = "/etc/puppetlabs/console-services/conf.d/secrets/keys.json"
@@ -98,6 +100,8 @@ DEFAULT_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES = [
     "pe-k8s-classifier",
     "pe-k8s-compiler certificate",
 ]
+DEFAULT_RBAC_TOKEN_SYNC_CASSANDRA_KEYSPACE = "conductor_auth"
+DEFAULT_RBAC_TOKEN_SYNC_CASSANDRA_TABLE = "rbac_token_state"
 RBAC_SYNC_TABLE_NAMES = [
     "configuration",
     "external_access_config",
@@ -221,6 +225,9 @@ RBAC_SYNC_VOLATILE_FIELDS = {
     "subjects": {"last_login"},
     "tokens": {"last_active"},
 }
+RBAC_TOKEN_SYNC_TABLE_NAMES = [
+    "tokens",
+]
 DEFAULT_ORCHESTRATION_TARGET_ROLES = [
     "control-plane",
 ]
@@ -834,6 +841,24 @@ def extract_request_cookie(headers, cookie_name):
     return ""
 
 
+def extract_request_auth_token(headers):
+    if hasattr(headers, "get"):
+        x_authentication = (headers.get("X-Authentication", "") or "").strip()
+        authorization = (headers.get("Authorization", "") or "").strip()
+    elif isinstance(headers, dict):
+        x_authentication = (headers.get("X-Authentication", "") or "").strip()
+        authorization = (headers.get("Authorization", "") or "").strip()
+    else:
+        x_authentication = ""
+        authorization = ""
+    if x_authentication:
+        return x_authentication
+    bearer_prefix = "Bearer "
+    if authorization.startswith(bearer_prefix):
+        return authorization[len(bearer_prefix):].strip()
+    return ""
+
+
 def response_is_console_page(body):
     if not body:
         return False
@@ -914,6 +939,8 @@ def relay_status_ready(status):
         return False
     if status.get("rbacSyncEnabled", False) and not status.get("rbacSyncReady", False):
         return False
+    if status.get("rbacTokenSyncEnabled", False) and not status.get("rbacTokenSyncReady", False):
+        return False
     if status.get("orchestrationSyncEnabled", False) and not status.get("orchestrationSyncReady", False):
         return False
     if status.get("inventorySyncEnabled", False) and not status.get("inventorySyncReady", False):
@@ -941,6 +968,8 @@ def relay_frontdoor_blockers(status):
         blockers.append("classifier-sync-not-ready")
     if status.get("rbacSyncEnabled", False) and not status.get("rbacSyncReady", False):
         blockers.append("rbac-sync-not-ready")
+    if status.get("rbacTokenSyncEnabled", False) and not status.get("rbacTokenSyncReady", False):
+        blockers.append("rbac-token-sync-not-ready")
     if status.get("orchestrationSyncEnabled", False) and not status.get("orchestrationSyncReady", False):
         blockers.append("orchestration-sync-not-ready")
     if status.get("inventorySyncEnabled", False) and not status.get("inventorySyncReady", False):
@@ -1544,6 +1573,40 @@ class RelayRuntime:
             "CONDUCTOR_RELAY_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES",
             default=DEFAULT_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES,
         )
+        self.rbac_token_sync_enabled = env_bool(
+            "CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_ENABLED",
+            False,
+        )
+        self.rbac_token_sync_target_roles = env_csv(
+            "CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_TARGET_ROLES",
+            default=DEFAULT_RBAC_TARGET_ROLES,
+        )
+        self.rbac_token_sync_scope = DEFAULT_RBAC_TOKEN_SYNC_SCOPE
+        self.rbac_token_sync_state_path = os.path.join(
+            self.output_dir,
+            DEFAULT_RBAC_TOKEN_SYNC_STATE_FILENAME,
+        )
+        self.rbac_token_sync_cassandra_contact_points = env_csv(
+            "CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_CONTACT_POINTS",
+        )
+        self.rbac_token_sync_cassandra_port = env_int(
+            "CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_PORT",
+            9042,
+        )
+        self.rbac_token_sync_cassandra_keyspace = normalize_cassandra_identifier(
+            os.environ.get("CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_KEYSPACE", "").strip()
+            or DEFAULT_RBAC_TOKEN_SYNC_CASSANDRA_KEYSPACE,
+            "keyspace",
+        )
+        self.rbac_token_sync_cassandra_table = normalize_cassandra_identifier(
+            os.environ.get("CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_TABLE", "").strip()
+            or DEFAULT_RBAC_TOKEN_SYNC_CASSANDRA_TABLE,
+            "table",
+        )
+        self.rbac_token_sync_cassandra_replication_factor = env_int(
+            "CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_REPLICATION_FACTOR",
+            3,
+        )
         self.orchestration_sync_enabled = env_bool(
             "CONDUCTOR_RELAY_ORCHESTRATION_SYNC_ENABLED",
             False,
@@ -1791,6 +1854,7 @@ class RelayRuntime:
         self.code_deploy_runtime_error = ""
         self.classifier_sync_runtime_error = ""
         self.rbac_sync_runtime_error = ""
+        self.rbac_token_sync_runtime_error = ""
         self.orchestration_sync_runtime_error = ""
         self.inventory_sync_runtime_error = ""
         self.code_deploy_suppressions = {}
@@ -1805,6 +1869,9 @@ class RelayRuntime:
         self.rbac_sync_state = self.default_rbac_sync_state()
         self.next_rbac_publish = 0
         self.last_published_rbac_hash = ""
+        self.rbac_token_sync_state = self.default_rbac_token_sync_state()
+        self.next_rbac_token_publish = 0
+        self.last_published_rbac_token_hash = ""
         self.orchestration_sync_state = self.default_orchestration_sync_state()
         self.next_orchestration_publish = 0
         self.last_published_orchestration_hash = ""
@@ -1823,6 +1890,8 @@ class RelayRuntime:
 
         self.command_proxy_server = None
         self.command_proxy_thread = None
+        self.rbac_token_sync_cassandra_cluster = None
+        self.rbac_token_sync_cassandra_session = None
         self.orchestration_sync_cassandra_cluster = None
         self.orchestration_sync_cassandra_session = None
         self.inventory_sync_cassandra_cluster = None
@@ -1923,6 +1992,25 @@ class RelayRuntime:
             "rbacSyncLastAppliedAt": 0,
             "rbacSyncLastConvergedAt": 0,
             "rbacSyncLastError": "",
+            "rbacTokenSyncEnabled": self.rbac_token_sync_enabled,
+            "rbacTokenSyncReady": not self.rbac_token_sync_enabled,
+            "rbacTokenSyncTargetRoles": list(self.rbac_token_sync_target_roles),
+            "rbacTokenSyncScope": self.rbac_token_sync_scope if self.rbac_token_sync_enabled else "",
+            "rbacTokenSyncExcludedTokenLabelPrefixes": list(
+                self.rbac_sync_excluded_token_label_prefixes
+            ),
+            "rbacTokenSyncState": "idle",
+            "rbacTokenSyncDesiredHash": "",
+            "rbacTokenSyncActualHash": "",
+            "rbacTokenSyncDesiredTableCount": 0,
+            "rbacTokenSyncActualTableCount": 0,
+            "rbacTokenSyncDesiredRowCount": 0,
+            "rbacTokenSyncActualRowCount": 0,
+            "rbacTokenSyncAuthFileCount": 0,
+            "rbacTokenSyncLastPublishedAt": 0,
+            "rbacTokenSyncLastAppliedAt": 0,
+            "rbacTokenSyncLastConvergedAt": 0,
+            "rbacTokenSyncLastError": "",
             "orchestrationSyncEnabled": self.orchestration_sync_enabled,
             "orchestrationSyncReady": not self.orchestration_sync_enabled,
             "orchestrationSyncBackend": (
@@ -2011,6 +2099,7 @@ class RelayRuntime:
         }
         self.load_classifier_sync_state()
         self.load_rbac_sync_state()
+        self.load_rbac_token_sync_state()
         self.load_orchestration_sync_state()
         self.load_inventory_sync_state()
         self.load_code_deploy_state()
@@ -2841,6 +2930,69 @@ class RelayRuntime:
         with self.lock:
             self.refresh_rbac_summary_locked()
 
+    def default_rbac_token_sync_state(self):
+        return {
+            "state": "idle",
+            "scope": self.rbac_token_sync_scope,
+            "excludedTokenLabelPrefixes": list(self.rbac_sync_excluded_token_label_prefixes),
+            "desiredHash": "",
+            "actualHash": "",
+            "desiredTableCount": 0,
+            "actualTableCount": 0,
+            "desiredRowCount": 0,
+            "actualRowCount": 0,
+            "authFileCount": 0,
+            "originParticipant": "",
+            "desiredPublishedAt": 0,
+            "lastReceivedAt": 0,
+            "lastPublishedAt": 0,
+            "lastAppliedAt": 0,
+            "lastConvergedAt": 0,
+            "lastError": "",
+            "lastErrorAt": 0,
+        }
+
+    def refresh_rbac_token_summary_locked(self):
+        state = dict(self.rbac_token_sync_state)
+        ready = not self.rbac_token_sync_enabled
+        if self.rbac_token_sync_enabled:
+            desired_hash = (state.get("desiredHash") or "").strip()
+            actual_hash = (state.get("actualHash") or "").strip()
+            phase = (state.get("state") or "idle").strip() or "idle"
+            ready = bool(actual_hash) and phase not in {"pending", "in-progress", "failed"}
+            if desired_hash and actual_hash != desired_hash:
+                ready = False
+            if self.rbac_token_sync_runtime_error:
+                ready = False
+
+        last_error = self.rbac_token_sync_runtime_error or (state.get("lastError") or "").strip()
+        self.status.update(
+            {
+                "rbacTokenSyncReady": ready,
+                "rbacTokenSyncTargetRoles": list(self.rbac_token_sync_target_roles),
+                "rbacTokenSyncScope": state.get("scope", ""),
+                "rbacTokenSyncExcludedTokenLabelPrefixes": list(
+                    state.get("excludedTokenLabelPrefixes") or self.rbac_sync_excluded_token_label_prefixes
+                ),
+                "rbacTokenSyncState": state.get("state", "idle"),
+                "rbacTokenSyncDesiredHash": state.get("desiredHash", ""),
+                "rbacTokenSyncActualHash": state.get("actualHash", ""),
+                "rbacTokenSyncDesiredTableCount": int(state.get("desiredTableCount") or 0),
+                "rbacTokenSyncActualTableCount": int(state.get("actualTableCount") or 0),
+                "rbacTokenSyncDesiredRowCount": int(state.get("desiredRowCount") or 0),
+                "rbacTokenSyncActualRowCount": int(state.get("actualRowCount") or 0),
+                "rbacTokenSyncAuthFileCount": int(state.get("authFileCount") or 0),
+                "rbacTokenSyncLastPublishedAt": int(state.get("lastPublishedAt") or 0),
+                "rbacTokenSyncLastAppliedAt": int(state.get("lastAppliedAt") or 0),
+                "rbacTokenSyncLastConvergedAt": int(state.get("lastConvergedAt") or 0),
+                "rbacTokenSyncLastError": last_error,
+            }
+        )
+
+    def refresh_rbac_token_summary(self):
+        with self.lock:
+            self.refresh_rbac_token_summary_locked()
+
     def persist_rbac_sync_state(self):
         if not self.rbac_sync_enabled:
             return
@@ -2868,6 +3020,36 @@ class RelayRuntime:
             self.rbac_sync_state = state
             self.refresh_rbac_summary_locked()
 
+    def persist_rbac_token_sync_state(self):
+        if not self.rbac_token_sync_enabled:
+            return
+        with self.lock:
+            payload = {
+                "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+                "kind": "ConductorRelayRbacTokenSyncState",
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "state": dict(self.rbac_token_sync_state),
+            }
+        write_text_file(
+            self.rbac_token_sync_state_path,
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        )
+
+    def load_rbac_token_sync_state(self):
+        state = self.default_rbac_token_sync_state()
+        if self.rbac_token_sync_enabled and os.path.isfile(self.rbac_token_sync_state_path):
+            try:
+                payload = read_json_file(self.rbac_token_sync_state_path)
+                raw_state = payload.get("state") or {}
+                if isinstance(raw_state, dict):
+                    state.update(raw_state)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
+                log(f"Failed to load RBAC token sync state: {error}")
+        with self.lock:
+            self.rbac_token_sync_state = state
+            self.refresh_rbac_token_summary_locked()
+
     def rbac_sync_state_snapshot(self):
         with self.lock:
             return dict(self.rbac_sync_state)
@@ -2886,6 +3068,41 @@ class RelayRuntime:
             snapshot = dict(state)
         self.persist_rbac_sync_state()
         return snapshot
+
+    def rbac_token_sync_state_snapshot(self):
+        with self.lock:
+            return dict(self.rbac_token_sync_state)
+
+    def merge_rbac_token_sync_state(self, **updates):
+        with self.lock:
+            state = dict(self.rbac_token_sync_state)
+            state.update(updates)
+            if "lastError" in updates:
+                if (updates.get("lastError") or "").strip():
+                    state["lastErrorAt"] = int(updates.get("lastErrorAt") or time.time())
+                else:
+                    state["lastErrorAt"] = 0
+                    self.rbac_token_sync_runtime_error = ""
+            self.rbac_token_sync_state = state
+            self.refresh_rbac_token_summary_locked()
+            snapshot = dict(state)
+        self.persist_rbac_token_sync_state()
+        return snapshot
+
+    def rbac_sync_table_names(self):
+        return [
+            table_name
+            for table_name in RBAC_SYNC_TABLE_NAMES
+            if not (self.rbac_token_sync_enabled and table_name == "tokens")
+        ]
+
+    def rbac_sync_auth_file_names(self):
+        if self.rbac_token_sync_enabled:
+            return []
+        return list(RBAC_SYNC_REQUIRED_AUTH_FILES) + list(RBAC_SYNC_OPTIONAL_AUTH_FILES)
+
+    def rbac_token_sync_auth_file_names(self):
+        return list(RBAC_SYNC_REQUIRED_AUTH_FILES) + list(RBAC_SYNC_OPTIONAL_AUTH_FILES)
 
     def rbac_sync_conf_text(self):
         if not os.path.isfile(self.rbac_sync_rbac_conf_path):
@@ -3004,7 +3221,10 @@ class RelayRuntime:
     def read_local_rbac_state(self):
         current_paths, target_paths = self.rbac_sync_auth_file_paths()
         auth_files = {}
+        allowed_auth_file_names = set(self.rbac_sync_auth_file_names())
         for logical_name, source_path in {**RBAC_SYNC_REQUIRED_AUTH_FILES, **RBAC_SYNC_OPTIONAL_AUTH_FILES}.items():
+            if logical_name not in allowed_auth_file_names:
+                continue
             actual_path = target_paths.get(logical_name)
             if logical_name != "keysJson" and actual_path and os.path.isfile(actual_path):
                 source_path = actual_path
@@ -3024,7 +3244,8 @@ class RelayRuntime:
             repaired = self.ensure_local_rbac_protected_rows(cursor)
             if repaired:
                 connection.commit()
-            for table_name in RBAC_SYNC_TABLE_NAMES:
+            table_names = self.rbac_sync_table_names()
+            for table_name in table_names:
                 rows = self.rbac_query_rows(cursor, RBAC_SYNC_SELECT_QUERIES[table_name])
                 if table_name == "tokens":
                     rows = [row for row in rows if not self.rbac_token_is_excluded(row)]
@@ -3037,9 +3258,9 @@ class RelayRuntime:
         payload = {
             "scope": self.rbac_sync_scope,
             "excludedTokenLabelPrefixes": list(self.rbac_sync_excluded_token_label_prefixes),
-            "tableNames": list(RBAC_SYNC_TABLE_NAMES),
+            "tableNames": list(table_names),
             "tables": table_rows,
-            "tableCount": len(RBAC_SYNC_TABLE_NAMES),
+            "tableCount": len(table_names),
             "rowCount": row_count,
             "authFiles": auth_files,
             "authFileCount": len(auth_files),
@@ -3613,7 +3834,8 @@ class RelayRuntime:
 
     def reconcile_rbac_state(self, state_payload, published_at, origin_participant):
         desired_tables = {}
-        for table_name in RBAC_SYNC_TABLE_NAMES:
+        table_names = self.rbac_sync_table_names()
+        for table_name in table_names:
             rows = state_payload.get("tables", {}).get(table_name) or []
             if not isinstance(rows, list):
                 raise RuntimeError(f"RBAC sync payload table {table_name} is not a list")
@@ -3625,28 +3847,39 @@ class RelayRuntime:
         connection = self.rbac_db_connection()
         try:
             cursor = connection.cursor()
-            self.replace_rbac_table(cursor, "roles_permissions", [])
-            self.replace_rbac_table(cursor, "groupings", [])
-            self.replace_rbac_table(cursor, "subject_roles", [])
-            self.replace_rbac_table(cursor, "password_reset_tokens", [])
-            self.replace_rbac_table(cursor, "password_history", [])
-            self.replace_rbac_table(cursor, "tokens", [])
-            self.replace_rbac_table(cursor, "configuration", [])
-            self.replace_rbac_table(cursor, "external_access_config", [])
-            self.replace_rbac_table(cursor, "roles", [])
-            self.replace_rbac_table(cursor, "permissions", [])
-            self.upsert_rbac_subjects(cursor, desired_tables["subjects"])
-            self.replace_rbac_table(cursor, "salt", desired_tables["salt"])
-            self.replace_rbac_table(cursor, "permissions", desired_tables["permissions"])
-            self.replace_rbac_table(cursor, "roles", desired_tables["roles"])
-            self.replace_rbac_table(cursor, "configuration", desired_tables["configuration"])
-            self.replace_rbac_table(cursor, "external_access_config", desired_tables["external_access_config"])
-            self.replace_rbac_table(cursor, "roles_permissions", desired_tables["roles_permissions"])
-            self.replace_rbac_table(cursor, "subject_roles", desired_tables["subject_roles"])
-            self.replace_rbac_table(cursor, "groupings", desired_tables["groupings"])
-            self.replace_rbac_table(cursor, "password_history", desired_tables["password_history"])
-            self.replace_rbac_table(cursor, "password_reset_tokens", desired_tables["password_reset_tokens"])
-            self.replace_rbac_table(cursor, "tokens", desired_tables["tokens"])
+            clear_order = [
+                "roles_permissions",
+                "groupings",
+                "subject_roles",
+                "password_reset_tokens",
+                "password_history",
+                "tokens",
+                "configuration",
+                "external_access_config",
+                "roles",
+                "permissions",
+            ]
+            apply_order = [
+                "salt",
+                "permissions",
+                "roles",
+                "configuration",
+                "external_access_config",
+                "roles_permissions",
+                "subject_roles",
+                "groupings",
+                "password_history",
+                "password_reset_tokens",
+                "tokens",
+            ]
+            for table_name in clear_order:
+                if table_name in desired_tables:
+                    self.replace_rbac_table(cursor, table_name, [])
+            if "subjects" in desired_tables:
+                self.upsert_rbac_subjects(cursor, desired_tables["subjects"])
+            for table_name in apply_order:
+                if table_name in desired_tables:
+                    self.replace_rbac_table(cursor, table_name, desired_tables[table_name])
             connection.commit()
             cursor.close()
         except Exception:
@@ -3665,7 +3898,7 @@ class RelayRuntime:
             ),
             "desiredHash": desired_hash,
             "actualHash": actual_hash,
-            "desiredTableCount": int(state_payload.get("tableCount") or len(RBAC_SYNC_TABLE_NAMES)),
+            "desiredTableCount": int(state_payload.get("tableCount") or len(table_names)),
             "actualTableCount": int(local_state.get("tableCount") or 0),
             "desiredRowCount": int(state_payload.get("rowCount") or 0),
             "actualRowCount": int(local_state.get("rowCount") or 0),
@@ -3743,7 +3976,7 @@ class RelayRuntime:
                 state_payload.get("excludedTokenLabelPrefixes") or self.rbac_sync_excluded_token_label_prefixes
             ),
             desiredHash=desired_hash,
-            desiredTableCount=int(state_payload.get("tableCount") or len(RBAC_SYNC_TABLE_NAMES)),
+            desiredTableCount=int(state_payload.get("tableCount") or len(self.rbac_sync_table_names())),
             desiredRowCount=int(state_payload.get("rowCount") or 0),
             authFileCount=int(state_payload.get("authFileCount") or 0),
             originParticipant=origin_participant,
@@ -3756,6 +3989,510 @@ class RelayRuntime:
             f"{desired_hash[:12]} from {origin_participant}"
         )
         self.reconcile_rbac_state(state_payload, published_at, origin_participant)
+
+    def read_local_rbac_token_state(self):
+        current_paths, target_paths = self.rbac_sync_auth_file_paths()
+        auth_files = {}
+        for logical_name, source_path in {**RBAC_SYNC_REQUIRED_AUTH_FILES, **RBAC_SYNC_OPTIONAL_AUTH_FILES}.items():
+            if logical_name not in self.rbac_token_sync_auth_file_names():
+                continue
+            actual_path = target_paths.get(logical_name)
+            if logical_name != "keysJson" and actual_path and os.path.isfile(actual_path):
+                source_path = actual_path
+            else:
+                source_path = current_paths.get(logical_name) or source_path
+            if not source_path or not os.path.isfile(source_path):
+                if logical_name in RBAC_SYNC_OPTIONAL_AUTH_FILES:
+                    continue
+                raise RuntimeError(f"RBAC token auth file is missing: {source_path or logical_name}")
+            with open(source_path, "rb") as handle:
+                auth_files[logical_name] = base64.b64encode(handle.read()).decode("ascii")
+
+        connection = self.rbac_db_connection()
+        table_rows = {}
+        try:
+            cursor = connection.cursor()
+            rows = self.rbac_query_rows(cursor, RBAC_SYNC_SELECT_QUERIES["tokens"])
+            table_rows["tokens"] = [row for row in rows if not self.rbac_token_is_excluded(row)]
+            cursor.close()
+        finally:
+            connection.close()
+
+        row_count = len(table_rows["tokens"])
+        payload = {
+            "scope": self.rbac_token_sync_scope,
+            "excludedTokenLabelPrefixes": list(self.rbac_sync_excluded_token_label_prefixes),
+            "tableNames": list(RBAC_TOKEN_SYNC_TABLE_NAMES),
+            "tables": table_rows,
+            "tableCount": len(RBAC_TOKEN_SYNC_TABLE_NAMES),
+            "rowCount": row_count,
+            "authFiles": auth_files,
+            "authFileCount": len(auth_files),
+        }
+        payload["hash"] = self.rbac_rows_hash(
+            table_rows,
+            auth_files,
+            self.rbac_sync_excluded_token_label_prefixes,
+        )
+        return payload
+
+    def refresh_local_rbac_token_sync_state(self):
+        if not self.rbac_token_sync_enabled:
+            return
+
+        observed_at = int(time.time())
+        local_state = self.read_local_rbac_token_state()
+        snapshot = self.rbac_token_sync_state_snapshot()
+        desired_hash = (snapshot.get("desiredHash") or "").strip()
+        actual_hash = (local_state.get("hash") or "").strip()
+        phase = (snapshot.get("state") or "idle").strip() or "idle"
+        origin_participant = (snapshot.get("originParticipant") or "").strip()
+
+        updates = {
+            "scope": self.rbac_token_sync_scope,
+            "excludedTokenLabelPrefixes": list(self.rbac_sync_excluded_token_label_prefixes),
+            "actualHash": actual_hash,
+            "actualTableCount": int(local_state.get("tableCount") or 0),
+            "actualRowCount": int(local_state.get("rowCount") or 0),
+            "authFileCount": int(local_state.get("authFileCount") or 0),
+        }
+        if desired_hash and desired_hash == actual_hash:
+            updates.update(
+                {
+                    "state": "converged",
+                    "lastConvergedAt": observed_at,
+                    "lastError": "",
+                }
+            )
+        elif desired_hash and origin_participant and origin_participant != self.pod_name and phase in {
+            "pending",
+            "in-progress",
+            "failed",
+        }:
+            updates["state"] = phase
+        else:
+            updates.update(
+                {
+                    "state": "observed",
+                    "desiredHash": actual_hash,
+                    "desiredTableCount": int(local_state.get("tableCount") or 0),
+                    "desiredRowCount": int(local_state.get("rowCount") or 0),
+                    "originParticipant": self.pod_name,
+                    "desiredPublishedAt": observed_at,
+                    "lastConvergedAt": observed_at,
+                    "lastError": "",
+                }
+            )
+        self.rbac_token_sync_runtime_error = ""
+        self.merge_rbac_token_sync_state(**updates)
+
+    def build_rbac_token_state_payload(self, state, published_at):
+        return {
+            "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+            "kind": "ConductorRelayRbacTokenState",
+            "publishedAt": published_at,
+            "origin": {
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "role": self.relay_role,
+                "segment": self.segment_name,
+            },
+            "targetRoles": list(self.rbac_token_sync_target_roles),
+            "state": {
+                "scope": state.get("scope", self.rbac_token_sync_scope),
+                "excludedTokenLabelPrefixes": list(self.rbac_sync_excluded_token_label_prefixes),
+                "hash": state.get("hash", ""),
+                "tableCount": int(state.get("tableCount") or 0),
+                "rowCount": int(state.get("rowCount") or 0),
+                "authFileCount": int(state.get("authFileCount") or 0),
+            },
+        }
+
+    def record_published_rbac_token_state(self, state, published_at, now):
+        state_hash = (state.get("hash") or "").strip()
+        self.merge_rbac_token_sync_state(
+            state="converged",
+            scope=self.rbac_token_sync_scope,
+            excludedTokenLabelPrefixes=list(self.rbac_sync_excluded_token_label_prefixes),
+            desiredHash=state_hash,
+            actualHash=state_hash,
+            desiredTableCount=int(state.get("tableCount") or 0),
+            actualTableCount=int(state.get("tableCount") or 0),
+            desiredRowCount=int(state.get("rowCount") or 0),
+            actualRowCount=int(state.get("rowCount") or 0),
+            authFileCount=int(state.get("authFileCount") or 0),
+            originParticipant=self.pod_name,
+            desiredPublishedAt=published_at,
+            lastPublishedAt=now,
+            lastConvergedAt=now,
+            lastError="",
+        )
+
+    def ensure_rbac_token_sync_cassandra_session(self):
+        if not self.rbac_token_sync_enabled:
+            raise RuntimeError("RBAC token sync is not enabled")
+        if not self.rbac_token_sync_cassandra_contact_points:
+            raise RuntimeError("no Cassandra contact points configured for RBAC token sync")
+        if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
+            raise RuntimeError("cassandra-driver is not available in the Conductor image")
+
+        with self.lock:
+            if self.rbac_token_sync_cassandra_session is not None:
+                return self.rbac_token_sync_cassandra_session
+
+            cluster = Cluster(
+                contact_points=self.rbac_token_sync_cassandra_contact_points,
+                port=self.rbac_token_sync_cassandra_port,
+            )
+            session = cluster.connect()
+            keyspace = self.rbac_token_sync_cassandra_keyspace
+            table = self.rbac_token_sync_cassandra_table
+            replication_factor = max(1, self.rbac_token_sync_cassandra_replication_factor)
+            session.execute(
+                f"""
+                create keyspace if not exists {keyspace}
+                with replication = {{
+                    'class': 'SimpleStrategy',
+                    'replication_factor': {replication_factor}
+                }}
+                """
+            )
+            session.set_keyspace(keyspace)
+            session.execute(
+                f"""
+                create table if not exists {table} (
+                    scope text primary key,
+                    published_at bigint,
+                    origin_participant text,
+                    state_hash text,
+                    payload text
+                )
+                """
+            )
+            self.rbac_token_sync_cassandra_cluster = cluster
+            self.rbac_token_sync_cassandra_session = session
+            return session
+
+    def read_shared_rbac_token_state(self):
+        session = self.ensure_rbac_token_sync_cassandra_session()
+        statement = SimpleStatement(
+            (
+                f"select scope, published_at, origin_participant, state_hash, payload "
+                f"from {self.rbac_token_sync_cassandra_table} where scope = %s"
+            ),
+            consistency_level=ConsistencyLevel.QUORUM,
+        )
+        row = session.execute(statement, (self.rbac_token_sync_scope,)).one()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row.payload or "{}")
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(f"invalid shared RBAC token sync payload: {error}") from error
+        payload_hash = ((payload or {}).get("hash") or "").strip()
+        expected_hash = (row.state_hash or "").strip()
+        if expected_hash and payload_hash and payload_hash != expected_hash:
+            raise RuntimeError(
+                "shared RBAC token sync payload hash mismatch: "
+                f"expected {expected_hash}, got {payload_hash}"
+            )
+        return {
+            "scope": (row.scope or "").strip(),
+            "publishedAt": int(row.published_at or 0),
+            "originParticipant": (row.origin_participant or "").strip(),
+            "stateHash": expected_hash or payload_hash,
+            "state": payload if isinstance(payload, dict) else {},
+        }
+
+    def upsert_shared_rbac_token_state(self, state, published_at):
+        state_hash = ((state or {}).get("hash") or "").strip()
+        if not state_hash:
+            raise RuntimeError("RBAC token sync state is missing a hash")
+        session = self.ensure_rbac_token_sync_cassandra_session()
+        statement = SimpleStatement(
+            (
+                f"insert into {self.rbac_token_sync_cassandra_table} "
+                "(scope, published_at, origin_participant, state_hash, payload) "
+                "values (%s, %s, %s, %s, %s)"
+            ),
+            consistency_level=ConsistencyLevel.QUORUM,
+        )
+        session.execute(
+            statement,
+            (
+                self.rbac_token_sync_scope,
+                int(published_at or time.time()),
+                self.pod_name,
+                state_hash,
+                stable_json(state),
+            ),
+        )
+
+    def publish_rbac_token_state_now(self):
+        if not self.rbac_token_sync_enabled:
+            return
+
+        state = self.read_local_rbac_token_state()
+        now = int(time.time())
+        state_hash = (state.get("hash") or "").strip()
+        snapshot = self.rbac_token_sync_state_snapshot()
+        version_at = int(snapshot.get("desiredPublishedAt") or 0)
+        if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
+            version_at = now
+
+        self.upsert_shared_rbac_token_state(state, version_at)
+        payload = self.build_rbac_token_state_payload(state, version_at)
+        self.publish_envelope(
+            f"relay.rbac-token-state.{sanitize_fragment(self.pod_name)}",
+            payload,
+        )
+        self.last_published_rbac_token_hash = state_hash
+        self.next_rbac_token_publish = now + self.publish_interval
+        self.record_published_rbac_token_state(state, version_at, now)
+
+    def publish_rbac_token_state(self):
+        if (
+            not self.rbac_token_sync_enabled
+            or self.connection is None
+            or self.channel is None
+            or self.bundle is None
+        ):
+            return
+
+        state = self.read_local_rbac_token_state()
+        now = int(time.time())
+        state_hash = (state.get("hash") or "").strip()
+        should_publish = (
+            state_hash != self.last_published_rbac_token_hash
+            or now >= self.next_rbac_token_publish
+        )
+        if not should_publish:
+            return
+
+        snapshot = self.rbac_token_sync_state_snapshot()
+        version_at = int(snapshot.get("desiredPublishedAt") or 0)
+        if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
+            version_at = now
+
+        self.upsert_shared_rbac_token_state(state, version_at)
+        payload = self.build_rbac_token_state_payload(state, version_at)
+        self.channel.basic_publish(
+            exchange=self.bundle["hub"]["exchanges"]["data"],
+            routing_key=f"relay.rbac-token-state.{sanitize_fragment(self.pod_name)}",
+            body=stable_json(payload).encode("utf-8"),
+            properties=pika.BasicProperties(content_type="application/json", delivery_mode=2),
+        )
+        self.last_published_rbac_token_hash = state_hash
+        self.next_rbac_token_publish = now + self.publish_interval
+        self.record_published_rbac_token_state(state, version_at, now)
+
+    def local_rbac_token_exists(self, token):
+        value = (token or "").strip()
+        if not value:
+            return False
+        connection = self.rbac_db_connection()
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    select 1
+                    from tokens
+                    where token = %s
+                    limit 1
+                    """,
+                    (value,),
+                )
+                row = cursor.fetchone()
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+        return row is not None
+
+    def rbac_token_in_state(self, token, state_payload):
+        value = (token or "").strip()
+        if not value:
+            return False
+        for row in ((state_payload or {}).get("tables") or {}).get("tokens") or []:
+            if ((row or {}).get("token") or "").strip() == value:
+                return True
+        return False
+
+    def reconcile_rbac_token_state(self, state_payload, published_at, origin_participant):
+        shared = self.read_shared_rbac_token_state()
+        if shared is None:
+            raise RuntimeError("shared RBAC token sync state is missing from Cassandra")
+        shared_published_at = int(shared.get("publishedAt") or 0)
+        if published_at and shared_published_at and shared_published_at < published_at:
+            raise RuntimeError(
+                "shared RBAC token sync state is older than the received intent: "
+                f"{shared_published_at} < {published_at}"
+            )
+
+        shared_state = dict(shared.get("state") or {})
+        state_payload = shared_state
+        origin_participant = (shared.get("originParticipant") or "").strip() or origin_participant
+        published_at = shared_published_at or int(published_at or time.time())
+        auth_files = dict(shared_state.get("authFiles") or {})
+        self.apply_rbac_auth_files(auth_files)
+
+        desired_tables = {}
+        for table_name in RBAC_TOKEN_SYNC_TABLE_NAMES:
+            rows = shared_state.get("tables", {}).get(table_name) or []
+            if not isinstance(rows, list):
+                raise RuntimeError(f"RBAC token sync payload table {table_name} is not a list")
+            desired_tables[table_name] = rows
+
+        connection = self.rbac_db_connection()
+        try:
+            cursor = connection.cursor()
+            for table_name in RBAC_TOKEN_SYNC_TABLE_NAMES:
+                self.replace_rbac_table(cursor, table_name, desired_tables[table_name])
+            connection.commit()
+            cursor.close()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+        local_state = self.read_local_rbac_token_state()
+        actual_hash = (local_state.get("hash") or "").strip()
+        desired_hash = (shared_state.get("hash") or state_payload.get("hash") or "").strip()
+        updates = {
+            "scope": state_payload.get("scope") or self.rbac_token_sync_scope,
+            "excludedTokenLabelPrefixes": list(
+                state_payload.get("excludedTokenLabelPrefixes") or self.rbac_sync_excluded_token_label_prefixes
+            ),
+            "desiredHash": desired_hash,
+            "actualHash": actual_hash,
+            "desiredTableCount": int(state_payload.get("tableCount") or len(RBAC_TOKEN_SYNC_TABLE_NAMES)),
+            "actualTableCount": int(local_state.get("tableCount") or 0),
+            "desiredRowCount": int(state_payload.get("rowCount") or 0),
+            "actualRowCount": int(local_state.get("rowCount") or 0),
+            "authFileCount": int(local_state.get("authFileCount") or 0),
+            "originParticipant": origin_participant,
+            "desiredPublishedAt": int(published_at or time.time()),
+            "lastAppliedAt": int(time.time()),
+        }
+        if actual_hash == desired_hash:
+            updates.update(
+                {
+                    "state": "converged",
+                    "lastConvergedAt": int(time.time()),
+                    "lastError": "",
+                }
+            )
+        else:
+            updates.update(
+                {
+                    "state": "failed",
+                    "lastError": (
+                        "RBAC token managed-domain hash mismatch after apply: "
+                        f"expected {desired_hash}, got {actual_hash or 'none'}"
+                    ),
+                }
+            )
+        self.rbac_token_sync_runtime_error = ""
+        self.merge_rbac_token_sync_state(**updates)
+
+    def ensure_local_rbac_token_from_shared_state(self, token):
+        if self.local_rbac_token_exists(token):
+            return True
+        if not self.rbac_token_sync_enabled:
+            return False
+        shared = self.read_shared_rbac_token_state()
+        if shared is None:
+            return False
+        shared_state = shared.get("state") or {}
+        if not self.rbac_token_in_state(token, shared_state):
+            return False
+        self.reconcile_rbac_token_state(
+            shared_state,
+            int(shared.get("publishedAt") or time.time()),
+            (shared.get("originParticipant") or "").strip(),
+        )
+        return self.local_rbac_token_exists(token)
+
+    def handle_remote_rbac_token_state(self, payload):
+        if not self.rbac_token_sync_enabled:
+            return
+
+        origin = payload.get("origin") or {}
+        origin_participant = (origin.get("participant") or "").strip()
+        if not origin_participant or origin_participant == self.pod_name:
+            return
+
+        target_roles = payload.get("targetRoles") or []
+        if target_roles and self.relay_role not in target_roles:
+            return
+
+        state_payload = payload.get("state") or {}
+        desired_hash = (state_payload.get("hash") or "").strip()
+        if not desired_hash:
+            raise RuntimeError("RBAC token sync payload is missing a hash")
+
+        published_at = int(payload.get("publishedAt") or 0)
+        shared = self.read_shared_rbac_token_state()
+        if shared is None:
+            raise RuntimeError("shared RBAC token sync state is missing from Cassandra")
+        shared_hash = (shared.get("stateHash") or "").strip()
+        shared_published_at = int(shared.get("publishedAt") or 0)
+        if published_at and shared_published_at and shared_published_at < published_at:
+            raise RuntimeError(
+                "shared RBAC token sync state is older than the received intent: "
+                f"{shared_published_at} < {published_at}"
+            )
+        if shared_hash:
+            desired_hash = shared_hash
+        published_at = shared_published_at or published_at
+        origin_participant = (shared.get("originParticipant") or "").strip() or origin_participant
+        shared_payload = shared.get("state") or {}
+        if isinstance(shared_payload, dict):
+            state_payload = shared_payload
+        current_state = self.rbac_token_sync_state_snapshot()
+        current_desired_hash = (current_state.get("desiredHash") or "").strip()
+        current_actual_hash = (current_state.get("actualHash") or "").strip()
+        current_published_at = int(current_state.get("desiredPublishedAt") or 0)
+        if current_published_at and published_at and published_at < current_published_at:
+            return
+        if (
+            current_published_at
+            and published_at
+            and published_at == current_published_at
+            and desired_hash == current_desired_hash
+        ):
+            return
+        if desired_hash == current_actual_hash and desired_hash == current_desired_hash:
+            self.merge_rbac_token_sync_state(
+                state="converged",
+                lastReceivedAt=int(time.time()),
+                lastConvergedAt=int(time.time()),
+                lastError="",
+            )
+            return
+
+        self.merge_rbac_token_sync_state(
+            state="pending",
+            scope=state_payload.get("scope") or self.rbac_token_sync_scope,
+            excludedTokenLabelPrefixes=list(
+                state_payload.get("excludedTokenLabelPrefixes") or self.rbac_sync_excluded_token_label_prefixes
+            ),
+            desiredHash=desired_hash,
+            desiredTableCount=int(state_payload.get("tableCount") or len(RBAC_TOKEN_SYNC_TABLE_NAMES)),
+            desiredRowCount=int(state_payload.get("rowCount") or 0),
+            authFileCount=int(state_payload.get("authFileCount") or 0),
+            originParticipant=origin_participant,
+            desiredPublishedAt=published_at or int(time.time()),
+            lastReceivedAt=int(time.time()),
+            lastError="",
+        )
+        log(
+            "Received RBAC token sync intent at "
+            f"{desired_hash[:12]} from {origin_participant}"
+        )
+        self.reconcile_rbac_token_state(state_payload, published_at, origin_participant)
 
     def default_orchestration_sync_state(self):
         return {
@@ -4501,6 +5238,20 @@ class RelayRuntime:
             connection.close()
 
     def reconcile_orchestration_state(self, state_payload, published_at, origin_participant):
+        if self.orchestration_sync_uses_cassandra():
+            shared = self.read_shared_orchestration_state()
+            if shared is None:
+                raise RuntimeError("shared orchestration sync state is missing from Cassandra")
+            shared_published_at = int(shared.get("publishedAt") or 0)
+            if published_at and shared_published_at and shared_published_at < published_at:
+                raise RuntimeError(
+                    "shared orchestration sync state is older than the received intent: "
+                    f"{shared_published_at} < {published_at}"
+                )
+            state_payload = dict(shared.get("state") or {})
+            origin_participant = (shared.get("originParticipant") or "").strip() or origin_participant
+            published_at = shared_published_at or int(published_at or time.time())
+
         desired_databases = state_payload.get("databases") or {}
         if not isinstance(desired_databases, dict):
             raise RuntimeError("orchestration sync payload databases are invalid")
@@ -4696,6 +5447,26 @@ class RelayRuntime:
             raise RuntimeError("orchestration sync payload is missing a hash")
 
         published_at = int(payload.get("publishedAt") or 0)
+        if self.orchestration_sync_uses_cassandra():
+            shared_state = self.read_shared_orchestration_state()
+            if shared_state is None:
+                raise RuntimeError("shared orchestration sync state is missing from Cassandra")
+            shared_hash = (shared_state.get("stateHash") or "").strip()
+            shared_published_at = int(shared_state.get("publishedAt") or 0)
+            if published_at and shared_published_at and shared_published_at < published_at:
+                raise RuntimeError(
+                    "shared orchestration sync state is older than the received intent: "
+                    f"{shared_published_at} < {published_at}"
+                )
+            if shared_hash:
+                desired_hash = shared_hash
+            published_at = shared_published_at or published_at
+            origin_participant = (
+                (shared_state.get("originParticipant") or "").strip() or origin_participant
+            )
+            shared_payload = shared_state.get("state") or {}
+            if isinstance(shared_payload, dict):
+                state_payload = shared_payload
         current_state = self.orchestration_sync_state_snapshot()
         current_desired_hash = (current_state.get("desiredHash") or "").strip()
         current_actual_hash = (current_state.get("actualHash") or "").strip()
@@ -4740,22 +5511,6 @@ class RelayRuntime:
             "Received orchestration sync intent at "
             f"{desired_hash[:12]} from {origin_participant}"
         )
-        if self.orchestration_sync_uses_cassandra():
-            shared_state = self.read_shared_orchestration_state()
-            if shared_state is None:
-                raise RuntimeError("shared orchestration sync state is missing from Cassandra")
-            shared_payload = shared_state.get("state") or {}
-            shared_hash = (shared_state.get("stateHash") or "").strip()
-            if shared_hash and shared_hash != desired_hash:
-                raise RuntimeError(
-                    "shared orchestration sync hash mismatch: "
-                    f"expected {desired_hash}, got {shared_hash}"
-                )
-            state_payload = shared_payload if isinstance(shared_payload, dict) else {}
-            published_at = int(shared_state.get("publishedAt") or published_at or time.time())
-            origin_participant = (
-                (shared_state.get("originParticipant") or "").strip() or origin_participant
-            )
         self.reconcile_orchestration_state(state_payload, published_at, origin_participant)
 
     def ensure_inventory_sync_cassandra_session(self):
@@ -5019,6 +5774,9 @@ class RelayRuntime:
             )
 
         shared_state = dict(shared.get("state") or {})
+        state_payload = shared_state
+        origin_participant = (shared.get("originParticipant") or "").strip() or origin_participant
+        published_at = shared_published_at or int(published_at or time.time())
         auth_files = dict(shared_state.get("authFiles") or {})
         self.apply_orchestration_auth_files(auth_files)
 
@@ -5096,6 +5854,23 @@ class RelayRuntime:
             raise RuntimeError("inventory sync payload is missing a hash")
 
         published_at = int(payload.get("publishedAt") or 0)
+        shared = self.read_shared_inventory_state()
+        if shared is None:
+            raise RuntimeError("shared inventory sync state is missing from Cassandra")
+        shared_hash = (shared.get("stateHash") or "").strip()
+        shared_published_at = int(shared.get("publishedAt") or 0)
+        if published_at and shared_published_at and shared_published_at < published_at:
+            raise RuntimeError(
+                "shared inventory sync state is older than the received intent: "
+                f"{shared_published_at} < {published_at}"
+            )
+        if shared_hash:
+            desired_hash = shared_hash
+        published_at = shared_published_at or published_at
+        origin_participant = (shared.get("originParticipant") or "").strip() or origin_participant
+        shared_payload = shared.get("state") or {}
+        if isinstance(shared_payload, dict):
+            state_payload = shared_payload
         current_state = self.inventory_sync_state_snapshot()
         current_desired_hash = (current_state.get("desiredHash") or "").strip()
         current_actual_hash = (current_state.get("actualHash") or "").strip()
@@ -6503,6 +7278,20 @@ class RelayRuntime:
                         503,
                         f"auth loginsession lookup failed: {error}",
                     ) from error
+        if barrier_name == "api":
+            auth_token = extract_request_auth_token(request_headers)
+            if auth_token:
+                try:
+                    self.ensure_local_rbac_token_from_shared_state(auth_token)
+                except RelayLocalCommandError:
+                    raise
+                except Exception as error:
+                    self.auth_barrier_last_error = str(error)
+                    self.set_status(authBarrierLastError=str(error))
+                    raise RelayLocalCommandError(
+                        503,
+                        f"auth token lookup failed: {error}",
+                    ) from error
 
         try:
             status_code, _reason, response_headers, response_body = self.proxy_upstream_request(
@@ -6552,7 +7341,10 @@ class RelayRuntime:
             )
             if auth_cookie:
                 try:
-                    self.publish_rbac_state_now()
+                    if self.rbac_token_sync_enabled:
+                        self.publish_rbac_token_state_now()
+                    else:
+                        self.publish_rbac_state_now()
                     self.wait_for_auth_replication("session", auth_cookie)
                     self.auth_barrier_last_error = ""
                     self.set_status(authBarrierLastError="")
@@ -6578,7 +7370,10 @@ class RelayRuntime:
             return status_code, response_headers, response_body
 
         try:
-            self.publish_rbac_state_now()
+            if self.rbac_token_sync_enabled and auth_kind == "token":
+                self.publish_rbac_token_state_now()
+            else:
+                self.publish_rbac_state_now()
             self.wait_for_auth_replication(auth_kind, credential)
             self.auth_barrier_last_error = ""
             self.set_status(authBarrierLastError="")
@@ -7533,6 +8328,19 @@ class RelayRuntime:
                 channel.basic_nack(method.delivery_tag, requeue=True)
             return
 
+        if kind == "ConductorRelayRbacTokenState":
+            try:
+                self.handle_remote_rbac_token_state(payload)
+                self.set_status(lastReceivedAt=int(time.time()))
+                channel.basic_ack(method.delivery_tag)
+            except Exception as error:
+                self.rbac_token_sync_runtime_error = str(error)
+                self.refresh_rbac_token_summary()
+                log(f"Remote RBAC token sync handling failed: {error}")
+                time.sleep(2)
+                channel.basic_nack(method.delivery_tag, requeue=True)
+            return
+
         if kind == "ConductorRelayOrchestrationState":
             try:
                 self.handle_remote_orchestration_state(payload)
@@ -7716,6 +8524,16 @@ class RelayRuntime:
                 log(f"RBAC sync refresh failed: {error}")
 
             try:
+                self.refresh_local_rbac_token_sync_state()
+            except KeyboardInterrupt:
+                raise
+            except Exception as error:
+                last_error = str(error)
+                self.rbac_token_sync_runtime_error = str(error)
+                self.refresh_rbac_token_summary()
+                log(f"RBAC token sync refresh failed: {error}")
+
+            try:
                 self.refresh_local_orchestration_sync_state()
             except KeyboardInterrupt:
                 raise
@@ -7754,6 +8572,7 @@ class RelayRuntime:
                     self.publish_ca_state()
                     self.publish_classifier_state()
                     self.publish_rbac_state()
+                    self.publish_rbac_token_state()
                     self.publish_orchestration_state()
                     self.publish_inventory_state()
                     self.connection.process_data_events(time_limit=1)
