@@ -12,6 +12,11 @@ warden:
     repository: registry.example.test/pe-k8s-conductor
     tag: "0.1.47"
 
+cassandra:
+  enabled: true
+  persistence:
+    storageClassName: CHANGE_ME
+
 fabric:
   segments:
     - name: production

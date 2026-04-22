@@ -102,8 +102,16 @@ The current replicated state includes:
 
 - filtered user-visible classification
 - RBAC and local-auth managed state
+- login-session handoff can move through a Cassandra-backed Conductor store
+  instead of direct peer database writes
 - code deployment intent and convergence state
 - managed orchestration data needed for task and plan failover
+
+The current RBAC and orchestration implementation still relies on managed
+peer PostgreSQL replay. That is now treated as transitional. The intended
+replacement is a Cassandra-backed Conductor shared-state layer that preserves
+the current `service/pe` / `service/pe-compiler` deployment shape without
+making one `pe` replica special.
 
 ## Current Traffic And Failover Model
 
@@ -146,6 +154,7 @@ sequenceDiagram
 ## Where To Read Next
 
 - [Validation Matrix](validation-matrix.md)
+- [Shared State Backend](shared-state-backend.md)
 - [Runtime Model](runtime-model.md)
 - [Conductor Architecture](conductor-architecture.md)
 - [Replication Roadmap](replication-roadmap.md)

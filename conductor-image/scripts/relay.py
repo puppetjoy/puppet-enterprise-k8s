@@ -23,6 +23,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pika
 from cryptography import x509
+try:
+    from cassandra import ConsistencyLevel
+    from cassandra.cluster import Cluster
+    from cassandra.query import SimpleStatement
+except ImportError:  # pragma: no cover - optional dependency until Cassandra-backed slices are enabled
+    Cluster = None
+    ConsistencyLevel = None
+    SimpleStatement = None
 
 
 DEFAULT_STATUS_FILENAME = "relay-status.json"
@@ -462,6 +470,9 @@ DEFAULT_AUTH_BARRIER_AUTH_COOKIE_NAME = "__HOST-pl_ssti"
 DEFAULT_AUTH_BARRIER_LOGIN_PATH = "/auth/login"
 DEFAULT_AUTH_BARRIER_TOKEN_PATH = "/rbac-api/v1/auth/token"
 DEFAULT_AUTH_BARRIER_LOGINSESSION_PATH_PREFIX = "/conductor/auth/v1/loginsession/"
+DEFAULT_AUTH_BARRIER_LOGINSESSION_BACKEND = "postgres"
+DEFAULT_AUTH_BARRIER_LOGINSESSION_CASSANDRA_KEYSPACE = "conductor_auth"
+DEFAULT_AUTH_BARRIER_LOGINSESSION_CASSANDRA_TABLE = "loginsession"
 AUTH_BARRIER_LOGIN_PAGE_MARKERS = (
     "id=\"loginForm\"",
     "Log In | Puppet Enterprise",
@@ -519,6 +530,13 @@ def env_csv(name, default=None):
 def sanitize_fragment(value):
     cleaned = re.sub(r"[^a-z0-9-]+", "-", value.strip().lower()).strip("-")
     return cleaned or "default"
+
+
+def normalize_cassandra_identifier(value, field_name):
+    identifier = (value or "").strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", identifier):
+        raise RuntimeError(f"invalid Cassandra {field_name}: {value!r}")
+    return identifier
 
 
 def normalize_command_name(value):
@@ -790,6 +808,19 @@ def extract_response_cookie(headers, cookie_name):
         value = (header_value or "").strip()
         if value.startswith(prefix):
             return value.split(";", 1)[0]
+    return ""
+
+
+def extract_request_cookie(headers, cookie_name):
+    cookie_header = ""
+    if hasattr(headers, "get"):
+        cookie_header = headers.get("Cookie", "")
+    elif isinstance(headers, dict):
+        cookie_header = headers.get("Cookie", "")
+    for item in (cookie_header or "").split(";"):
+        name, separator, value = item.strip().partition("=")
+        if separator and name == cookie_name:
+            return value.strip()
     return ""
 
 
@@ -1165,7 +1196,10 @@ class LocalAuthBarrierHandler(BaseHTTPRequestHandler):
 
         try:
             if self.command == "GET":
-                payload = self.server.runtime.read_local_loginsession(session_id)
+                if self.server.runtime.auth_barrier_loginsession_uses_cassandra():
+                    payload = self.server.runtime.read_shared_loginsession(session_id)
+                else:
+                    payload = self.server.runtime.read_local_loginsession(session_id)
                 if payload is None:
                     self.text_response(404, "loginsession not found")
                     return
@@ -1179,7 +1213,16 @@ class LocalAuthBarrierHandler(BaseHTTPRequestHandler):
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     self.text_response(400, "invalid JSON body")
                     return
-                self.server.runtime.upsert_local_loginsession(payload, expected_session_id=session_id)
+                if self.server.runtime.auth_barrier_loginsession_uses_cassandra():
+                    self.server.runtime.upsert_shared_loginsession(
+                        payload,
+                        expected_session_id=session_id,
+                    )
+                else:
+                    self.server.runtime.upsert_local_loginsession(
+                        payload,
+                        expected_session_id=session_id,
+                    )
                 self.json_response(200, {"id": session_id, "status": "ok"})
                 return
 
@@ -1542,6 +1585,46 @@ class RelayRuntime:
             "CONDUCTOR_RELAY_AUTH_BARRIER_WAIT_TIMEOUT_SECONDS",
             20,
         )
+        self.auth_barrier_loginsession_backend = (
+            os.environ.get("CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_BACKEND", "").strip().lower()
+            or DEFAULT_AUTH_BARRIER_LOGINSESSION_BACKEND
+        )
+        if self.auth_barrier_loginsession_backend not in {"postgres", "cassandra"}:
+            raise RuntimeError(
+                "unsupported auth barrier loginsession backend: "
+                f"{self.auth_barrier_loginsession_backend}"
+            )
+        self.auth_barrier_loginsession_cassandra_contact_points = env_csv(
+            "CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_CONTACT_POINTS",
+        )
+        self.auth_barrier_loginsession_cassandra_port = env_int(
+            "CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_PORT",
+            9042,
+        )
+        self.auth_barrier_loginsession_cassandra_keyspace = (
+            normalize_cassandra_identifier(
+                os.environ.get(
+                    "CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_KEYSPACE",
+                    "",
+                ).strip()
+                or DEFAULT_AUTH_BARRIER_LOGINSESSION_CASSANDRA_KEYSPACE,
+                "keyspace",
+            )
+        )
+        self.auth_barrier_loginsession_cassandra_table = (
+            normalize_cassandra_identifier(
+                os.environ.get(
+                    "CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_TABLE",
+                    "",
+                ).strip()
+                or DEFAULT_AUTH_BARRIER_LOGINSESSION_CASSANDRA_TABLE,
+                "table",
+            )
+        )
+        self.auth_barrier_loginsession_cassandra_replication_factor = env_int(
+            "CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_REPLICATION_FACTOR",
+            3,
+        )
         self.auth_barrier_request_timeout_seconds = env_int(
             "CONDUCTOR_RELAY_AUTH_BARRIER_REQUEST_TIMEOUT_SECONDS",
             30,
@@ -1648,6 +1731,8 @@ class RelayRuntime:
         self.auth_barrier_api_thread = None
         self.auth_barrier_start_error = ""
         self.auth_barrier_last_error = ""
+        self.auth_barrier_loginsession_cassandra_cluster = None
+        self.auth_barrier_loginsession_cassandra_session = None
         self.frontdoor_status_enabled = env_bool(
             "CONDUCTOR_RELAY_FRONTDOOR_STATUS_ENABLED",
             self.relay_role == "control-plane",
@@ -5255,6 +5340,76 @@ class RelayRuntime:
             "expirationDate": datetime_to_text(row["expirationDate"]),
         }
 
+    def auth_barrier_loginsession_uses_cassandra(self):
+        return self.auth_barrier_loginsession_backend == "cassandra"
+
+    def ensure_loginsession_cassandra_session(self):
+        if not self.auth_barrier_loginsession_uses_cassandra():
+            raise RuntimeError("loginsession Cassandra backend is not enabled")
+        if not self.auth_barrier_loginsession_cassandra_contact_points:
+            raise RuntimeError("no Cassandra contact points configured for loginsession backend")
+        if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
+            raise RuntimeError("cassandra-driver is not available in the Conductor image")
+
+        with self.lock:
+            if self.auth_barrier_loginsession_cassandra_session is not None:
+                return self.auth_barrier_loginsession_cassandra_session
+
+            cluster = Cluster(
+                contact_points=self.auth_barrier_loginsession_cassandra_contact_points,
+                port=self.auth_barrier_loginsession_cassandra_port,
+            )
+            session = cluster.connect()
+            keyspace = self.auth_barrier_loginsession_cassandra_keyspace
+            table = self.auth_barrier_loginsession_cassandra_table
+            replication_factor = max(
+                1,
+                self.auth_barrier_loginsession_cassandra_replication_factor,
+            )
+            session.execute(
+                f"""
+                create keyspace if not exists {keyspace}
+                with replication = {{
+                    'class': 'SimpleStrategy',
+                    'replication_factor': {replication_factor}
+                }}
+                """
+            )
+            session.set_keyspace(keyspace)
+            session.execute(
+                f"""
+                create table if not exists {table} (
+                    id uuid primary key,
+                    creation_date timestamp,
+                    expiration_date timestamp
+                )
+                """
+            )
+            self.auth_barrier_loginsession_cassandra_cluster = cluster
+            self.auth_barrier_loginsession_cassandra_session = session
+            return session
+
+    def read_shared_loginsession(self, session_id):
+        session_id = self.normalize_loginsession_id(session_id)
+        session = self.ensure_loginsession_cassandra_session()
+        statement = SimpleStatement(
+            (
+                f"select id, creation_date, expiration_date from "
+                f"{self.auth_barrier_loginsession_cassandra_table} where id = %s"
+            ),
+            consistency_level=ConsistencyLevel.QUORUM,
+        )
+        row = session.execute(statement, (uuid.UUID(session_id),)).one()
+        if row is None:
+            return None
+        return self.serialize_loginsession_row(
+            {
+                "id": str(row.id),
+                "creationDate": row.creation_date,
+                "expirationDate": row.expiration_date,
+            }
+        )
+
     def read_local_loginsession(self, session_id):
         session_id = self.normalize_loginsession_id(session_id)
         connection = self.rbac_db_connection()
@@ -5338,6 +5493,64 @@ class RelayRuntime:
             "expirationDate": datetime_to_text(expiration_date),
         }
 
+    def upsert_shared_loginsession(self, payload, expected_session_id=""):
+        session_id = self.normalize_loginsession_id(
+            (payload or {}).get("id") or expected_session_id
+        )
+        if expected_session_id and session_id != self.normalize_loginsession_id(expected_session_id):
+            raise RelayLocalCommandError(400, "loginsession id does not match request path")
+
+        try:
+            creation_date = parse_datetime_text((payload or {}).get("creationDate"))
+            expiration_date = parse_datetime_text((payload or {}).get("expirationDate"))
+        except ValueError as error:
+            raise RelayLocalCommandError(400, f"invalid loginsession timestamp: {error}") from error
+
+        if creation_date is None or expiration_date is None:
+            raise RelayLocalCommandError(
+                400,
+                "loginsession creationDate and expirationDate are required",
+            )
+
+        ttl_seconds = max(
+            1,
+            int((expiration_date - datetime.now(timezone.utc)).total_seconds()),
+        )
+        session = self.ensure_loginsession_cassandra_session()
+        statement = SimpleStatement(
+            (
+                f"insert into {self.auth_barrier_loginsession_cassandra_table} "
+                "(id, creation_date, expiration_date) values (%s, %s, %s) using ttl %s"
+            ),
+            consistency_level=ConsistencyLevel.QUORUM,
+        )
+        session.execute(
+            statement,
+            (
+                uuid.UUID(session_id),
+                creation_date,
+                expiration_date,
+                ttl_seconds,
+            ),
+        )
+        return {
+            "id": session_id,
+            "creationDate": datetime_to_text(creation_date),
+            "expirationDate": datetime_to_text(expiration_date),
+        }
+
+    def ensure_local_loginsession_from_shared_state(self, session_id):
+        session_id = self.normalize_loginsession_id(session_id)
+        if self.read_local_loginsession(session_id) is not None:
+            return True
+        if not self.auth_barrier_loginsession_uses_cassandra():
+            return False
+        payload = self.read_shared_loginsession(session_id)
+        if payload is None:
+            return False
+        self.upsert_local_loginsession(payload, expected_session_id=session_id)
+        return True
+
     def peer_loginsession_url(self, peer_host, session_id):
         session_id = self.normalize_loginsession_id(session_id)
         return (
@@ -5368,6 +5581,11 @@ class RelayRuntime:
         return status_code == 200
 
     def synchronize_loginsession(self, session_id):
+        if self.auth_barrier_loginsession_uses_cassandra():
+            session_payload = self.wait_for_local_loginsession(session_id)
+            self.upsert_shared_loginsession(session_payload, expected_session_id=session_id)
+            return
+
         peers = self.auth_barrier_target_peers()
         if not peers:
             return
@@ -5495,6 +5713,24 @@ class RelayRuntime:
             client_address,
             peer_subject,
         )
+
+        if barrier_name == "console":
+            session_id = extract_request_cookie(
+                request_headers,
+                DEFAULT_AUTH_BARRIER_SESSION_COOKIE_NAME,
+            )
+            if session_id:
+                try:
+                    self.ensure_local_loginsession_from_shared_state(session_id)
+                except RelayLocalCommandError:
+                    raise
+                except Exception as error:
+                    self.auth_barrier_last_error = str(error)
+                    self.set_status(authBarrierLastError=str(error))
+                    raise RelayLocalCommandError(
+                        503,
+                        f"auth loginsession lookup failed: {error}",
+                    ) from error
 
         try:
             status_code, _reason, response_headers, response_body = self.proxy_upstream_request(

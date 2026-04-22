@@ -49,6 +49,33 @@ warden:
   pruneStaleParticipants: true
   resources: {}
 
+cassandra:
+  enabled: false
+  image:
+    repository: docker.io/library/cassandra
+    tag: "5.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 3
+  clusterName: conductor
+  datacenter: dc1
+  rack: rack1
+  service:
+    type: ClusterIP
+    cqlPort: 9042
+    intraNodePort: 7000
+    tlsPort: 7001
+    jmxPort: 7199
+  heap:
+    maxSize: 512M
+    newSize: 128M
+  persistence:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    size: 20Gi
+    storageClassName: ""
+  resources: {}
+
 fabric:
   exchanges:
     data: fabric.events

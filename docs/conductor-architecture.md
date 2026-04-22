@@ -172,6 +172,27 @@ That means:
 - RBAC and local-auth managed state now converge through Fabric as part of the same PE-owned control-plane domain
 - console sessions and other remaining console-backed writes are still ahead
 
+## Shared State Backend
+
+The current repo direction is to retire peer PostgreSQL replay for shared
+control-plane domains and replace it with a Conductor-owned shared backend.
+
+The intended target is:
+
+- Fabric for transport and convergence signals
+- Cassandra for durable shared state
+- equivalent `pe` replicas as execution frontends behind `service/pe`
+
+This keeps the current Kubernetes deployment shape while removing the most
+fragile part of the current design: rewriting managed database tables from one
+`pe` replica into another.
+
+The architectural commitment is shared state in Cassandra, not a new named
+middle-tier service.
+
+See [Shared State Backend](shared-state-backend.md) for the migration target
+and slice order.
+
 ## Shared RBAC and Local Auth
 
 The next PE-owned control-plane slice now carried through Fabric is RBAC and
@@ -190,6 +211,15 @@ That means:
 - a token issued on one control-plane replica can become valid on its peer without shared storage
 - the replicated RBAC domain remains authoritative enough for readiness while leaving replica-local operator diagnostics outside the convergence token
 - web console sessions remain local to the selected `service/pe` backend and are intentionally kept outside the replicated domain so browser traffic can stay consistent even while replicated state converges asynchronously
+
+This is now considered transitional. The target is to move shared auth-related
+state off peer PostgreSQL replay and onto a Cassandra-backed Conductor domain
+while keeping local PE service behaviour intact.
+
+The first narrow slice of that move is login-session handoff. Relay can now
+use Cassandra as the shared store for `loginsession` records so a peer `pe`
+replica can repopulate its local RBAC session row on demand instead of
+accepting a direct peer database write.
 
 ## Shared Orchestration State
 
@@ -213,6 +243,11 @@ That means:
 - an empty `pe-inventory` database during certname-driven PCP execution is currently expected
 - broader PCP mediation and any remaining inventory surfaces beyond saved connection records remain open follow-up
 - repo helpers now expose that state directly: `scripts/pe-frontdoor-status.sh` shows the current backend and blockers, and `scripts/validate-pe-failover.sh` exercises a live cutover
+
+Like RBAC replay, this database replay path is transitional. The target is to
+move durable orchestration job and saved inventory state onto Cassandra-backed
+shared Conductor domains rather than copying local PostgreSQL rows between `pe`
+replicas.
 
 ## Non-Goals
 

@@ -1,8 +1,8 @@
-FROM python:3.12-alpine
+FROM python:3.12-slim
 
-RUN addgroup -S conductor && adduser -S -G conductor conductor
+RUN groupadd --system conductor && useradd --system --gid conductor --create-home conductor
 
-RUN python -m pip install --no-cache-dir cryptography pg8000 pika
+RUN python -m pip install --no-cache-dir cryptography pg8000 pika cassandra-driver
 
 COPY conductor-image/scripts/participant.py /usr/local/bin/conductor-participant
 COPY conductor-image/scripts/console_selector.py /usr/local/bin/conductor-console-selector

@@ -1,0 +1,46 @@
+{{- if .Values.cassandra.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "conductor.cassandraHeadlessServiceName" . }}
+  labels:
+{{ include "conductor.labels" . | indent 4 }}
+    app.kubernetes.io/component: cassandra
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: {{ include "conductor.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: cassandra
+  ports:
+    - name: cql
+      port: {{ .Values.cassandra.service.cqlPort }}
+      targetPort: cql
+    - name: intra-node
+      port: {{ .Values.cassandra.service.intraNodePort }}
+      targetPort: intra-node
+    - name: tls
+      port: {{ .Values.cassandra.service.tlsPort }}
+      targetPort: tls
+    - name: jmx
+      port: {{ .Values.cassandra.service.jmxPort }}
+      targetPort: jmx
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "conductor.cassandraServiceName" . }}
+  labels:
+{{ include "conductor.labels" . | indent 4 }}
+    app.kubernetes.io/component: cassandra
+spec:
+  type: {{ .Values.cassandra.service.type }}
+  selector:
+    app.kubernetes.io/name: {{ include "conductor.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: cassandra
+  ports:
+    - name: cql
+      port: {{ .Values.cassandra.service.cqlPort }}
+      targetPort: cql
+{{- end }}

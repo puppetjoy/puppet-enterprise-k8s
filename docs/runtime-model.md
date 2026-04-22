@@ -192,7 +192,22 @@ When `conductor.relay.rbacSync.enabled=true`:
 - ephemeral per-replica activity fields such as `last_login` and token `last_active` are intentionally normalized out of the authoritative convergence token
 - relay readiness can fail if the RBAC managed domain is stale or not converged for the local replica
 
+This RBAC replay path is now considered transitional. The intended
+replacement is a Cassandra-backed Conductor shared-state backend so local PE
+databases stop acting as the cross-replica source of truth for replicated
+auth domains.
+
+The first slice of that replacement is login-session handoff for the auth
+barrier. When Cassandra-backed session storage is enabled, Relay can publish a
+new local `loginsession` row into Cassandra and another `pe` replica can
+recreate that row in its own local RBAC database on demand when the browser
+arrives with the session cookie.
+
 Relay is no longer limited to the PuppetDB submit-only path. The current implementation also converges the managed orchestration database domain between control-plane replicas, while Gateway and selector-backed `service/pe` routing keep PCP broker ownership and Bolt/orchestrator client traffic on one healthy control-plane replica at a time.
+
+That orchestration database replay is also transitional. The target is shared
+Conductor-owned state, backed by Cassandra, while local PE databases become
+execution-local caches or projections rather than peer-replayed authority.
 
 That gives the release a real Fabric membership model without shared storage or hard-coded peer lists, and live validation now covers Bolt task execution, plan execution, and selector failover from one control-plane replica to the other. It still does not mean the release is finished as a fully pooled active-active PE control plane.
 
@@ -202,6 +217,11 @@ The repo now also carries explicit operator validation helpers:
 - `scripts/validate-pe-failover.sh` runs a live failover exercise against the current release by checking the login page, code deploy, orchestration task/plan execution, and agent catalog flow before and after deleting the selected `pe` pod
 
 CA, classification, code-deploy intent, RBAC/local-auth, and managed orchestration job state are now in place, but the browser console, PCP/orchestration path, and compiler file-sync path are intentionally treated as stable-backend traffic through selector-backed `service/pe`. Current evidence indicates that `pe-inventory` backs saved connection inventory such as `/connections`, `/query`, and `/overwrite-connections`, not live PCP broker presence, so an empty `pe-inventory` database during certname-driven task and plan validation is expected. The open orchestration question is broader PCP mediation and any additional inventory surfaces that should converge beyond those saved connection records.
+
+The larger architectural direction is now to replace peer PostgreSQL replay
+for RBAC, orchestration, and login-session handoff with Cassandra-backed
+Conductor shared state while preserving the existing `service/pe` and
+`service/pe-compiler` deployment shape.
 
 ## Code Manager
 

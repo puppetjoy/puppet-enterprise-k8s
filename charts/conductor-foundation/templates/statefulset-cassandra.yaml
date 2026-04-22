@@ -1,0 +1,113 @@
+{{- if .Values.cassandra.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "conductor.cassandraServiceName" . }}
+  labels:
+{{ include "conductor.labels" . | indent 4 }}
+    app.kubernetes.io/component: cassandra
+spec:
+  serviceName: {{ include "conductor.cassandraHeadlessServiceName" . }}
+  replicas: {{ .Values.cassandra.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "conductor.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: cassandra
+  template:
+    metadata:
+      labels:
+{{ include "conductor.labels" . | indent 8 }}
+        app.kubernetes.io/component: cassandra
+    spec:
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml .Values.imagePullSecrets | indent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 180
+      containers:
+        - name: cassandra
+          image: "{{ .Values.cassandra.image.repository }}:{{ .Values.cassandra.image.tag }}"
+          imagePullPolicy: {{ .Values.cassandra.image.pullPolicy }}
+          env:
+            - name: CASSANDRA_CLUSTER_NAME
+              value: {{ .Values.cassandra.clusterName | quote }}
+            - name: CASSANDRA_DC
+              value: {{ .Values.cassandra.datacenter | quote }}
+            - name: CASSANDRA_RACK
+              value: {{ .Values.cassandra.rack | quote }}
+            - name: CASSANDRA_SEEDS
+              value: {{ printf "%s-0.%s.%s.svc.cluster.local" (include "conductor.cassandraServiceName" .) (include "conductor.cassandraHeadlessServiceName" .) .Release.Namespace | quote }}
+            - name: CASSANDRA_ENDPOINT_SNITCH
+              value: GossipingPropertyFileSnitch
+            - name: MAX_HEAP_SIZE
+              value: {{ .Values.cassandra.heap.maxSize | quote }}
+            - name: HEAP_NEWSIZE
+              value: {{ .Values.cassandra.heap.newSize | quote }}
+          ports:
+            - name: cql
+              containerPort: {{ .Values.cassandra.service.cqlPort }}
+            - name: intra-node
+              containerPort: {{ .Values.cassandra.service.intraNodePort }}
+            - name: tls
+              containerPort: {{ .Values.cassandra.service.tlsPort }}
+            - name: jmx
+              containerPort: {{ .Values.cassandra.service.jmxPort }}
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - nodetool statusgossip | grep -q running
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - nodetool statusgossip | grep -q running
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+{{ toYaml .Values.cassandra.resources | indent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/cassandra
+      {{- if not .Values.cassandra.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.cassandra.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+{{ include "conductor.labels" . | indent 10 }}
+          app.kubernetes.io/component: cassandra
+      spec:
+        accessModes:
+{{ toYaml .Values.cassandra.persistence.accessModes | indent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.cassandra.persistence.size }}
+        {{- if .Values.cassandra.persistence.storageClassName }}
+        storageClassName: {{ .Values.cassandra.persistence.storageClassName }}
+        {{- end }}
+  {{- end }}
+{{- end }}

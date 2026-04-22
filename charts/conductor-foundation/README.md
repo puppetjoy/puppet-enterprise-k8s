@@ -5,6 +5,7 @@ concept:
 
 - the Fabric hub
 - the Warden controller
+- optional Cassandra storage for Conductor-owned shared state
 
 Typical install path:
 
@@ -34,6 +35,10 @@ most important values are:
 | `warden.image.*` | Warden image |
 | `warden.intervalSeconds` | Reconciliation interval |
 | `warden.pruneStaleParticipants` | Remove stale participants automatically |
+| `cassandra.enabled` | Enable the shared-state Cassandra cluster |
+| `cassandra.image.*` | Cassandra image |
+| `cassandra.replicaCount` | Cassandra StatefulSet replica count |
+| `cassandra.persistence.*` | Cassandra storage settings |
 | `fabric.segments` | Segment, vhost, and release/workload-set topology |
 | `affinity` / `tolerations` / `nodeSelector` | Cluster placement controls |
 
@@ -42,5 +47,7 @@ most important values are:
 - This chart only provides the Conductor foundation layer.
 - PE and compiler pods join that layer from the `puppet-enterprise` chart when
   `conductor.enabled=true`.
+- Cassandra is disabled by default. Enable it when you are ready to move
+  shared Conductor state off peer PostgreSQL replay and onto a shared backend.
 - Segment definitions should match the workload names and namespaces used by
   the PE chart.

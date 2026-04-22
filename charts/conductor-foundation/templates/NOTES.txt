@@ -11,3 +11,9 @@ Warden publishes per-participant onboarding bundles into Secrets labeled:
 
 Warden also assembles segment trust bundles into Secrets labeled:
   pe-k8s.puppet.com/conductor=trust-bundle
+
+{{- if .Values.cassandra.enabled }}
+
+Cassandra shared-state service:
+  {{ include "conductor.cassandraServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.cassandra.service.cqlPort }}
+{{- end }}

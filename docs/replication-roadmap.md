@@ -134,7 +134,26 @@ Current decision:
 - do not introduce SPOG-only replicas unless they solve a real Kubernetes problem that pooled `service/pe` cannot solve cleanly
 - prefer making pooled control-plane replicas equivalent over introducing topology splits inherited from bare metal or VM deployments
 
-## Phase 6: PE-Owned State Convergence
+## Phase 6: Shared State Backend
+
+The current custom PostgreSQL replay used for some shared control-plane
+domains is useful as a proof point, but it is not the intended end state.
+
+This phase should prove:
+
+- Cassandra can act as the durable shared backend for Conductor-owned control-plane domains
+- `pe` replicas can stay equivalent behind `service/pe` without peer-to-peer database replay
+- the shift does not introduce a new durable middle-tier service
+- local PE databases can become execution-local caches or projections instead of cross-replica authority
+
+Current direction:
+
+- `conductor-foundation` now grows optional Cassandra infrastructure as the shared-state layer
+- peer PostgreSQL replay for RBAC, orchestration, and login-session handoff is now treated as transitional
+- the first migration slices should be login sessions, orchestration state, and only then broader auth domains such as RBAC
+- classifier should evolve toward a Conductor-owned authoritative graph rather than more local-database replay
+
+## Phase 7: PE-Owned State Convergence
 
 Once transport, trust, PuppetDB command relay, Gateway, and code deployment
 convergence exist, the next job is to remove the remaining replica-local PE
@@ -155,6 +174,7 @@ Current status:
 - live validation in Kubernetes confirmed create and delete convergence for managed groups between `pe-0` and `pe-1`
 - RBAC and local-auth managed state now converge across `pe` replicas, including cross-replica token validation for normal user tokens
 - managed orchestration job state now converges across `pe` replicas, with matching `pe-orchestrator` row counts after failover and recovery
+- RBAC and orchestration still rely on transitional peer PostgreSQL replay and are candidates for Cassandra-backed replacement
 - console session behaviour and other remaining console-backed writes are still outstanding
 
 ## Explicit Non-Goals

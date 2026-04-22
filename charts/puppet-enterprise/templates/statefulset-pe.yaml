@@ -582,6 +582,18 @@ spec:
               value: {{ join "," .Values.conductor.relay.commandProxy.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_REPLICATED_COMMANDS
               value: {{ join "," .Values.conductor.relay.commandProxy.replicatedCommands | quote }}
+            - name: CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_BACKEND
+              value: {{ .Values.conductor.relay.authBarrier.loginsessionBackend | quote }}
+            - name: CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_CONTACT_POINTS
+              value: {{ join "," .Values.conductor.relay.authBarrier.cassandra.contactPoints | quote }}
+            - name: CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_PORT
+              value: {{ .Values.conductor.relay.authBarrier.cassandra.port | quote }}
+            - name: CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_KEYSPACE
+              value: {{ .Values.conductor.relay.authBarrier.cassandra.keyspace | quote }}
+            - name: CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_TABLE
+              value: {{ .Values.conductor.relay.authBarrier.cassandra.table | quote }}
+            - name: CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_REPLICATION_FACTOR
+              value: {{ .Values.conductor.relay.authBarrier.cassandra.replicationFactor | quote }}
             - name: CONDUCTOR_RELAY_CODE_DEPLOY_ENABLED
               value: {{ ternary "true" "false" .Values.conductor.relay.codeDeploy.enabled | quote }}
             - name: CONDUCTOR_RELAY_CODE_DEPLOY_STATUS_POLL_INTERVAL_SECONDS

@@ -50,3 +50,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "conductor.wardenConfigMapName" -}}
 {{- printf "%s-warden-config" (include "conductor.fullname" .) -}}
 {{- end -}}
+
+{{- define "conductor.cassandraServiceName" -}}
+{{- printf "%s-cassandra" (include "conductor.fullname" .) -}}
+{{- end -}}
+
+{{- define "conductor.cassandraHeadlessServiceName" -}}
+{{- printf "%s-headless" (include "conductor.cassandraServiceName" .) -}}
+{{- end -}}
