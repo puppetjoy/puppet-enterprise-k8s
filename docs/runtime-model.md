@@ -197,11 +197,14 @@ replacement is a Cassandra-backed Conductor shared-state backend so local PE
 databases stop acting as the cross-replica source of truth for replicated
 auth domains.
 
-The first slice of that replacement is login-session handoff for the auth
-barrier. When Cassandra-backed session storage is enabled, Relay can publish a
-new local `loginsession` row into Cassandra and another `pe` replica can
-recreate that row in its own local RBAC database on demand when the browser
-arrives with the session cookie.
+The first slices of that replacement are login-session handoff for the auth
+barrier and persisted orchestration inventory. When Cassandra-backed session
+storage is enabled, Relay can publish a new local `loginsession` row into
+Cassandra and another `pe` replica can recreate that row in its own local RBAC
+database on demand when the browser arrives with the session cookie. Relay can
+also move `pe-inventory` plus `inventoryKeysJson` toward the same model, with
+shared state in Cassandra and local PostgreSQL used only as the execution-local
+projection.
 
 Relay is no longer limited to the PuppetDB submit-only path. The current implementation also converges the managed orchestration database domain between control-plane replicas, while Gateway and selector-backed `service/pe` routing keep PCP broker ownership and Bolt/orchestrator client traffic on one healthy control-plane replica at a time.
 

@@ -648,6 +648,22 @@ spec:
               value: {{ .Values.conductor.relay.orchestrationSync.inventoryConfPath | quote }}
             - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_SEQUENCE_STRIDE
               value: {{ .Values.conductor.relay.orchestrationSync.sequenceStride | quote }}
+            - name: CONDUCTOR_RELAY_INVENTORY_SYNC_ENABLED
+              value: {{ ternary "true" "false" .Values.conductor.relay.inventorySync.enabled | quote }}
+            - name: CONDUCTOR_RELAY_INVENTORY_SYNC_TARGET_ROLES
+              value: {{ join "," .Values.conductor.relay.inventorySync.targetRoles | quote }}
+            - name: CONDUCTOR_RELAY_INVENTORY_SYNC_INVENTORY_CONF_PATH
+              value: {{ .Values.conductor.relay.inventorySync.inventoryConfPath | quote }}
+            - name: CONDUCTOR_RELAY_INVENTORY_SYNC_CASSANDRA_CONTACT_POINTS
+              value: {{ join "," .Values.conductor.relay.inventorySync.cassandra.contactPoints | quote }}
+            - name: CONDUCTOR_RELAY_INVENTORY_SYNC_CASSANDRA_PORT
+              value: {{ .Values.conductor.relay.inventorySync.cassandra.port | quote }}
+            - name: CONDUCTOR_RELAY_INVENTORY_SYNC_CASSANDRA_KEYSPACE
+              value: {{ .Values.conductor.relay.inventorySync.cassandra.keyspace | quote }}
+            - name: CONDUCTOR_RELAY_INVENTORY_SYNC_CASSANDRA_TABLE
+              value: {{ .Values.conductor.relay.inventorySync.cassandra.table | quote }}
+            - name: CONDUCTOR_RELAY_INVENTORY_SYNC_CASSANDRA_REPLICATION_FACTOR
+              value: {{ .Values.conductor.relay.inventorySync.cassandra.replicationFactor | quote }}
           readinessProbe:
             exec:
               command: ["/usr/local/bin/conductor-relay", "probe", "ready"]
@@ -659,7 +675,7 @@ spec:
           volumeMounts:
             - name: etc
               mountPath: /etc/puppetlabs
-              readOnly: {{ not (or .Values.conductor.relay.caSync.enabled .Values.conductor.relay.rbacSync.enabled .Values.conductor.relay.orchestrationSync.enabled) }}
+              readOnly: {{ not (or .Values.conductor.relay.caSync.enabled .Values.conductor.relay.rbacSync.enabled .Values.conductor.relay.orchestrationSync.enabled .Values.conductor.relay.inventorySync.enabled) }}
             - name: opt
               mountPath: /opt/puppetlabs
               readOnly: true

@@ -216,10 +216,13 @@ This is now considered transitional. The target is to move shared auth-related
 state off peer PostgreSQL replay and onto a Cassandra-backed Conductor domain
 while keeping local PE service behaviour intact.
 
-The first narrow slice of that move is login-session handoff. Relay can now
-use Cassandra as the shared store for `loginsession` records so a peer `pe`
-replica can repopulate its local RBAC session row on demand instead of
-accepting a direct peer database write.
+The first narrow slices of that move are login-session handoff and persisted
+orchestration inventory. Relay can now use Cassandra as the shared store for
+`loginsession` records so a peer `pe` replica can repopulate its local RBAC
+session row on demand instead of accepting a direct peer database write. Relay
+can also move `pe-inventory` plus `inventoryKeysJson` toward the same model,
+with Cassandra as the durable shared store and local PostgreSQL as the
+execution-local projection.
 
 ## Shared Orchestration State
 
@@ -245,9 +248,10 @@ That means:
 - repo helpers now expose that state directly: `scripts/pe-frontdoor-status.sh` shows the current backend and blockers, and `scripts/validate-pe-failover.sh` exercises a live cutover
 
 Like RBAC replay, this database replay path is transitional. The target is to
-move durable orchestration job and saved inventory state onto Cassandra-backed
-shared Conductor domains rather than copying local PostgreSQL rows between `pe`
-replicas.
+move durable orchestration job state fully onto Cassandra-backed shared
+Conductor domains rather than copying local PostgreSQL rows between `pe`
+replicas. Persisted saved inventory is now the first orchestration-owned slice
+on that path.
 
 ## Non-Goals
 

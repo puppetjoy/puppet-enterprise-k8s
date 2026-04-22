@@ -46,7 +46,7 @@ The current custom PostgreSQL replay should be treated as transitional for:
 The target is to move those domains onto Cassandra-backed shared state instead
 of copying tables from one `pe` replica into another.
 
-## Current First Slice
+## Current Runtime Slices
 
 The first runtime slice is login-session handoff for the console auth barrier.
 
@@ -59,6 +59,14 @@ That path now has a Cassandra-backed implementation available:
 
 That keeps PE's local session handling intact while removing direct peer
 database writes for that handoff path.
+
+The next narrow slice is persisted orchestration inventory:
+
+- Relay can treat `pe-inventory` plus `inventoryKeysJson` as a separate shared
+  domain
+- the active `pe` replica can publish that snapshot into Cassandra
+- peer replicas can rehydrate their local `pe-inventory` database from
+  Cassandra-backed shared state instead of replaying peer PostgreSQL rows
 
 ## What Does Not Need Cassandra
 
@@ -93,9 +101,9 @@ The recommended order is:
    - smallest current direct DB sync path
    - good candidate for a Cassandra-backed Conductor domain
 
-2. orchestration jobs and saved inventory connections
+2. orchestration jobs
    - naturally event- and record-oriented
-   - currently the most obvious PostgreSQL replay domain beyond auth
+   - still on transitional peer PostgreSQL replay after inventory moves
 
 3. classifier shared graph
    - move from projected peer replay toward Conductor-owned authoritative graph

@@ -239,9 +239,16 @@ DEFAULT_ORCHESTRATION_SYNC_ENCRYPTION_STORE_PATH = (
     "/etc/puppetlabs/orchestration-services/conf.d/secrets/orchestrator-encryption-keys.json"
 )
 DEFAULT_ORCHESTRATION_SYNC_SEQUENCE_STRIDE = 1024
+DEFAULT_INVENTORY_SYNC_STATE_FILENAME = "inventory-sync-state.json"
+DEFAULT_INVENTORY_SYNC_SCOPE = "pe-orchestration-inventory"
+DEFAULT_INVENTORY_SYNC_CASSANDRA_KEYSPACE = "conductor_orchestration"
+DEFAULT_INVENTORY_SYNC_CASSANDRA_TABLE = "inventory_state"
 ORCHESTRATION_SYNC_REQUIRED_AUTH_FILES = {
     "inventoryKeysJson": DEFAULT_ORCHESTRATION_SYNC_KEYS_PATH,
     "orchestratorEncryptionStore": DEFAULT_ORCHESTRATION_SYNC_ENCRYPTION_STORE_PATH,
+}
+INVENTORY_SYNC_REQUIRED_AUTH_FILES = {
+    "inventoryKeysJson": DEFAULT_ORCHESTRATION_SYNC_KEYS_PATH,
 }
 ORCHESTRATION_SYNC_DATABASE_SPECS = {
     "orchestrator": {
@@ -906,6 +913,8 @@ def relay_status_ready(status):
         return False
     if status.get("orchestrationSyncEnabled", False) and not status.get("orchestrationSyncReady", False):
         return False
+    if status.get("inventorySyncEnabled", False) and not status.get("inventorySyncReady", False):
+        return False
     if status.get("authBarrierEnabled", False) and not status.get("authBarrierReady", False):
         return False
     if status.get("codeDeployEnabled", False) and not status.get("codeDeployReady", False):
@@ -931,6 +940,8 @@ def relay_frontdoor_blockers(status):
         blockers.append("rbac-sync-not-ready")
     if status.get("orchestrationSyncEnabled", False) and not status.get("orchestrationSyncReady", False):
         blockers.append("orchestration-sync-not-ready")
+    if status.get("inventorySyncEnabled", False) and not status.get("inventorySyncReady", False):
+        blockers.append("inventory-sync-not-ready")
     if status.get("authBarrierEnabled", False) and not status.get("authBarrierReady", False):
         blockers.append("auth-barrier-not-ready")
     if status.get("codeDeployEnabled", False) and not status.get("codeDeployReady", False):
@@ -1560,6 +1571,50 @@ class RelayRuntime:
             raise RuntimeError(
                 "orchestration sequence stride must be greater than or equal to the pod residue"
             )
+        self.inventory_sync_enabled = env_bool(
+            "CONDUCTOR_RELAY_INVENTORY_SYNC_ENABLED",
+            False,
+        )
+        self.inventory_sync_target_roles = env_csv(
+            "CONDUCTOR_RELAY_INVENTORY_SYNC_TARGET_ROLES",
+            default=DEFAULT_ORCHESTRATION_TARGET_ROLES,
+        )
+        self.inventory_sync_scope = DEFAULT_INVENTORY_SYNC_SCOPE
+        self.inventory_sync_state_path = os.path.join(
+            self.output_dir,
+            DEFAULT_INVENTORY_SYNC_STATE_FILENAME,
+        )
+        self.inventory_sync_inventory_conf_path = (
+            os.environ.get("CONDUCTOR_RELAY_INVENTORY_SYNC_INVENTORY_CONF_PATH", "").strip()
+            or DEFAULT_ORCHESTRATION_SYNC_INVENTORY_CONF_PATH
+        )
+        self.inventory_sync_cassandra_contact_points = env_csv(
+            "CONDUCTOR_RELAY_INVENTORY_SYNC_CASSANDRA_CONTACT_POINTS",
+        )
+        self.inventory_sync_cassandra_port = env_int(
+            "CONDUCTOR_RELAY_INVENTORY_SYNC_CASSANDRA_PORT",
+            9042,
+        )
+        self.inventory_sync_cassandra_keyspace = normalize_cassandra_identifier(
+            os.environ.get(
+                "CONDUCTOR_RELAY_INVENTORY_SYNC_CASSANDRA_KEYSPACE",
+                "",
+            ).strip()
+            or DEFAULT_INVENTORY_SYNC_CASSANDRA_KEYSPACE,
+            "keyspace",
+        )
+        self.inventory_sync_cassandra_table = normalize_cassandra_identifier(
+            os.environ.get(
+                "CONDUCTOR_RELAY_INVENTORY_SYNC_CASSANDRA_TABLE",
+                "",
+            ).strip()
+            or DEFAULT_INVENTORY_SYNC_CASSANDRA_TABLE,
+            "table",
+        )
+        self.inventory_sync_cassandra_replication_factor = env_int(
+            "CONDUCTOR_RELAY_INVENTORY_SYNC_CASSANDRA_REPLICATION_FACTOR",
+            3,
+        )
         self.ca_sync_enabled = env_bool("CONDUCTOR_RELAY_CA_SYNC_ENABLED", False)
         self.ca_sync_dir = (
             os.environ.get("CONDUCTOR_RELAY_CA_SYNC_DIR", "").strip()
@@ -1696,6 +1751,7 @@ class RelayRuntime:
         self.classifier_sync_runtime_error = ""
         self.rbac_sync_runtime_error = ""
         self.orchestration_sync_runtime_error = ""
+        self.inventory_sync_runtime_error = ""
         self.code_deploy_suppressions = {}
         self.code_deploy_queue = queue.Queue()
         self.code_deploy_queued = set()
@@ -1711,6 +1767,9 @@ class RelayRuntime:
         self.orchestration_sync_state = self.default_orchestration_sync_state()
         self.next_orchestration_publish = 0
         self.last_published_orchestration_hash = ""
+        self.inventory_sync_state = self.default_inventory_sync_state()
+        self.next_inventory_publish = 0
+        self.last_published_inventory_hash = ""
 
         self.connection = None
         self.channel = None
@@ -1723,6 +1782,8 @@ class RelayRuntime:
 
         self.command_proxy_server = None
         self.command_proxy_thread = None
+        self.inventory_sync_cassandra_cluster = None
+        self.inventory_sync_cassandra_session = None
         self.code_deploy_hook_server = None
         self.code_deploy_hook_thread = None
         self.auth_barrier_http_server = None
@@ -1843,6 +1904,22 @@ class RelayRuntime:
             "orchestrationSyncLastAppliedAt": 0,
             "orchestrationSyncLastConvergedAt": 0,
             "orchestrationSyncLastError": "",
+            "inventorySyncEnabled": self.inventory_sync_enabled,
+            "inventorySyncReady": not self.inventory_sync_enabled,
+            "inventorySyncTargetRoles": list(self.inventory_sync_target_roles),
+            "inventorySyncScope": self.inventory_sync_scope if self.inventory_sync_enabled else "",
+            "inventorySyncState": "idle",
+            "inventorySyncDesiredHash": "",
+            "inventorySyncActualHash": "",
+            "inventorySyncDesiredTableCount": 0,
+            "inventorySyncActualTableCount": 0,
+            "inventorySyncDesiredRowCount": 0,
+            "inventorySyncActualRowCount": 0,
+            "inventorySyncAuthFileCount": 0,
+            "inventorySyncLastPublishedAt": 0,
+            "inventorySyncLastAppliedAt": 0,
+            "inventorySyncLastConvergedAt": 0,
+            "inventorySyncLastError": "",
             "authBarrierEnabled": self.auth_barrier_enabled,
             "authBarrierReady": not self.auth_barrier_enabled,
             "authBarrierHttpListenAddress": (
@@ -1889,6 +1966,7 @@ class RelayRuntime:
         self.load_classifier_sync_state()
         self.load_rbac_sync_state()
         self.load_orchestration_sync_state()
+        self.load_inventory_sync_state()
         self.load_code_deploy_state()
 
     @staticmethod
@@ -3702,6 +3780,65 @@ class RelayRuntime:
         with self.lock:
             self.refresh_orchestration_summary_locked()
 
+    def default_inventory_sync_state(self):
+        return {
+            "state": "idle",
+            "scope": self.inventory_sync_scope,
+            "desiredHash": "",
+            "actualHash": "",
+            "desiredTableCount": 0,
+            "actualTableCount": 0,
+            "desiredRowCount": 0,
+            "actualRowCount": 0,
+            "authFileCount": 0,
+            "originParticipant": "",
+            "desiredPublishedAt": 0,
+            "lastReceivedAt": 0,
+            "lastPublishedAt": 0,
+            "lastAppliedAt": 0,
+            "lastConvergedAt": 0,
+            "lastError": "",
+            "lastErrorAt": 0,
+        }
+
+    def refresh_inventory_summary_locked(self):
+        state = dict(self.inventory_sync_state)
+        ready = not self.inventory_sync_enabled
+        if self.inventory_sync_enabled:
+            desired_hash = (state.get("desiredHash") or "").strip()
+            actual_hash = (state.get("actualHash") or "").strip()
+            phase = (state.get("state") or "idle").strip() or "idle"
+            ready = bool(actual_hash) and phase not in {"pending", "in-progress", "failed"}
+            if desired_hash and actual_hash != desired_hash:
+                ready = False
+            if self.inventory_sync_runtime_error:
+                ready = False
+
+        last_error = self.inventory_sync_runtime_error or (state.get("lastError") or "").strip()
+        self.status.update(
+            {
+                "inventorySyncReady": ready,
+                "inventorySyncTargetRoles": list(self.inventory_sync_target_roles),
+                "inventorySyncScope": state.get("scope", ""),
+                "inventorySyncState": state.get("state", "idle"),
+                "inventorySyncDesiredHash": state.get("desiredHash", ""),
+                "inventorySyncActualHash": state.get("actualHash", ""),
+                "inventorySyncDesiredTableCount": int(state.get("desiredTableCount") or 0),
+                "inventorySyncActualTableCount": int(state.get("actualTableCount") or 0),
+                "inventorySyncDesiredRowCount": int(state.get("desiredRowCount") or 0),
+                "inventorySyncActualRowCount": int(state.get("actualRowCount") or 0),
+                "inventorySyncAuthFileCount": int(state.get("authFileCount") or 0),
+                "inventorySyncLastPublishedAt": int(state.get("lastPublishedAt") or 0),
+                "inventorySyncLastAppliedAt": int(state.get("lastAppliedAt") or 0),
+                "inventorySyncLastConvergedAt": int(state.get("lastConvergedAt") or 0),
+                "inventorySyncLastError": last_error,
+            }
+        )
+
+    def refresh_inventory_summary(self):
+        with self.lock:
+            self.refresh_inventory_summary_locked()
+
     def persist_orchestration_sync_state(self):
         if not self.orchestration_sync_enabled:
             return
@@ -3752,12 +3889,87 @@ class RelayRuntime:
         self.persist_orchestration_sync_state()
         return snapshot
 
+    def persist_inventory_sync_state(self):
+        if not self.inventory_sync_enabled:
+            return
+        with self.lock:
+            payload = {
+                "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+                "kind": "ConductorRelayInventorySyncState",
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "state": dict(self.inventory_sync_state),
+            }
+        write_text_file(self.inventory_sync_state_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    def load_inventory_sync_state(self):
+        state = self.default_inventory_sync_state()
+        if self.inventory_sync_enabled and os.path.isfile(self.inventory_sync_state_path):
+            try:
+                payload = read_json_file(self.inventory_sync_state_path)
+                raw_state = payload.get("state") or {}
+                if isinstance(raw_state, dict):
+                    state.update(raw_state)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
+                log(f"Failed to load inventory sync state: {error}")
+        with self.lock:
+            self.inventory_sync_state = state
+            self.refresh_inventory_summary_locked()
+
+    def inventory_sync_state_snapshot(self):
+        with self.lock:
+            return dict(self.inventory_sync_state)
+
+    def merge_inventory_sync_state(self, **updates):
+        with self.lock:
+            state = dict(self.inventory_sync_state)
+            state.update(updates)
+            if "lastError" in updates:
+                if (updates.get("lastError") or "").strip():
+                    state["lastErrorAt"] = int(updates.get("lastErrorAt") or time.time())
+                else:
+                    state["lastErrorAt"] = 0
+                    self.inventory_sync_runtime_error = ""
+            self.inventory_sync_state = state
+            self.refresh_inventory_summary_locked()
+            snapshot = dict(state)
+        self.persist_inventory_sync_state()
+        return snapshot
+
     def orchestration_db_conf_path(self, database_name):
         if database_name == "orchestrator":
             return self.orchestration_sync_orchestrator_conf_path
         if database_name == "inventory":
             return self.orchestration_sync_inventory_conf_path
         raise RuntimeError(f"unsupported orchestration sync database {database_name}")
+
+    def orchestration_sync_database_names(self):
+        names = list(ORCHESTRATION_SYNC_DATABASE_SPECS)
+        if self.inventory_sync_enabled:
+            names = [name for name in names if name != "inventory"]
+        return names
+
+    def orchestration_sync_auth_file_names(self):
+        names = list(ORCHESTRATION_SYNC_REQUIRED_AUTH_FILES)
+        if self.inventory_sync_enabled:
+            names = [name for name in names if name != "inventoryKeysJson"]
+        return names
+
+    def inventory_sync_auth_file_paths(self):
+        inventory_content = ""
+        if os.path.isfile(self.inventory_sync_inventory_conf_path):
+            with open(self.inventory_sync_inventory_conf_path, "r", encoding="utf-8") as handle:
+                inventory_content = handle.read()
+
+        key_dir = self.rbac_sync_hocon_string(inventory_content, "keypath")
+        inventory_keys_path = (
+            os.path.join(key_dir, "keys.json")
+            if key_dir
+            else DEFAULT_ORCHESTRATION_SYNC_KEYS_PATH
+        )
+        return {
+            "inventoryKeysJson": inventory_keys_path,
+        }
 
     def orchestration_sync_db_spec(self, database_name):
         spec = ORCHESTRATION_SYNC_DATABASE_SPECS.get(database_name)
@@ -3986,13 +4198,15 @@ class RelayRuntime:
 
     def read_local_orchestration_state(self):
         databases = {}
-        for database_name in ORCHESTRATION_SYNC_DATABASE_SPECS:
+        for database_name in self.orchestration_sync_database_names():
             databases[database_name] = self.read_orchestration_database_state(
                 database_name,
                 self.orchestration_db_conf_path(database_name),
             )
         auth_files = {}
-        for logical_name, source_path in self.orchestration_sync_auth_file_paths().items():
+        auth_paths = self.orchestration_sync_auth_file_paths()
+        for logical_name in self.orchestration_sync_auth_file_names():
+            source_path = auth_paths.get(logical_name) or ""
             if not source_path or not os.path.isfile(source_path):
                 raise RuntimeError(
                     f"orchestration auth file is missing: {source_path or logical_name}"
@@ -4230,7 +4444,7 @@ class RelayRuntime:
         auth_files = dict(state_payload.get("authFiles") or {})
         self.apply_orchestration_auth_files(auth_files)
 
-        for database_name in ORCHESTRATION_SYNC_DATABASE_SPECS:
+        for database_name in self.orchestration_sync_database_names():
             database_payload = desired_databases.get(database_name) or {}
             if not isinstance(database_payload, dict):
                 raise RuntimeError(
@@ -4263,7 +4477,7 @@ class RelayRuntime:
             "desiredHash": desired_hash,
             "actualHash": actual_hash,
             "desiredDatabaseCount": int(
-                state_payload.get("databaseCount") or len(ORCHESTRATION_SYNC_DATABASE_SPECS)
+                state_payload.get("databaseCount") or len(self.orchestration_sync_database_names())
             ),
             "actualDatabaseCount": int(local_state.get("databaseCount") or 0),
             "desiredTableCount": int(state_payload.get("tableCount") or 0),
@@ -4345,7 +4559,7 @@ class RelayRuntime:
             scope=state_payload.get("scope") or self.orchestration_sync_scope,
             desiredHash=desired_hash,
             desiredDatabaseCount=int(
-                state_payload.get("databaseCount") or len(ORCHESTRATION_SYNC_DATABASE_SPECS)
+                state_payload.get("databaseCount") or len(self.orchestration_sync_database_names())
             ),
             desiredTableCount=int(state_payload.get("tableCount") or 0),
             desiredRowCount=int(state_payload.get("rowCount") or 0),
@@ -4363,6 +4577,384 @@ class RelayRuntime:
             f"{desired_hash[:12]} from {origin_participant}"
         )
         self.reconcile_orchestration_state(state_payload, published_at, origin_participant)
+
+    def ensure_inventory_sync_cassandra_session(self):
+        if not self.inventory_sync_enabled:
+            raise RuntimeError("inventory sync is not enabled")
+        if not self.inventory_sync_cassandra_contact_points:
+            raise RuntimeError("no Cassandra contact points configured for inventory sync")
+        if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
+            raise RuntimeError("cassandra-driver is not available in the Conductor image")
+
+        with self.lock:
+            if self.inventory_sync_cassandra_session is not None:
+                return self.inventory_sync_cassandra_session
+
+            cluster = Cluster(
+                contact_points=self.inventory_sync_cassandra_contact_points,
+                port=self.inventory_sync_cassandra_port,
+            )
+            session = cluster.connect()
+            keyspace = self.inventory_sync_cassandra_keyspace
+            table = self.inventory_sync_cassandra_table
+            replication_factor = max(1, self.inventory_sync_cassandra_replication_factor)
+            session.execute(
+                f"""
+                create keyspace if not exists {keyspace}
+                with replication = {{
+                    'class': 'SimpleStrategy',
+                    'replication_factor': {replication_factor}
+                }}
+                """
+            )
+            session.set_keyspace(keyspace)
+            session.execute(
+                f"""
+                create table if not exists {table} (
+                    scope text primary key,
+                    published_at bigint,
+                    origin_participant text,
+                    state_hash text,
+                    payload text
+                )
+                """
+            )
+            self.inventory_sync_cassandra_cluster = cluster
+            self.inventory_sync_cassandra_session = session
+            return session
+
+    def read_shared_inventory_state(self):
+        session = self.ensure_inventory_sync_cassandra_session()
+        statement = SimpleStatement(
+            (
+                f"select scope, published_at, origin_participant, state_hash, payload "
+                f"from {self.inventory_sync_cassandra_table} where scope = %s"
+            ),
+            consistency_level=ConsistencyLevel.QUORUM,
+        )
+        row = session.execute(statement, (self.inventory_sync_scope,)).one()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row.payload or "{}")
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(f"invalid shared inventory sync payload: {error}") from error
+        payload_hash = ((payload or {}).get("hash") or "").strip()
+        expected_hash = (row.state_hash or "").strip()
+        if expected_hash and payload_hash and payload_hash != expected_hash:
+            raise RuntimeError(
+                "shared inventory sync payload hash mismatch: "
+                f"expected {expected_hash}, got {payload_hash}"
+            )
+        return {
+            "scope": (row.scope or "").strip(),
+            "publishedAt": int(row.published_at or 0),
+            "originParticipant": (row.origin_participant or "").strip(),
+            "stateHash": expected_hash or payload_hash,
+            "state": payload if isinstance(payload, dict) else {},
+        }
+
+    def upsert_shared_inventory_state(self, state, published_at):
+        state_hash = ((state or {}).get("hash") or "").strip()
+        if not state_hash:
+            raise RuntimeError("inventory sync state is missing a hash")
+        session = self.ensure_inventory_sync_cassandra_session()
+        statement = SimpleStatement(
+            (
+                f"insert into {self.inventory_sync_cassandra_table} "
+                "(scope, published_at, origin_participant, state_hash, payload) "
+                "values (%s, %s, %s, %s, %s)"
+            ),
+            consistency_level=ConsistencyLevel.QUORUM,
+        )
+        session.execute(
+            statement,
+            (
+                self.inventory_sync_scope,
+                int(published_at or time.time()),
+                self.pod_name,
+                state_hash,
+                stable_json(state),
+            ),
+        )
+
+    def read_local_inventory_sync_state(self):
+        database = self.read_orchestration_database_state(
+            "inventory",
+            self.inventory_sync_inventory_conf_path,
+        )
+        auth_files = {}
+        for logical_name, source_path in self.inventory_sync_auth_file_paths().items():
+            if not source_path or not os.path.isfile(source_path):
+                raise RuntimeError(
+                    f"inventory auth file is missing: {source_path or logical_name}"
+                )
+            with open(source_path, "rb") as handle:
+                auth_files[logical_name] = base64.b64encode(handle.read()).decode("ascii")
+        payload = {
+            "scope": self.inventory_sync_scope,
+            "database": database,
+            "tableCount": int(database.get("tableCount") or 0),
+            "rowCount": int(database.get("rowCount") or 0),
+            "authFiles": auth_files,
+            "authFileCount": len(auth_files),
+        }
+        payload["hash"] = self.orchestration_rows_hash({"inventory": database}, auth_files)
+        return payload
+
+    def refresh_local_inventory_sync_state(self):
+        if not self.inventory_sync_enabled:
+            return
+
+        observed_at = int(time.time())
+        local_state = self.read_local_inventory_sync_state()
+        snapshot = self.inventory_sync_state_snapshot()
+        desired_hash = (snapshot.get("desiredHash") or "").strip()
+        actual_hash = (local_state.get("hash") or "").strip()
+        phase = (snapshot.get("state") or "idle").strip() or "idle"
+        origin_participant = (snapshot.get("originParticipant") or "").strip()
+
+        updates = {
+            "scope": self.inventory_sync_scope,
+            "actualHash": actual_hash,
+            "actualTableCount": int(local_state.get("tableCount") or 0),
+            "actualRowCount": int(local_state.get("rowCount") or 0),
+            "authFileCount": int(local_state.get("authFileCount") or 0),
+        }
+        if desired_hash and desired_hash == actual_hash:
+            updates.update(
+                {
+                    "state": "converged",
+                    "lastConvergedAt": observed_at,
+                    "lastError": "",
+                }
+            )
+        elif desired_hash and origin_participant and origin_participant != self.pod_name and phase in {
+            "pending",
+            "in-progress",
+            "failed",
+        }:
+            updates["state"] = phase
+        else:
+            updates.update(
+                {
+                    "state": "observed",
+                    "desiredHash": actual_hash,
+                    "desiredTableCount": int(local_state.get("tableCount") or 0),
+                    "desiredRowCount": int(local_state.get("rowCount") or 0),
+                    "originParticipant": self.pod_name,
+                    "desiredPublishedAt": observed_at,
+                    "lastConvergedAt": observed_at,
+                    "lastError": "",
+                }
+            )
+        self.inventory_sync_runtime_error = ""
+        self.merge_inventory_sync_state(**updates)
+
+    def build_inventory_state_payload(self, state, published_at):
+        return {
+            "apiVersion": "pe-k8s.puppet.com/v1alpha1",
+            "kind": "ConductorRelayInventoryState",
+            "publishedAt": published_at,
+            "origin": {
+                "participant": self.pod_name,
+                "namespace": self.pod_namespace,
+                "role": self.relay_role,
+                "segment": self.segment_name,
+            },
+            "targetRoles": list(self.inventory_sync_target_roles),
+            "state": {
+                "scope": state.get("scope", self.inventory_sync_scope),
+                "hash": state.get("hash", ""),
+                "tableCount": int(state.get("tableCount") or 0),
+                "rowCount": int(state.get("rowCount") or 0),
+                "authFileCount": int(state.get("authFileCount") or 0),
+            },
+        }
+
+    def record_published_inventory_state(self, state, published_at, now):
+        state_hash = (state.get("hash") or "").strip()
+        self.merge_inventory_sync_state(
+            state="converged",
+            scope=self.inventory_sync_scope,
+            desiredHash=state_hash,
+            actualHash=state_hash,
+            desiredTableCount=int(state.get("tableCount") or 0),
+            actualTableCount=int(state.get("tableCount") or 0),
+            desiredRowCount=int(state.get("rowCount") or 0),
+            actualRowCount=int(state.get("rowCount") or 0),
+            authFileCount=int(state.get("authFileCount") or 0),
+            originParticipant=self.pod_name,
+            desiredPublishedAt=published_at,
+            lastPublishedAt=now,
+            lastConvergedAt=now,
+            lastError="",
+        )
+
+    def publish_inventory_state(self):
+        if (
+            not self.inventory_sync_enabled
+            or self.connection is None
+            or self.channel is None
+            or self.bundle is None
+        ):
+            return
+
+        state = self.read_local_inventory_sync_state()
+        now = int(time.time())
+        state_hash = (state.get("hash") or "").strip()
+        should_publish = (
+            state_hash != self.last_published_inventory_hash
+            or now >= self.next_inventory_publish
+        )
+        if not should_publish:
+            return
+
+        snapshot = self.inventory_sync_state_snapshot()
+        version_at = int(snapshot.get("desiredPublishedAt") or 0)
+        if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
+            version_at = now
+
+        self.upsert_shared_inventory_state(state, version_at)
+        payload = self.build_inventory_state_payload(state, version_at)
+        self.channel.basic_publish(
+            exchange=self.bundle["hub"]["exchanges"]["data"],
+            routing_key=f"relay.inventory-state.{sanitize_fragment(self.pod_name)}",
+            body=stable_json(payload).encode("utf-8"),
+            properties=pika.BasicProperties(content_type="application/json", delivery_mode=2),
+        )
+        self.last_published_inventory_hash = state_hash
+        self.next_inventory_publish = now + self.publish_interval
+        self.record_published_inventory_state(state, version_at, now)
+
+    def reconcile_inventory_state(self, state_payload, published_at, origin_participant):
+        shared = self.read_shared_inventory_state()
+        if shared is None:
+            raise RuntimeError("shared inventory sync state is missing from Cassandra")
+        shared_published_at = int(shared.get("publishedAt") or 0)
+        if published_at and shared_published_at and shared_published_at < published_at:
+            raise RuntimeError(
+                "shared inventory sync state is older than the received intent: "
+                f"{shared_published_at} < {published_at}"
+            )
+
+        shared_state = dict(shared.get("state") or {})
+        auth_files = dict(shared_state.get("authFiles") or {})
+        self.apply_orchestration_auth_files(auth_files)
+
+        database_payload = shared_state.get("database") or {}
+        if not isinstance(database_payload, dict):
+            raise RuntimeError("inventory sync payload database is invalid")
+        desired_tables_payload = database_payload.get("tables") or {}
+        if not isinstance(desired_tables_payload, dict):
+            raise RuntimeError("inventory sync payload tables are invalid")
+        desired_tables = {}
+        for table_name in self.orchestration_sync_db_spec("inventory")["tables"]:
+            rows = desired_tables_payload.get(table_name) or []
+            if not isinstance(rows, list):
+                raise RuntimeError(f"inventory sync payload table inventory.{table_name} is not a list")
+            desired_tables[table_name] = rows
+        self.reconcile_orchestration_database(
+            "inventory",
+            self.inventory_sync_inventory_conf_path,
+            desired_tables,
+        )
+
+        local_state = self.read_local_inventory_sync_state()
+        actual_hash = (local_state.get("hash") or "").strip()
+        desired_hash = (state_payload.get("hash") or "").strip()
+        updates = {
+            "scope": state_payload.get("scope") or self.inventory_sync_scope,
+            "desiredHash": desired_hash,
+            "actualHash": actual_hash,
+            "desiredTableCount": int(state_payload.get("tableCount") or 0),
+            "actualTableCount": int(local_state.get("tableCount") or 0),
+            "desiredRowCount": int(state_payload.get("rowCount") or 0),
+            "actualRowCount": int(local_state.get("rowCount") or 0),
+            "authFileCount": int(local_state.get("authFileCount") or 0),
+            "originParticipant": origin_participant,
+            "desiredPublishedAt": int(published_at or time.time()),
+            "lastAppliedAt": int(time.time()),
+        }
+        if actual_hash == desired_hash:
+            updates.update(
+                {
+                    "state": "converged",
+                    "lastConvergedAt": int(time.time()),
+                    "lastError": "",
+                }
+            )
+        else:
+            updates.update(
+                {
+                    "state": "failed",
+                    "lastError": (
+                        "inventory managed-domain hash mismatch after apply: "
+                        f"expected {desired_hash}, got {actual_hash or 'none'}"
+                    ),
+                }
+            )
+        self.inventory_sync_runtime_error = ""
+        self.merge_inventory_sync_state(**updates)
+
+    def handle_remote_inventory_state(self, payload):
+        if not self.inventory_sync_enabled:
+            return
+
+        origin = payload.get("origin") or {}
+        origin_participant = (origin.get("participant") or "").strip()
+        if not origin_participant or origin_participant == self.pod_name:
+            return
+
+        target_roles = payload.get("targetRoles") or []
+        if target_roles and self.relay_role not in target_roles:
+            return
+
+        state_payload = payload.get("state") or {}
+        desired_hash = (state_payload.get("hash") or "").strip()
+        if not desired_hash:
+            raise RuntimeError("inventory sync payload is missing a hash")
+
+        published_at = int(payload.get("publishedAt") or 0)
+        current_state = self.inventory_sync_state_snapshot()
+        current_desired_hash = (current_state.get("desiredHash") or "").strip()
+        current_actual_hash = (current_state.get("actualHash") or "").strip()
+        current_published_at = int(current_state.get("desiredPublishedAt") or 0)
+        if current_published_at and published_at and published_at < current_published_at:
+            return
+        if (
+            current_published_at
+            and published_at
+            and published_at == current_published_at
+            and desired_hash == current_desired_hash
+        ):
+            return
+        if desired_hash == current_actual_hash and desired_hash == current_desired_hash:
+            self.merge_inventory_sync_state(
+                state="converged",
+                lastReceivedAt=int(time.time()),
+                lastConvergedAt=int(time.time()),
+                lastError="",
+            )
+            return
+
+        self.merge_inventory_sync_state(
+            state="pending",
+            scope=state_payload.get("scope") or self.inventory_sync_scope,
+            desiredHash=desired_hash,
+            desiredTableCount=int(state_payload.get("tableCount") or 0),
+            desiredRowCount=int(state_payload.get("rowCount") or 0),
+            authFileCount=int(state_payload.get("authFileCount") or 0),
+            originParticipant=origin_participant,
+            desiredPublishedAt=published_at or int(time.time()),
+            lastReceivedAt=int(time.time()),
+            lastError="",
+        )
+        log(
+            "Received inventory sync intent at "
+            f"{desired_hash[:12]} from {origin_participant}"
+        )
+        self.reconcile_inventory_state(state_payload, published_at, origin_participant)
 
     def code_deploy_hook_url(self):
         return (
@@ -6774,6 +7366,19 @@ class RelayRuntime:
                 channel.basic_nack(method.delivery_tag, requeue=True)
             return
 
+        if kind == "ConductorRelayInventoryState":
+            try:
+                self.handle_remote_inventory_state(payload)
+                self.set_status(lastReceivedAt=int(time.time()))
+                channel.basic_ack(method.delivery_tag)
+            except Exception as error:
+                self.inventory_sync_runtime_error = str(error)
+                self.refresh_inventory_summary()
+                log(f"Remote inventory sync handling failed: {error}")
+                time.sleep(2)
+                channel.basic_nack(method.delivery_tag, requeue=True)
+            return
+
         channel.basic_ack(method.delivery_tag)
 
     def connect(self, bundle, username, password):
@@ -6941,6 +7546,16 @@ class RelayRuntime:
                 log(f"Orchestration sync refresh failed: {error}")
 
             try:
+                self.refresh_local_inventory_sync_state()
+            except KeyboardInterrupt:
+                raise
+            except Exception as error:
+                last_error = str(error)
+                self.inventory_sync_runtime_error = str(error)
+                self.refresh_inventory_summary()
+                log(f"Inventory sync refresh failed: {error}")
+
+            try:
                 self.refresh_local_code_deploy_status()
             except KeyboardInterrupt:
                 raise
@@ -6960,6 +7575,7 @@ class RelayRuntime:
                     self.publish_classifier_state()
                     self.publish_rbac_state()
                     self.publish_orchestration_state()
+                    self.publish_inventory_state()
                     self.connection.process_data_events(time_limit=1)
                 else:
                     time.sleep(1)

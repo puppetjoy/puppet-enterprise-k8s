@@ -204,6 +204,17 @@ conductor:
       orchestratorConfPath: /etc/puppetlabs/orchestration-services/conf.d/orchestrator.conf
       inventoryConfPath: /etc/puppetlabs/orchestration-services/conf.d/inventory.conf
       sequenceStride: 1024
+    inventorySync:
+      enabled: false
+      targetRoles:
+        - control-plane
+      inventoryConfPath: /etc/puppetlabs/orchestration-services/conf.d/inventory.conf
+      cassandra:
+        contactPoints: []
+        port: 9042
+        keyspace: conductor_orchestration
+        table: inventory_state
+        replicationFactor: 3
     resources: {}
   gateway:
     enabled: false
