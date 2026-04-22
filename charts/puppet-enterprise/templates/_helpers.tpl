@@ -382,3 +382,21 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "pe.conductorNamespace" -}}
 {{- default .Release.Namespace .Values.conductor.namespace -}}
 {{- end -}}
+
+{{- define "pe.conductorCassandraServiceName" -}}
+{{- default "conductor-cassandra" .Values.conductor.sharedState.cassandra.serviceName -}}
+{{- end -}}
+
+{{- define "pe.conductorCassandraDnsName" -}}
+{{- printf "%s.%s.svc.cluster.local" (include "pe.conductorCassandraServiceName" .) (include "pe.conductorNamespace" .) -}}
+{{- end -}}
+
+{{- define "pe.conductorSharedStateContactPointsCsv" -}}
+{{- $root := .root -}}
+{{- $points := default (list) .points -}}
+{{- if gt (len $points) 0 -}}
+{{- join "," $points -}}
+{{- else -}}
+{{- include "pe.conductorCassandraDnsName" $root -}}
+{{- end -}}
+{{- end -}}

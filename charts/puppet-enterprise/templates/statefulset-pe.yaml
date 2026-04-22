@@ -585,7 +585,7 @@ spec:
             - name: CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_BACKEND
               value: {{ .Values.conductor.relay.authBarrier.loginsessionBackend | quote }}
             - name: CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_CONTACT_POINTS
-              value: {{ join "," .Values.conductor.relay.authBarrier.cassandra.contactPoints | quote }}
+              value: {{ include "pe.conductorSharedStateContactPointsCsv" (dict "root" . "points" .Values.conductor.relay.authBarrier.cassandra.contactPoints) | quote }}
             - name: CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_PORT
               value: {{ .Values.conductor.relay.authBarrier.cassandra.port | quote }}
             - name: CONDUCTOR_RELAY_AUTH_BARRIER_LOGINSESSION_CASSANDRA_KEYSPACE
@@ -641,7 +641,7 @@ spec:
             - name: CONDUCTOR_RELAY_RBAC_SYNC_EXCLUDED_TOKEN_LABEL_PREFIXES
               value: {{ join "," .Values.conductor.relay.rbacSync.excludedTokenLabelPrefixes | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_CASSANDRA_CONTACT_POINTS
-              value: {{ join "," .Values.conductor.relay.rbacSync.cassandra.contactPoints | quote }}
+              value: {{ include "pe.conductorSharedStateContactPointsCsv" (dict "root" . "points" .Values.conductor.relay.rbacSync.cassandra.contactPoints) | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_CASSANDRA_PORT
               value: {{ .Values.conductor.relay.rbacSync.cassandra.port | quote }}
             - name: CONDUCTOR_RELAY_RBAC_SYNC_CASSANDRA_KEYSPACE
@@ -655,7 +655,7 @@ spec:
             - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_TARGET_ROLES
               value: {{ join "," .Values.conductor.relay.rbacTokenSync.targetRoles | quote }}
             - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_CONTACT_POINTS
-              value: {{ join "," .Values.conductor.relay.rbacTokenSync.cassandra.contactPoints | quote }}
+              value: {{ include "pe.conductorSharedStateContactPointsCsv" (dict "root" . "points" .Values.conductor.relay.rbacTokenSync.cassandra.contactPoints) | quote }}
             - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_PORT
               value: {{ .Values.conductor.relay.rbacTokenSync.cassandra.port | quote }}
             - name: CONDUCTOR_RELAY_RBAC_TOKEN_SYNC_CASSANDRA_KEYSPACE
@@ -677,7 +677,7 @@ spec:
             - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_SEQUENCE_STRIDE
               value: {{ .Values.conductor.relay.orchestrationSync.sequenceStride | quote }}
             - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_CASSANDRA_CONTACT_POINTS
-              value: {{ join "," .Values.conductor.relay.orchestrationSync.cassandra.contactPoints | quote }}
+              value: {{ include "pe.conductorSharedStateContactPointsCsv" (dict "root" . "points" .Values.conductor.relay.orchestrationSync.cassandra.contactPoints) | quote }}
             - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_CASSANDRA_PORT
               value: {{ .Values.conductor.relay.orchestrationSync.cassandra.port | quote }}
             - name: CONDUCTOR_RELAY_ORCHESTRATION_SYNC_CASSANDRA_KEYSPACE
@@ -693,7 +693,7 @@ spec:
             - name: CONDUCTOR_RELAY_INVENTORY_SYNC_INVENTORY_CONF_PATH
               value: {{ .Values.conductor.relay.inventorySync.inventoryConfPath | quote }}
             - name: CONDUCTOR_RELAY_INVENTORY_SYNC_CASSANDRA_CONTACT_POINTS
-              value: {{ join "," .Values.conductor.relay.inventorySync.cassandra.contactPoints | quote }}
+              value: {{ include "pe.conductorSharedStateContactPointsCsv" (dict "root" . "points" .Values.conductor.relay.inventorySync.cassandra.contactPoints) | quote }}
             - name: CONDUCTOR_RELAY_INVENTORY_SYNC_CASSANDRA_PORT
               value: {{ .Values.conductor.relay.inventorySync.cassandra.port | quote }}
             - name: CONDUCTOR_RELAY_INVENTORY_SYNC_CASSANDRA_KEYSPACE

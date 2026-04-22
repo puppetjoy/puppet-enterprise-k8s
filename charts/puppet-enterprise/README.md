@@ -53,6 +53,7 @@ most important values are:
 | `compilers.resources.*` | Per-container compiler resources |
 | `storage.*` | Control-plane PVC sizing and storage classes |
 | `conductor.enabled` | Enable participant onboarding and trust integration |
+| `conductor.sharedState.cassandra.serviceName` | Default Cassandra Service name used when per-domain contact points are not set |
 | `conductor.relay.*` | Enable replicated control-plane state and front-door gating |
 | `conductor.relay.rbacSync.*` | Configure Cassandra-backed sync for the managed RBAC graph |
 | `conductor.relay.rbacTokenSync.*` | Configure Cassandra-backed sync for normal RBAC tokens and shared auth material |
@@ -69,6 +70,9 @@ most important values are:
 - `service/pe-compiler` is the compiler pool front door.
 - In multi-replica mode, the chart currently favors stable-backend HA for
   `service/pe` over arbitrary pooled routing.
+- When the shared-state sync domains are enabled, the chart defaults them to
+  the Conductor Cassandra service unless per-domain contact points are set
+  explicitly.
 - This chart does not ship tracked environment-specific defaults. Operators are
   expected to supply their own cluster profile in local values files.
 - The tracked file `examples/values-pe.example.yaml` is only a starting point,

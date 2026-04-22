@@ -195,7 +195,7 @@ revoke/clean, CRL pickup, revoked-cert rejection, and standby re-entry.
 - [Conductor Architecture](docs/conductor-architecture.md)
   How Fabric, Warden, Relay, and Gateway map onto this repo.
 - [Shared State Backend](docs/shared-state-backend.md)
-  Cassandra-backed direction for replacing peer PostgreSQL replay.
+  Cassandra-backed shared-state model and the remaining PostgreSQL fallback.
 - [Replication Roadmap](docs/replication-roadmap.md)
   Engineering roadmap for what is still ahead.
 - [Legacy Service Mapping](docs/legacy-service-mapping.md)

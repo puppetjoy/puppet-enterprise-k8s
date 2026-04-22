@@ -1,7 +1,8 @@
 # Shared State Backend
 
-This document defines the intended replacement for the current peer
-PostgreSQL replay used by some replicated `pe` control-plane domains.
+This document defines the preferred shared-state model for replicated `pe`
+control-plane domains. Peer PostgreSQL replay still exists as a fallback for
+some domains, but it is no longer the intended HA path.
 
 ## Goal
 
@@ -36,15 +37,15 @@ The target Conductor state model has three layers:
 
 ## What Moves Off Peer PostgreSQL Replay
 
-The current custom PostgreSQL replay should be treated as transitional for:
+The current custom PostgreSQL replay should be treated as legacy fallback for:
 
 - RBAC and local-auth managed state
 - orchestration job and plan state
 - persisted orchestration inventory connections
 - login-session handoff
 
-The target is to move those domains onto Cassandra-backed shared state instead
-of copying tables from one `pe` replica into another.
+The preferred model is Cassandra-backed shared state instead of copying tables
+from one `pe` replica into another.
 
 ## Current Runtime Slices
 

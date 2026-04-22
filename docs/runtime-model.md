@@ -223,11 +223,10 @@ The repo now also carries explicit operator validation helpers:
 
 CA, classification, code-deploy intent, RBAC/local-auth, and managed orchestration job state are now in place, but the browser console, PCP/orchestration path, and compiler file-sync path are intentionally treated as stable-backend traffic through selector-backed `service/pe`. Current evidence indicates that `pe-inventory` backs saved connection inventory such as `/connections`, `/query`, and `/overwrite-connections`, not live PCP broker presence, so an empty `pe-inventory` database during certname-driven task and plan validation is expected. The open orchestration question is broader PCP mediation and any additional inventory surfaces that should converge beyond those saved connection records.
 
-The larger architectural direction is now to prefer Cassandra-backed
-Conductor shared state for the remaining replicated control-plane domains
-while preserving the existing `service/pe` and `service/pe-compiler`
-deployment shape. Peer PostgreSQL replay remains only as a fallback backend,
-not the preferred HA path.
+The larger architectural direction is now to use Cassandra-backed Conductor
+shared state for the replicated control-plane domains while preserving the
+existing `service/pe` and `service/pe-compiler` deployment shape. Peer
+PostgreSQL replay remains only as a fallback backend, not the default HA path.
 
 ## Code Manager
 

@@ -119,6 +119,9 @@ conductor:
   namespace: ""
   resourcePrefix: conductor
   segmentName: production
+  sharedState:
+    cassandra:
+      serviceName: conductor-cassandra
   participant:
     image:
       repository: registry.example.test/pe-k8s-conductor
@@ -157,7 +160,7 @@ conductor:
         - store report
         - deactivate node
     authBarrier:
-      loginsessionBackend: postgres
+      loginsessionBackend: cassandra
       cassandra:
         contactPoints: []
         port: 9042
@@ -191,7 +194,7 @@ conductor:
         tokenLabel: pe-k8s-conductor-classifier-sync
     rbacSync:
       enabled: false
-      backend: postgresReplay
+      backend: cassandra
       targetRoles:
         - control-plane
       excludedTokenLabelPrefixes:
@@ -216,7 +219,7 @@ conductor:
         replicationFactor: 3
     orchestrationSync:
       enabled: false
-      backend: postgresReplay
+      backend: cassandra
       targetRoles:
         - control-plane
       orchestratorConfPath: /etc/puppetlabs/orchestration-services/conf.d/orchestrator.conf
