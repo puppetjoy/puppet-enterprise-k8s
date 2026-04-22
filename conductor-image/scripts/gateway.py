@@ -199,6 +199,12 @@ class K8sApi:
         status, data = self.request("GET", path, expected={200, 404})
         return data if status == 200 else None
 
+    def get_pod(self, name, namespace=None):
+        namespace = namespace or self.namespace
+        path = f"/api/v1/namespaces/{namespace}/pods/{name}"
+        status, data = self.request("GET", path, expected={200, 404})
+        return data if status == 200 else None
+
 
 class TcpProxy:
     def __init__(self, name, listen_host, listen_port, target_host, target_port, connect_timeout_seconds=5):
@@ -214,6 +220,7 @@ class TcpProxy:
         self.running = False
         self.start_error = ""
         self.active_connections = 0
+        self.active_sockets = set()
 
     def snapshot(self):
         with self.lock:
@@ -231,6 +238,28 @@ class TcpProxy:
     def decrement_connections(self):
         with self.lock:
             self.active_connections = max(0, self.active_connections - 1)
+
+    def register_socket(self, current):
+        with self.lock:
+            self.active_sockets.add(current)
+
+    def unregister_socket(self, current):
+        with self.lock:
+            self.active_sockets.discard(current)
+
+    def close_active_connections(self):
+        with self.lock:
+            sockets = list(self.active_sockets)
+        for current in sockets:
+            try:
+                current.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                current.close()
+            except OSError:
+                pass
+        return len(sockets)
 
     def ensure_running(self):
         with self.lock:
@@ -293,6 +322,8 @@ class TcpProxy:
                 (self.target_host, self.target_port),
                 timeout=self.connect_timeout_seconds,
             )
+            self.register_socket(client_socket)
+            self.register_socket(upstream_socket)
             client_socket.setblocking(False)
             upstream_socket.setblocking(False)
             self.bridge_bidirectional(client_socket, upstream_socket)
@@ -302,6 +333,7 @@ class TcpProxy:
             for current in [client_socket, upstream_socket]:
                 if current is None:
                     continue
+                self.unregister_socket(current)
                 try:
                     current.close()
                 except OSError:
@@ -397,6 +429,17 @@ class GatewayRuntime:
             "CONDUCTOR_GATEWAY_ORCHESTRATION_STATUS_TIMEOUT_SECONDS",
             5,
         )
+        self.frontdoor_active_required = env_bool(
+            "CONDUCTOR_GATEWAY_FRONTDOOR_ACTIVE_REQUIRED",
+            self.gateway_role == "control-plane",
+        )
+        self.frontdoor_active_label_key = (
+            os.environ.get("CONDUCTOR_GATEWAY_FRONTDOOR_ACTIVE_LABEL_KEY", "").strip()
+            or "pe-k8s.puppet.com/frontdoor-active"
+        )
+        self.frontdoor_active_label_value = (
+            os.environ.get("CONDUCTOR_GATEWAY_FRONTDOOR_ACTIVE_LABEL_VALUE", "").strip() or "true"
+        )
 
         self.k8s = K8sApi(self.pod_namespace)
         self.onboarding_secret_name = participant_secret_name(
@@ -410,6 +453,7 @@ class GatewayRuntime:
         self.last_secret_poll = 0
         self.pending_onboarding_warning = False
         self.next_publish = 0
+        self.frontdoor_active = not self.frontdoor_active_required
 
         self.connection = None
         self.channel = None
@@ -473,6 +517,8 @@ class GatewayRuntime:
             "localOrchestrationHealthy": not self.orchestration_proxy_enabled,
             "localOrchestrationStatusUrl": self.orchestration_status_url if self.orchestration_proxy_enabled else "",
             "localOrchestrationLastError": "",
+            "frontDoorActiveRequired": self.frontdoor_active_required,
+            "frontDoorActive": self.frontdoor_active,
             "peerStatusCount": 0,
             "peerControlPlaneCount": 0,
             "peerCompilerCount": 0,
@@ -619,6 +665,34 @@ class GatewayRuntime:
             peerCompilerCount=sum(1 for status in fresh_statuses if status.get("role") == "compiler"),
         )
 
+    def refresh_frontdoor_active_state(self):
+        if not self.frontdoor_active_required:
+            self.frontdoor_active = True
+            self.set_status(frontDoorActive=True)
+            return
+
+        pod = self.k8s.get_pod(self.pod_name)
+        labels = ((pod or {}).get("metadata") or {}).get("labels") or {}
+        active = labels.get(self.frontdoor_active_label_key) == self.frontdoor_active_label_value
+
+        if not active:
+            closed = 0
+            if self.pcp_proxy is not None:
+                closed += self.pcp_proxy.close_active_connections()
+            if self.orchestration_proxy is not None:
+                closed += self.orchestration_proxy.close_active_connections()
+            if closed > 0:
+                log(
+                    "Drained gateway connections after losing front-door active label "
+                    f"on {self.pod_namespace}/{self.pod_name}"
+                )
+
+        if active != self.frontdoor_active:
+            state = "active" if active else "standby"
+            log(f"Gateway observed front-door state {state} for {self.pod_namespace}/{self.pod_name}")
+        self.frontdoor_active = active
+        self.set_status(frontDoorActive=active)
+
     def on_message(self, channel, method, _properties, body):
         try:
             payload = json.loads(body.decode("utf-8"))
@@ -743,6 +817,7 @@ class GatewayRuntime:
         while True:
             last_error = ""
             try:
+                self.refresh_frontdoor_active_state()
                 self.ensure_proxies_running()
                 self.refresh_participant_status()
                 self.refresh_local_pcp_status()

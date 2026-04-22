@@ -199,11 +199,18 @@ conductor:
         - pe-k8s-compiler certificate
     orchestrationSync:
       enabled: false
+      backend: postgresReplay
       targetRoles:
         - control-plane
       orchestratorConfPath: /etc/puppetlabs/orchestration-services/conf.d/orchestrator.conf
       inventoryConfPath: /etc/puppetlabs/orchestration-services/conf.d/inventory.conf
       sequenceStride: 1024
+      cassandra:
+        contactPoints: []
+        port: 9042
+        keyspace: conductor_orchestration
+        table: orchestrator_state
+        replicationFactor: 3
     inventorySync:
       enabled: false
       targetRoles:

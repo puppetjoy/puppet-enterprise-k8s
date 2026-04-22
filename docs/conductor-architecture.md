@@ -216,12 +216,14 @@ This is now considered transitional. The target is to move shared auth-related
 state off peer PostgreSQL replay and onto a Cassandra-backed Conductor domain
 while keeping local PE service behaviour intact.
 
-The first narrow slices of that move are login-session handoff and persisted
-orchestration inventory. Relay can now use Cassandra as the shared store for
-`loginsession` records so a peer `pe` replica can repopulate its local RBAC
-session row on demand instead of accepting a direct peer database write. Relay
-can also move `pe-inventory` plus `inventoryKeysJson` toward the same model,
-with Cassandra as the durable shared store and local PostgreSQL as the
+The first narrow slices of that move are login-session handoff, persisted
+orchestration inventory, and persisted orchestration job and plan state.
+Relay can now use Cassandra as the shared store for `loginsession` records so
+a peer `pe` replica can repopulate its local RBAC session row on demand
+instead of accepting a direct peer database write. Relay can also use
+Cassandra as the durable shared store for `pe-inventory` plus
+`inventoryKeysJson` and for the managed `pe-orchestrator` database plus
+`orchestratorEncryptionStore`, with local PostgreSQL left as the
 execution-local projection.
 
 ## Shared Orchestration State
@@ -231,8 +233,9 @@ orchestration state.
 
 The current implementation:
 
-- projects the managed `pe-orchestrator` and `pe-inventory` database domain through Fabric and replays it onto peer control-plane replicas
-- reserves per-replica sequence residues so replicated inserts do not collide when both replicas create local jobs
+- can publish persisted `pe-inventory` and managed `pe-orchestrator` state into Cassandra as durable shared control-plane state
+- uses Fabric for convergence signals while peer `pe` replicas rehydrate their own local `pe-inventory` and `pe-orchestrator` databases from Cassandra-backed state
+- still reserves per-replica sequence residues so local PE databases stay safe for new inserts after rehydration
 - routes compiler PCP brokers, Bolt/orchestrator clients, console traffic, and compiler file-sync through selector-backed `service/pe` so one healthy control-plane replica owns those stable-backend surfaces at a time
 - publishes per-pod front-door eligibility and blocker annotations from Relay so `service/pe` promotion is driven by convergence state instead of Pod readiness alone
 - keeps Gateway as the transport and health boundary on `8142` and `8143`
@@ -247,11 +250,11 @@ That means:
 - broader PCP mediation and any remaining inventory surfaces beyond saved connection records remain open follow-up
 - repo helpers now expose that state directly: `scripts/pe-frontdoor-status.sh` shows the current backend and blockers, and `scripts/validate-pe-failover.sh` exercises a live cutover
 
-Like RBAC replay, this database replay path is transitional. The target is to
-move durable orchestration job state fully onto Cassandra-backed shared
+Like RBAC replay, any remaining database replay path is transitional. The
+target is to keep durable orchestration state on Cassandra-backed shared
 Conductor domains rather than copying local PostgreSQL rows between `pe`
-replicas. Persisted saved inventory is now the first orchestration-owned slice
-on that path.
+replicas. Persisted saved inventory and persisted orchestration job state are
+now on that path; broader auth state is still the larger remaining migration.
 
 ## Non-Goals
 

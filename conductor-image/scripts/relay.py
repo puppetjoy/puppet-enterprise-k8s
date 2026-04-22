@@ -226,6 +226,7 @@ DEFAULT_ORCHESTRATION_TARGET_ROLES = [
 ]
 DEFAULT_ORCHESTRATION_SYNC_STATE_FILENAME = "orchestration-sync-state.json"
 DEFAULT_ORCHESTRATION_SYNC_SCOPE = "pe-orchestration-managed-domain"
+DEFAULT_ORCHESTRATION_SYNC_BACKEND = "postgresreplay"
 DEFAULT_ORCHESTRATION_SYNC_ORCHESTRATOR_CONF_PATH = (
     "/etc/puppetlabs/orchestration-services/conf.d/orchestrator.conf"
 )
@@ -239,6 +240,8 @@ DEFAULT_ORCHESTRATION_SYNC_ENCRYPTION_STORE_PATH = (
     "/etc/puppetlabs/orchestration-services/conf.d/secrets/orchestrator-encryption-keys.json"
 )
 DEFAULT_ORCHESTRATION_SYNC_SEQUENCE_STRIDE = 1024
+DEFAULT_ORCHESTRATION_SYNC_CASSANDRA_KEYSPACE = "conductor_orchestration"
+DEFAULT_ORCHESTRATION_SYNC_CASSANDRA_TABLE = "orchestrator_state"
 DEFAULT_INVENTORY_SYNC_STATE_FILENAME = "inventory-sync-state.json"
 DEFAULT_INVENTORY_SYNC_SCOPE = "pe-orchestration-inventory"
 DEFAULT_INVENTORY_SYNC_CASSANDRA_KEYSPACE = "conductor_orchestration"
@@ -1550,6 +1553,23 @@ class RelayRuntime:
             default=DEFAULT_ORCHESTRATION_TARGET_ROLES,
         )
         self.orchestration_sync_scope = DEFAULT_ORCHESTRATION_SYNC_SCOPE
+        raw_orchestration_sync_backend = (
+            os.environ.get("CONDUCTOR_RELAY_ORCHESTRATION_SYNC_BACKEND", "").strip().lower()
+        )
+        normalized_orchestration_sync_backend = re.sub(
+            r"[^a-z0-9]+",
+            "",
+            raw_orchestration_sync_backend or DEFAULT_ORCHESTRATION_SYNC_BACKEND,
+        )
+        if normalized_orchestration_sync_backend in {"postgres", "postgresreplay"}:
+            self.orchestration_sync_backend = "postgresreplay"
+        elif normalized_orchestration_sync_backend == "cassandra":
+            self.orchestration_sync_backend = "cassandra"
+        else:
+            raise RuntimeError(
+                "unsupported orchestration sync backend: "
+                f"{raw_orchestration_sync_backend or DEFAULT_ORCHESTRATION_SYNC_BACKEND}"
+            )
         self.orchestration_sync_state_path = os.path.join(
             self.output_dir,
             DEFAULT_ORCHESTRATION_SYNC_STATE_FILENAME,
@@ -1565,6 +1585,27 @@ class RelayRuntime:
         self.orchestration_sync_sequence_stride = env_int(
             "CONDUCTOR_RELAY_ORCHESTRATION_SYNC_SEQUENCE_STRIDE",
             DEFAULT_ORCHESTRATION_SYNC_SEQUENCE_STRIDE,
+        )
+        self.orchestration_sync_cassandra_contact_points = env_csv(
+            "CONDUCTOR_RELAY_ORCHESTRATION_SYNC_CASSANDRA_CONTACT_POINTS",
+        )
+        self.orchestration_sync_cassandra_port = env_int(
+            "CONDUCTOR_RELAY_ORCHESTRATION_SYNC_CASSANDRA_PORT",
+            9042,
+        )
+        self.orchestration_sync_cassandra_keyspace = normalize_cassandra_identifier(
+            os.environ.get("CONDUCTOR_RELAY_ORCHESTRATION_SYNC_CASSANDRA_KEYSPACE", "").strip()
+            or DEFAULT_ORCHESTRATION_SYNC_CASSANDRA_KEYSPACE,
+            "keyspace",
+        )
+        self.orchestration_sync_cassandra_table = normalize_cassandra_identifier(
+            os.environ.get("CONDUCTOR_RELAY_ORCHESTRATION_SYNC_CASSANDRA_TABLE", "").strip()
+            or DEFAULT_ORCHESTRATION_SYNC_CASSANDRA_TABLE,
+            "table",
+        )
+        self.orchestration_sync_cassandra_replication_factor = env_int(
+            "CONDUCTOR_RELAY_ORCHESTRATION_SYNC_CASSANDRA_REPLICATION_FACTOR",
+            3,
         )
         self.orchestration_sync_sequence_residue = pod_ordinal(self.pod_name) + 1
         if self.orchestration_sync_sequence_stride < self.orchestration_sync_sequence_residue:
@@ -1782,6 +1823,8 @@ class RelayRuntime:
 
         self.command_proxy_server = None
         self.command_proxy_thread = None
+        self.orchestration_sync_cassandra_cluster = None
+        self.orchestration_sync_cassandra_session = None
         self.inventory_sync_cassandra_cluster = None
         self.inventory_sync_cassandra_session = None
         self.code_deploy_hook_server = None
@@ -1882,6 +1925,9 @@ class RelayRuntime:
             "rbacSyncLastError": "",
             "orchestrationSyncEnabled": self.orchestration_sync_enabled,
             "orchestrationSyncReady": not self.orchestration_sync_enabled,
+            "orchestrationSyncBackend": (
+                self.orchestration_sync_backend if self.orchestration_sync_enabled else ""
+            ),
             "orchestrationSyncTargetRoles": list(self.orchestration_sync_target_roles),
             "orchestrationSyncScope": self.orchestration_sync_scope if self.orchestration_sync_enabled else "",
             "orchestrationSyncState": "idle",
@@ -3754,6 +3800,7 @@ class RelayRuntime:
         self.status.update(
             {
                 "orchestrationSyncReady": ready,
+                "orchestrationSyncBackend": self.orchestration_sync_backend,
                 "orchestrationSyncTargetRoles": list(self.orchestration_sync_target_roles),
                 "orchestrationSyncScope": state.get("scope", ""),
                 "orchestrationSyncState": state.get("state", "idle"),
@@ -3954,6 +4001,9 @@ class RelayRuntime:
         if self.inventory_sync_enabled:
             names = [name for name in names if name != "inventoryKeysJson"]
         return names
+
+    def orchestration_sync_uses_cassandra(self):
+        return self.orchestration_sync_enabled and self.orchestration_sync_backend == "cassandra"
 
     def inventory_sync_auth_file_paths(self):
         inventory_content = ""
@@ -4289,6 +4339,17 @@ class RelayRuntime:
         self.merge_orchestration_sync_state(**updates)
 
     def build_orchestration_state_payload(self, state, published_at):
+        payload_state = state
+        if self.orchestration_sync_uses_cassandra():
+            payload_state = {
+                "scope": state.get("scope", self.orchestration_sync_scope),
+                "hash": state.get("hash", ""),
+                "databaseCount": int(state.get("databaseCount") or 0),
+                "tableCount": int(state.get("tableCount") or 0),
+                "rowCount": int(state.get("rowCount") or 0),
+                "authFileCount": int(state.get("authFileCount") or 0),
+                "sequenceCount": int(state.get("sequenceCount") or 0),
+            }
         return {
             "apiVersion": "pe-k8s.puppet.com/v1alpha1",
             "kind": "ConductorRelayOrchestrationState",
@@ -4300,7 +4361,7 @@ class RelayRuntime:
                 "segment": self.segment_name,
             },
             "targetRoles": list(self.orchestration_sync_target_roles),
-            "state": state,
+            "state": payload_state,
         }
 
     def record_published_orchestration_state(self, state, published_at, now):
@@ -4350,6 +4411,9 @@ class RelayRuntime:
         version_at = int(snapshot.get("desiredPublishedAt") or 0)
         if not version_at or (snapshot.get("desiredHash") or "").strip() != state_hash:
             version_at = now
+
+        if self.orchestration_sync_uses_cassandra():
+            self.upsert_shared_orchestration_state(state, version_at)
 
         payload = self.build_orchestration_state_payload(state, version_at)
         self.channel.basic_publish(
@@ -4513,6 +4577,106 @@ class RelayRuntime:
         self.orchestration_sync_runtime_error = ""
         self.merge_orchestration_sync_state(**updates)
 
+    def ensure_orchestration_sync_cassandra_session(self):
+        if not self.orchestration_sync_uses_cassandra():
+            raise RuntimeError("orchestration sync Cassandra backend is not enabled")
+        if not self.orchestration_sync_cassandra_contact_points:
+            raise RuntimeError("no Cassandra contact points configured for orchestration sync")
+        if Cluster is None or ConsistencyLevel is None or SimpleStatement is None:
+            raise RuntimeError("cassandra-driver is not available in the Conductor image")
+
+        with self.lock:
+            if self.orchestration_sync_cassandra_session is not None:
+                return self.orchestration_sync_cassandra_session
+
+            cluster = Cluster(
+                contact_points=self.orchestration_sync_cassandra_contact_points,
+                port=self.orchestration_sync_cassandra_port,
+            )
+            session = cluster.connect()
+            keyspace = self.orchestration_sync_cassandra_keyspace
+            table = self.orchestration_sync_cassandra_table
+            replication_factor = max(1, self.orchestration_sync_cassandra_replication_factor)
+            session.execute(
+                f"""
+                create keyspace if not exists {keyspace}
+                with replication = {{
+                    'class': 'SimpleStrategy',
+                    'replication_factor': {replication_factor}
+                }}
+                """
+            )
+            session.set_keyspace(keyspace)
+            session.execute(
+                f"""
+                create table if not exists {table} (
+                    scope text primary key,
+                    published_at bigint,
+                    origin_participant text,
+                    state_hash text,
+                    payload text
+                )
+                """
+            )
+            self.orchestration_sync_cassandra_cluster = cluster
+            self.orchestration_sync_cassandra_session = session
+            return session
+
+    def read_shared_orchestration_state(self):
+        session = self.ensure_orchestration_sync_cassandra_session()
+        statement = SimpleStatement(
+            (
+                f"select scope, published_at, origin_participant, state_hash, payload "
+                f"from {self.orchestration_sync_cassandra_table} where scope = %s"
+            ),
+            consistency_level=ConsistencyLevel.QUORUM,
+        )
+        row = session.execute(statement, (self.orchestration_sync_scope,)).one()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row.payload or "{}")
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(f"invalid shared orchestration sync payload: {error}") from error
+        payload_hash = ((payload or {}).get("hash") or "").strip()
+        expected_hash = (row.state_hash or "").strip()
+        if expected_hash and payload_hash and payload_hash != expected_hash:
+            raise RuntimeError(
+                "shared orchestration sync payload hash mismatch: "
+                f"expected {expected_hash}, got {payload_hash}"
+            )
+        return {
+            "scope": (row.scope or "").strip(),
+            "publishedAt": int(row.published_at or 0),
+            "originParticipant": (row.origin_participant or "").strip(),
+            "stateHash": expected_hash or payload_hash,
+            "state": payload if isinstance(payload, dict) else {},
+        }
+
+    def upsert_shared_orchestration_state(self, state, published_at):
+        state_hash = ((state or {}).get("hash") or "").strip()
+        if not state_hash:
+            raise RuntimeError("orchestration sync state is missing a hash")
+        session = self.ensure_orchestration_sync_cassandra_session()
+        statement = SimpleStatement(
+            (
+                f"insert into {self.orchestration_sync_cassandra_table} "
+                "(scope, published_at, origin_participant, state_hash, payload) "
+                "values (%s, %s, %s, %s, %s)"
+            ),
+            consistency_level=ConsistencyLevel.QUORUM,
+        )
+        session.execute(
+            statement,
+            (
+                self.orchestration_sync_scope,
+                int(published_at or time.time()),
+                self.pod_name,
+                state_hash,
+                stable_json(state),
+            ),
+        )
+
     def handle_remote_orchestration_state(self, payload):
         if not self.orchestration_sync_enabled:
             return
@@ -4576,6 +4740,22 @@ class RelayRuntime:
             "Received orchestration sync intent at "
             f"{desired_hash[:12]} from {origin_participant}"
         )
+        if self.orchestration_sync_uses_cassandra():
+            shared_state = self.read_shared_orchestration_state()
+            if shared_state is None:
+                raise RuntimeError("shared orchestration sync state is missing from Cassandra")
+            shared_payload = shared_state.get("state") or {}
+            shared_hash = (shared_state.get("stateHash") or "").strip()
+            if shared_hash and shared_hash != desired_hash:
+                raise RuntimeError(
+                    "shared orchestration sync hash mismatch: "
+                    f"expected {desired_hash}, got {shared_hash}"
+                )
+            state_payload = shared_payload if isinstance(shared_payload, dict) else {}
+            published_at = int(shared_state.get("publishedAt") or published_at or time.time())
+            origin_participant = (
+                (shared_state.get("originParticipant") or "").strip() or origin_participant
+            )
         self.reconcile_orchestration_state(state_payload, published_at, origin_participant)
 
     def ensure_inventory_sync_cassandra_session(self):

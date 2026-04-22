@@ -150,7 +150,7 @@ Current direction:
 
 - `conductor-foundation` now grows optional Cassandra infrastructure as the shared-state layer
 - peer PostgreSQL replay for RBAC, orchestration, and login-session handoff is now treated as transitional
-- the first migration slices should be login sessions, persisted orchestration inventory, orchestration job state, and only then broader auth domains such as RBAC
+- the first migration slices are now login sessions, persisted orchestration inventory, persisted orchestration job state, and only then broader auth domains such as RBAC
 - classifier should evolve toward a Conductor-owned authoritative graph rather than more local-database replay
 
 ## Phase 7: PE-Owned State Convergence
@@ -174,7 +174,8 @@ Current status:
 - live validation in Kubernetes confirmed create and delete convergence for managed groups between `pe-0` and `pe-1`
 - RBAC and local-auth managed state now converge across `pe` replicas, including cross-replica token validation for normal user tokens
 - managed orchestration job state now converges across `pe` replicas, with matching `pe-orchestrator` row counts after failover and recovery
-- RBAC and orchestration still rely in part on transitional peer PostgreSQL replay, but persisted inventory is now the first orchestration-owned candidate for Cassandra-backed replacement
+- persisted orchestration inventory and managed orchestration job state now have Cassandra-backed shared-state implementations, with peer replicas rehydrating local PostgreSQL from Cassandra-backed authority instead of direct peer table replay
+- RBAC and local-auth are now the main remaining control-plane domains still on transitional peer PostgreSQL replay
 - console session behaviour and other remaining console-backed writes are still outstanding
 
 ## Explicit Non-Goals

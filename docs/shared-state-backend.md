@@ -60,12 +60,17 @@ That path now has a Cassandra-backed implementation available:
 That keeps PE's local session handling intact while removing direct peer
 database writes for that handoff path.
 
-The next narrow slice is persisted orchestration inventory:
+The next runtime slices are persisted orchestration inventory and persisted
+orchestration job and plan state:
 
 - Relay can treat `pe-inventory` plus `inventoryKeysJson` as a separate shared
   domain
 - the active `pe` replica can publish that snapshot into Cassandra
 - peer replicas can rehydrate their local `pe-inventory` database from
+  Cassandra-backed shared state instead of replaying peer PostgreSQL rows
+- Relay can also publish the managed `pe-orchestrator` snapshot plus
+  `orchestratorEncryptionStore` into Cassandra
+- peer replicas can rehydrate their local `pe-orchestrator` database from
   Cassandra-backed shared state instead of replaying peer PostgreSQL rows
 
 ## What Does Not Need Cassandra
@@ -101,14 +106,18 @@ The recommended order is:
    - smallest current direct DB sync path
    - good candidate for a Cassandra-backed Conductor domain
 
-2. orchestration jobs
-   - naturally event- and record-oriented
-   - still on transitional peer PostgreSQL replay after inventory moves
+2. persisted orchestration inventory
+   - saved connections are durable shared state
+   - now available on the Cassandra-backed path
 
-3. classifier shared graph
+3. persisted orchestration jobs and plans
+   - naturally event- and record-oriented
+   - now available on the Cassandra-backed path
+
+4. classifier shared graph
    - move from projected peer replay toward Conductor-owned authoritative graph
 
-4. RBAC and local auth
+5. RBAC and local auth
    - last, because it is the most tightly coupled to current PE local schema
 
 ## Foundation Requirement

@@ -198,12 +198,14 @@ databases stop acting as the cross-replica source of truth for replicated
 auth domains.
 
 The first slices of that replacement are login-session handoff for the auth
-barrier and persisted orchestration inventory. When Cassandra-backed session
-storage is enabled, Relay can publish a new local `loginsession` row into
-Cassandra and another `pe` replica can recreate that row in its own local RBAC
-database on demand when the browser arrives with the session cookie. Relay can
-also move `pe-inventory` plus `inventoryKeysJson` toward the same model, with
-shared state in Cassandra and local PostgreSQL used only as the execution-local
+barrier, persisted orchestration inventory, and persisted orchestration job
+and plan state. When Cassandra-backed session storage is enabled, Relay can
+publish a new local `loginsession` row into Cassandra and another `pe`
+replica can recreate that row in its own local RBAC database on demand when
+the browser arrives with the session cookie. Relay can now treat
+`pe-inventory` plus `inventoryKeysJson` and the managed `pe-orchestrator`
+database plus `orchestratorEncryptionStore` the same way, with shared state
+in Cassandra and local PostgreSQL used only as the execution-local
 projection.
 
 Relay is no longer limited to the PuppetDB submit-only path. The current implementation also converges the managed orchestration database domain between control-plane replicas, while Gateway and selector-backed `service/pe` routing keep PCP broker ownership and Bolt/orchestrator client traffic on one healthy control-plane replica at a time.
@@ -221,8 +223,8 @@ The repo now also carries explicit operator validation helpers:
 
 CA, classification, code-deploy intent, RBAC/local-auth, and managed orchestration job state are now in place, but the browser console, PCP/orchestration path, and compiler file-sync path are intentionally treated as stable-backend traffic through selector-backed `service/pe`. Current evidence indicates that `pe-inventory` backs saved connection inventory such as `/connections`, `/query`, and `/overwrite-connections`, not live PCP broker presence, so an empty `pe-inventory` database during certname-driven task and plan validation is expected. The open orchestration question is broader PCP mediation and any additional inventory surfaces that should converge beyond those saved connection records.
 
-The larger architectural direction is now to replace peer PostgreSQL replay
-for RBAC, orchestration, and login-session handoff with Cassandra-backed
+The larger architectural direction is now to replace the remaining peer
+PostgreSQL replay, especially RBAC and local-auth state, with Cassandra-backed
 Conductor shared state while preserving the existing `service/pe` and
 `service/pe-compiler` deployment shape.
 

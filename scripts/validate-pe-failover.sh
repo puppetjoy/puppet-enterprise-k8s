@@ -584,6 +584,114 @@ run_plan_check() {
     /opt/puppetlabs/bin/puppet plan run facts::info targets="$certname"
 }
 
+run_puppet_job_check() {
+  local pod="$1"
+  local certname="$2"
+  local description="$3"
+  run_with_admin_token "$pod" \
+    /opt/puppetlabs/bin/puppet job run --nodes "$certname" --noop --description "$description" --format json
+}
+
+show_puppet_job_check() {
+  local pod="$1"
+  local job_id="$2"
+  run_with_admin_token "$pod" \
+    /opt/puppetlabs/bin/puppet job show "$job_id" --format json
+}
+
+extract_job_id() {
+  local output_file="$1"
+  python3 - "$output_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+job_id = str(payload.get("job_id") or "").strip()
+if not job_id:
+    raise SystemExit(1)
+
+print(job_id)
+PY
+}
+
+validate_job_show_output() {
+  local output_file="$1"
+  local job_id="$2"
+  local certname="$3"
+  local description="$4"
+
+  python3 - "$output_file" "$job_id" "$certname" "$description" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+job_id = sys.argv[2]
+certname = sys.argv[3]
+description = sys.argv[4]
+
+if str(payload.get("job_id") or "").strip() != job_id:
+    raise SystemExit("job_id mismatch")
+
+options = payload.get("options") or {}
+if (options.get("description") or "") != description:
+    raise SystemExit("job description mismatch")
+
+scope = (options.get("scope") or {}).get("nodes") or []
+if certname not in scope:
+    raise SystemExit("job scope mismatch")
+
+items = payload.get("items") or []
+if not any((item.get("name") or "") == certname for item in items if isinstance(item, dict)):
+    raise SystemExit("job items missing target node")
+PY
+}
+
+run_job_history_sync_check() {
+  local active_pod="$1"
+  local viewer_pod="$2"
+  local certname="$3"
+  local phase="$4"
+  local create_output="$tmp_dir/job-create-${phase}-${active_pod}.json"
+  local show_output="$tmp_dir/job-show-${phase}-${viewer_pod}.json"
+  local description="pe-k8s-${phase}-job-history"
+  local deadline=$((SECONDS + wait_seconds))
+  local attempt=1
+  local job_id=""
+
+  echo "[check] job history sync ${active_pod} -> ${viewer_pod}"
+  run_puppet_job_check "$active_pod" "$certname" "$description" >"$create_output"
+  job_id="$(extract_job_id "$create_output")" || {
+    cat "$create_output" >&2
+    return 1
+  }
+
+  while (( SECONDS < deadline )); do
+    if show_puppet_job_check "$viewer_pod" "$job_id" >"$show_output" 2>&1; then
+      if validate_job_show_output "$show_output" "$job_id" "$certname" "$description"; then
+        echo "[ok] job ${job_id} visible on ${viewer_pod}"
+        return 0
+      fi
+    fi
+
+    if grep -q "Authentication token has been revoked" "$show_output" 2>/dev/null; then
+      echo "[info] job history attempt ${attempt} is waiting for auth stability"
+    elif grep -q "No job found" "$show_output" 2>/dev/null; then
+      echo "[info] job history attempt ${attempt} is waiting for shared-state convergence"
+    else
+      echo "[info] job history attempt ${attempt} is waiting for standby visibility"
+    fi
+    attempt=$((attempt + 1))
+    sleep 5
+  done
+
+  cat "$show_output" >&2 || true
+  return 1
+}
+
 run_code_deploy_check() {
   local pod="$1"
   local output_file="$tmp_dir/code-deploy-${pod}.log"
@@ -740,9 +848,13 @@ run_checks() {
 
 certname="$(agent_certname)"
 initial_active="$(wait_for_frontdoor)"
+initial_standby="$(pe_service_pods | grep -vx "$initial_active" | head -n1)"
 
 echo "[info] initial active backend: ${initial_active}"
+echo "[info] initial standby backend: ${initial_standby}"
 run_checks "$initial_active" "$certname" initial
+wait_for_pod_ready "$initial_standby"
+run_job_history_sync_check "$initial_active" "$initial_standby" "$certname" initial
 run_ca_enrollment_check "$initial_active"
 
 echo "[action] deleting active backend ${initial_active}"
@@ -756,5 +868,6 @@ run_ca_revocation_check "$new_active" "$initial_active"
 echo "[check] standby re-entry for ${initial_active}"
 wait_for_standby_reentry "$initial_active"
 echo "[ok] standby re-entry completed"
+run_job_history_sync_check "$new_active" "$initial_active" "$certname" post-failover
 
 echo "[ok] failover validation completed"

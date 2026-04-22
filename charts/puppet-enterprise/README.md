@@ -54,6 +54,7 @@ most important values are:
 | `storage.*` | Control-plane PVC sizing and storage classes |
 | `conductor.enabled` | Enable participant onboarding and trust integration |
 | `conductor.relay.*` | Enable replicated control-plane state and front-door gating |
+| `conductor.relay.orchestrationSync.*` | Configure persisted orchestration job-state sync, including the Cassandra backend |
 | `conductor.relay.inventorySync.*` | Enable Cassandra-backed sync for persisted orchestration inventory |
 | `conductor.gateway.*` | Enable Gateway for PCP/orchestration traffic |
 | `services.pe.*` | Control-plane Service type and optional load balancer IP |
