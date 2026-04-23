@@ -38,6 +38,52 @@ The shared-state model now has three layers:
    - local relational projection where PE still expects PostgreSQL
    - no peer-to-peer database authority
 
+Fabric is not the shared-state database. Fabric carries transport and
+convergence signals. Cassandra is the durable shared authority for the
+migrated domains.
+
+## How Rehydration Works
+
+The current repo uses two rehydration patterns.
+
+### Request-Time Lazy Rehydration
+
+This is used for auth paths where the first request after failover must work.
+
+- Relay's auth barrier intercepts the incoming session-cookie or bearer-token
+  request before it reaches PE
+- if the needed local RBAC projection row is missing, Relay reads the
+  authoritative record from Cassandra
+- Relay recreates the local row in the replica's own PE PostgreSQL
+- Relay then proxies the original request upstream to the local PE service
+
+That is the current pattern for login-session handoff and normal RBAC tokens.
+
+### Background Projection
+
+This is used for the larger replicated control-plane domains.
+
+- Relay publishes convergence signals and hashes over Fabric
+- peers treat Fabric as intent, not as the shared-state source
+- each peer reads the authoritative snapshot from Cassandra
+- each peer refreshes its own local PE PostgreSQL or classifier projection
+
+That is the current pattern for the managed classifier graph, managed RBAC
+graph, persisted inventory connections, and persisted orchestrator job and
+plan state.
+
+### Why Eligibility Still Matters
+
+Background projection is intentionally done before a replica is trusted with
+the `service/pe` front door.
+
+- Relay publishes blocker and eligibility annotations for its pod
+- `conductor-service-selector` reads those annotations from the Kubernetes API
+- the selector labels one eligible pod as the active `service/pe` backend
+
+This keeps most shared-state catch-up out of the request path and leaves
+request-time lazy rehydration for the narrower auth surfaces that need it.
+
 ## Current Cassandra-Backed Domains
 
 These domains now use Cassandra-backed shared state:

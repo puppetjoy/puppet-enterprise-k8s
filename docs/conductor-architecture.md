@@ -38,11 +38,31 @@ boundaries rather than arbitrary pooling.
 
 ## Component Mapping
 
-Conductor introduces four components that should become first-class parts of this project.
+The Conductor spec centers on Fabric, Warden, Relay, and Gateway. In this repo
+those roles sit beside two other important pieces:
+
+- Hub, which is the current concrete broker implementation for Fabric
+- Cassandra, which is the durable shared authority for the migrated
+  control-plane domains
+
+The current runtime role split is:
+
+- Fabric: transport and convergence signaling
+- Hub: broker for Fabric transport, not durable state
+- Warden: membership, onboarding, and trust distribution
+- Relay: PE-aware convergence, local projection, auth interception, and
+  front-door eligibility
+- Gateway: PCP and orchestration transport ownership
+- Cassandra: durable shared state for migrated control-plane domains
 
 ### Fabric
 
-Fabric is the queue layer. It provides signed message transport, encryption, local queue ownership, and hub connectivity.
+Fabric is the queue layer. It provides signed message transport, encryption,
+local queue ownership, and hub connectivity.
+
+Hub is the current central broker implementation for that Fabric layer. It is
+transport, not the durable authority for shared PE state, and it does not make
+the final `service/pe` failover decision.
 
 In Kubernetes terms, that means:
 
@@ -99,6 +119,11 @@ The current repo now has the first Relay slice wired into the runtime model:
 - Relay readiness is tied to participant trust readiness plus local PuppetDB health
 
 This is intentionally not the whole Relay design yet. The current implementation now has a working write path for selected PuppetDB commands, but authoritative control-plane convergence and any optional catalog-resource replication are still ahead.
+
+Relay is also the request-time rehydration point for narrow auth surfaces. Its
+auth barrier can intercept login-session and bearer-token requests, read the
+shared record from Cassandra, recreate the missing local PE database row, and
+only then proxy the request to the local PE service.
 
 ## Gateway
 
@@ -205,6 +230,34 @@ middle-tier service.
 
 See [Shared State Backend](shared-state-backend.md) for the current shared-state
 model.
+
+## Shared-State Flow
+
+The current repo uses two different shared-state flows, depending on the
+domain.
+
+### Request-Time Lazy Rehydration
+
+Used for narrow auth surfaces where the first post-failover request needs to
+work immediately.
+
+- Relay auth barrier intercepts the request
+- Relay reads the authoritative state from Cassandra if the local projection is
+  missing
+- Relay recreates the local PE row
+- Relay proxies the original request upstream
+
+### Background Projection
+
+Used for the larger replicated domains.
+
+- Relay publishes convergence signals and hashes over Fabric
+- peers do not treat Fabric as the authoritative data source
+- peers fetch the authoritative snapshot from Cassandra
+- peers rebuild their own local classifier or PostgreSQL projection
+
+This is why Fabric and Cassandra are both present. Fabric moves convergence
+signals. Cassandra holds the shared durable state.
 
 ## Shared RBAC and Local Auth
 

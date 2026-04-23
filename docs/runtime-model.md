@@ -115,6 +115,10 @@ The intended access pattern is:
 - `service/pe` is the technical front door for control-plane traffic
 - when the control plane has more than one replica, `service/pe` can be selector-pinned to one healthy `pe` replica at a time so control-plane traffic sees a stable backend
 - selector promotion is gated by Relay-published front-door eligibility rather than Pod `Ready` alone
+- the ultimate active-backend decision is made by
+  `conductor-service-selector`, which reads those Relay-published pod
+  annotations through the Kubernetes API and labels one eligible pod as
+  `pe-k8s.puppet.com/frontdoor-active=true`
 - ingress points at `service/pe` for the console hostname, with TLS terminated by the ingress controller
 - `service/pe-compiler` is the optional compiler-pool endpoint for catalog traffic on `8140` and PCP broker traffic on `8142`
 - there are no standalone `service/pe-puppetdb` or `service/pe-postgresql` objects in the current model
@@ -124,6 +128,9 @@ The intended access pattern is:
 - if a specific surface later proves safe to pool, that can be relaxed deliberately rather than assumed up front
 - selector-backed `service/pe` is the current stable-backend safeguard: console, compiler file-sync, and orchestration traffic stay pinned to one healthy control-plane replica at a time
 - each `pe` pod publishes front-door eligibility, blockers, and selector state as pod annotations so the active backend and blocked standbys are visible without reading Relay logs
+- short cutover blips are still possible while the active label and Service
+  endpoints move; the current contract is automatic failover, not zero-
+  interruption pooled control-plane traffic
 
 ## Conductor Direction
 

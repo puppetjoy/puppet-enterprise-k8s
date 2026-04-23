@@ -90,6 +90,36 @@ These domains still use other shapes:
 - code deployment: deploy intent and convergence state
 - live PCP broker presence: local runtime state on the active backend
 
+## Replication Roles
+
+- Fabric: signed transport for convergence signals and participant messaging
+- Hub: the current central broker implementation for Fabric transport
+- Warden: membership, onboarding, and trust-bundle assembly
+- Relay: the PE-aware sidecar that publishes local eligibility, handles auth
+  interception, writes shared state into Cassandra, and rebuilds local PE
+  projections
+- Gateway: the orchestration and PCP sidecar that keeps those flows on the
+  selected backend and drains stale sessions during failover
+- Cassandra: the durable shared authority for the migrated control-plane
+  domains
+
+## How Shared State Reaches Replicas
+
+Two paths are in use today:
+
+- Request-time lazy rehydration: Relay's auth barrier intercepts login-session
+  and bearer-token requests. If the local PE database projection is missing the
+  needed row, Relay reads the authoritative record from Cassandra, recreates
+  the local row, and then proxies the request to PE.
+- Background projection: Relay publishes convergence signals and hashes over
+  Fabric. Peer replicas treat Fabric as intent, not as the data source. Each
+  peer reads the authoritative snapshot from Cassandra and refreshes its local
+  classifier, RBAC, inventory, or orchestrator projection.
+- Front-door selection: Relay publishes per-pod blockers and eligibility as
+  Kubernetes pod annotations. `conductor-service-selector` reads those
+  annotations through the Kubernetes API and labels one eligible pod as the
+  active `service/pe` backend.
+
 ## Current Limits
 
 - This is still a proof of concept, not production guidance.
